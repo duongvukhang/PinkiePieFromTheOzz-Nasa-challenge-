@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
+
+# Environment & OS
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+*.log
+
+# Large data, FITS files, archives & installers
+*.fits
+*.fits.gz
+*.fit
+*.fts
+*.fz
+*.h5
+*.hdf5
+*.parquet
+*.npy
+*.npz
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.dmg
+*.iso
+data/
+uploads/
+storage/
+tmp/

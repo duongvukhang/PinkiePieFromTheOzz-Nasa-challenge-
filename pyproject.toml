@@ -1,0 +1,22 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend", "science"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["backend", "science", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "backend:science"
+packages = ["app", "sphx_core"]
+
+[[tool.mypy.overrides]]
+module = ["astropy.*", "astropy_healpix", "astroquery.*", "pyvo.*", "boto3", "botocore.*", "yaml"]
+ignore_missing_imports = true

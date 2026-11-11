@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+  <RESOURCE type="results">
+    <INFO name="QUERY_STATUS" value="OK"/>
+    <TABLE name="obscore">
+      <FIELD name="obs_id" datatype="char" arraysize="*"/>
+      <FIELD name="obs_collection" datatype="char" arraysize="*"/>
+      <FIELD name="obs_publisher_did" datatype="char" arraysize="*"/>
+      <FIELD name="obs_release_date" datatype="char" arraysize="*"/>
+      <FIELD name="access_url" datatype="char" arraysize="*"/>
+      <FIELD name="access_format" datatype="char" arraysize="*"/>
+      <FIELD name="t_min" datatype="double" unit="d"/>
+      <FIELD name="t_max" datatype="double" unit="d"/>
+      <FIELD name="t_exptime" datatype="double" unit="s"/>
+      <FIELD name="em_min" datatype="double" unit="m"/>
+      <FIELD name="em_max" datatype="double" unit="m"/>
+      <FIELD name="s_ra" datatype="double" unit="deg"/>
+      <FIELD name="s_dec" datatype="double" unit="deg"/>
+      <FIELD name="s_fov" datatype="double" unit="deg"/>
+      <FIELD name="s_region" datatype="char" arraysize="*"/>
+      <FIELD name="instrument_name" datatype="char" arraysize="*"/>
+      <FIELD name="calib_level" datatype="int"/>
+      <FIELD name="flags" datatype="int"/>
+      <DATA>
+        <TABLEDATA>
+          <TR>
+            <TD>sphx_l2_2025_172_arr5_001</TD>
+            <TD>spherex_qr</TD>
+            <TD>ivo://irsa.ipac/spherex_qr#sphx_l2_2025_172_arr5_001</TD>
+            <TD>2026-10-15</TD>
+            <TD>https://irsa.ipac.caltech.edu/ibe/data/spherex/qr/sphx_l2_2025_172_arr5_001.fits</TD>
+            <TD>application/fits</TD>
+            <TD>60850.409000</TD>
+            <TD>60850.411000</TD>
+            <TD>112.5</TD>
+            <TD>3.82e-6</TD>
+            <TD>4.42e-6</TD>
+            <TD>133.79513</TD>
+            <TD>-7.24515</TD>
+            <TD>3.5</TD>
+            <TD>POLYGON ICRS 133.70 -7.34 133.89 -7.34 133.89 -7.15 133.70 -7.15</TD>
+            <TD>SPHEREx-D5</TD>
+            <TD>2</TD>
+            <TD>0</TD>
+          </TR>
+          <TR>
+            <TD>sphx_l2_2025_172_arr6_002</TD>
+            <TD>spherex_qr</TD>
+            <TD>ivo://irsa.ipac/spherex_qr#sphx_l2_2025_172_arr6_002</TD>
+            <TD>2026-10-15</TD>
+            <TD>https://irsa.ipac.caltech.edu/ibe/data/spherex/qr/sphx_l2_2025_172_arr6_002.fits</TD>
+            <TD>application/fits</TD>
+            <TD>60850.419000</TD>
+            <TD>60850.421000</TD>
+            <TD>112.5</TD>
+            <TD>4.42e-6</TD>
+            <TD>5.00e-6</TD>
+            <TD>133.79513</TD>
+            <TD>-7.24515</TD>
+            <TD>3.5</TD>
+            <TD>POLYGON ICRS 133.70 -7.34 133.89 -7.34 133.89 -7.15 133.70 -7.15</TD>
+            <TD>SPHEREx-D6</TD>
+            <TD>2</TD>
+            <TD>0</TD>
+          </TR>
+          <TR>
+            <TD>sphx_l2_2025_353_arr6_009</TD>
+            <TD>spherex_qr</TD>
+            <TD>ivo://irsa.ipac/spherex_qr#sphx_l2_2025_353_arr6_009</TD>
+            <TD>2026-10-15</TD>
+            <TD>https://irsa.ipac.caltech.edu/ibe/data/spherex/qr/sphx_l2_2025_353_arr6_009.fits</TD>
+            <TD>application/fits</TD>
+            <TD>61031.769000</TD>
+            <TD>61031.771000</TD>
+            <TD>112.5</TD>
+            <TD>4.42e-6</TD>
+            <TD>5.00e-6</TD>
+            <TD>133.79513</TD>
+            <TD>-7.24515</TD>
+            <TD>3.5</TD>
+            <TD>CIRCLE ICRS 133.79513 -7.24515 0.12</TD>
+            <TD>SPHEREx-D6</TD>
+            <TD>2</TD>
+            <TD>2</TD>
+          </TR>
+        </TABLEDATA>
+      </DATA>
+    </TABLE>
+  </RESOURCE>
+</VOTABLE>

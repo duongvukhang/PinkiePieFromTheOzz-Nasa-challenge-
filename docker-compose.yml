@@ -1,0 +1,97 @@
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: infra/backend.Dockerfile
+  environment:
+    APP_ENV: ${APP_ENV:-development}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://sphx:sphx_dev_password@db:5432/sphx}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+    CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+    S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+    S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+    S3_BUCKET: ${S3_BUCKET:-sphx}
+  volumes:
+    - ./backend:/app/backend
+    - ./science:/app/science
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_started
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sphx}
+      POSTGRES_USER: ${POSTGRES_USER:-sphx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sphx_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sphx} -d ${POSTGRES_DB:-sphx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  api:
+    <<: *backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker --loglevel=info -Q fast,heavy,ingest
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/frontend.Dockerfile
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/tests:/app/tests
+      - ./frontend/index.html:/app/index.html
+    depends_on:
+      - api
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:

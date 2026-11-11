@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+  <RESOURCE type="results">
+    <INFO name="QUERY_STATUS" value="OK"/>
+    <TABLE name="releases">
+      <FIELD name="obs_collection" datatype="char" arraysize="*"/>
+      <FIELD name="latest_release_date" datatype="char" arraysize="*"/>
+      <FIELD name="n_frames" datatype="long"/>
+      <DATA>
+        <TABLEDATA>
+          <TR>
+            <TD>spherex_qr</TD>
+            <TD>2026-10-15</TD>
+            <TD>124500</TD>
+          </TR>
+          <TR>
+            <TD>spherex_dr1</TD>
+            <TD>2026-11-10</TD>
+            <TD>250000</TD>
+          </TR>
+        </TABLEDATA>
+      </DATA>
+    </TABLE>
+  </RESOURCE>
+</VOTABLE>

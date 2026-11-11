@@ -1,0 +1,70 @@
+profile_name: spherex_qr_v1
+provider: spherex_irsa
+mission: SPHEREx
+# [verify] Official IRSA SIAv2 / CAOM collection ID and ObsCore table name
+collection_id: spherex_qr
+release_aliases:
+  - spherex_qr
+  - QR
+  - QR-2026-10
+  - latest
+endpoints:
+  sia_url: https://irsa.ipac.caltech.edu/SIA
+  tap_url: https://irsa.ipac.caltech.edu/TAP
+  obscore_table: ivoa.obscore  # [verify]
+rate_limit:
+  max_concurrent: 4
+  requests_per_sec: 2.0
+  max_retries: 3
+  base_backoff_s: 0.5
+  max_backoff_s: 30.0
+cutout:
+  # [verify] IRSA native cutout query params on access_url; local Cutout2D runs if oversized or mode=local
+  mode: auto  # auto | remote | local
+  center_param: center
+  size_param: size
+  size_unit: deg
+  oversize_factor: 1.5
+hdu_layout:
+  # [verify] SPHEREx Level-2 MEF extension names (SCIENCE.md §0)
+  image: IMAGE
+  flags: FLAGS
+  variance: VARIANCE
+  zodi: ZODI
+  psf: PSF
+  wcs_wave: WCS-WAVE
+required_hdus:
+  - IMAGE
+  - FLAGS
+  - VARIANCE
+header_keys:
+  # [verify] Level-2 FITS header keywords
+  array_id: [ARRAY, DETECTOR, DET_ID]
+  band_id: [BAND, CHANNEL, FILTER]
+  date_obs: [DATE-OBS, DATE-BEG]
+  mjd_obs: [MJD-OBS, MJD-AVG, MJD-BEG]
+  exptime: [EXPTIME, XPOSURE]
+  timesys: [TIMESYS]
+# [verify] Nominal SPHEREx 6-array LVF wavelength ranges (um) per SCIENCE.md §0 & API.md §3.1
+arrays:
+  1: {band: arr1, lambda_um: [0.75, 1.11]}
+  2: {band: arr2, lambda_um: [1.11, 1.64]}
+  3: {band: arr3, lambda_um: [1.64, 2.42]}
+  4: {band: arr4, lambda_um: [2.42, 3.82]}
+  5: {band: arr5, lambda_um: [3.82, 4.42]}
+  6: {band: arr6, lambda_um: [4.42, 5.00]}
+# [verify] SPHEREx native FLAGS HDU bit index -> DetectionFlag name (DATA_MODEL.md §3)
+flag_bits:
+  0: BAD_PIX
+  1: SATURATED
+  2: COSMIC
+  3: PERSIST
+  4: EDGE
+  5: GHOST_SPIKE
+mask_flags:
+  - BAD_PIX
+  - SATURATED
+  - COSMIC
+  - PERSIST
+  - EDGE
+  - GHOST_SPIKE

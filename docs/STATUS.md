@@ -1,0 +1,11 @@
+## Current phase: 0/1 (Science acceptance tests & reference values pinned; sphx_core implementation pending)
+## Last session: Gemini 3.8 Flash High | 2026-11-11 | Science acceptance test suite & synthetic FITS generator (`tests/science/`)
+Done: Fetched live Gaia DR3, 2MASS, AllWISE, CatWISE2020, and JPL Horizons ephemeris/astrometry values into `tests/science/reference_values.json` (with literature citations for WISE 0855, eps Ind B, R Dra). Built deterministic seeded `<= 64x64` MEF FITS cutout generator (`tests/science/synthetic_fits.py`) with exact `erf`-integrated Gaussian PSFs, barycentric parallax + proper motion, noise/variance, WCS perturbations, and `FLAGS` bitmasks. Added failing-by-design pytest suite covering all §F.3 mandatory targets and automated science tests (registration error/QA, injection-recovery recall, identity matching, motion fit error, false-positive/variable misclassification rates, SSO residuals, Planet X stretch recovery).
+Files touched: `tests/science/reference_values.json`, `tests/science/conftest.py`, `tests/science/synthetic_fits.py`, `tests/science/test_astrometric_qa_and_registration.py`, `tests/science/test_injection_recovery_and_false_positives.py`, `tests/science/test_identity_matching.py`, `tests/science/test_motion_and_mandatory_targets.py`, `tests/science/test_sso_and_planetx.py`, `docs/STATUS.md`
+Verified by: `.venv/bin/pytest tests/science` (13 failed as expected with `NOT IMPLEMENTED` messages); `.venv/bin/pytest tests/unit` (24 passed); `.venv/bin/ruff check backend science tests` & `ruff format --check` (0 errors)   Lines before -> after: 1415 -> 1296 (`tests/science/*.py` shrink pass)
+## Next task: Implement `sphx_core` modules (`registration`, `extraction`, `difference`, `identity`, `motion`, `classify`, `consensus`, `comparison`, `orbits`, `planetx`) to turn `tests/science/` green — Gemini 3.8 Flash High
+## Open questions:
+- Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).
+- Run `make setup` / `pip install -e ./backend` on a machine with setuptools/network so `sphx.providers` entry-point metadata includes all providers.
+- Run `docker compose config` and full Compose stack on a machine with Docker Compose v2 installed.
+## Escalations: None
