@@ -18,5 +18,17 @@ mypy_path = "backend:science"
 packages = ["app", "sphx_core"]
 
 [[tool.mypy.overrides]]
-module = ["astropy.*", "astropy_healpix", "astroquery.*", "pyvo.*", "boto3", "botocore.*", "yaml"]
+module = [
+    "astropy.*",
+    "astropy_healpix",
+    "astroquery.*",
+    "pyvo.*",
+    "boto3",
+    "botocore.*",
+    "photutils.*",
+    "reproject",
+    "scipy.*",
+    "sep",
+    "yaml",
+]
 ignore_missing_imports = true

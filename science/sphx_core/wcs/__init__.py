@@ -16,6 +16,7 @@ from astropy_healpix import HEALPix
 from numpy.typing import NDArray
 
 _HPX9 = HEALPix(nside=2**9, order="nested", frame="icrs")
+ARCSEC_PER_RAD = 206264.80624709636
 
 
 @dataclass(frozen=True)
@@ -300,13 +301,84 @@ def extract_wcs_metrics(
     )
 
 
+def sky_to_tangent_arcsec(
+    ra_deg: NDArray[np.float64] | float,
+    dec_deg: NDArray[np.float64] | float,
+    ra_ref_deg: float,
+    dec_ref_deg: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Project ICRS `(ra_deg, dec_deg)` onto gnomonic tangent plane `(xi, eta)` [arcsec] (§A.2)."""
+    ra = np.deg2rad(np.asarray(ra_deg, dtype=np.float64))
+    dec = np.deg2rad(np.asarray(dec_deg, dtype=np.float64))
+    ra0 = math.radians(ra_ref_deg)
+    dec0 = math.radians(dec_ref_deg)
+    dra = ra - ra0
+    sin_d, cos_d = np.sin(dec), np.cos(dec)
+    sin_d0, cos_d0 = math.sin(dec0), math.cos(dec0)
+    cos_dra, sin_dra = np.cos(dra), np.sin(dra)
+    denom = np.maximum(sin_d * sin_d0 + cos_d * cos_d0 * cos_dra, 1e-12)
+    xi = ARCSEC_PER_RAD * (cos_d * sin_dra) / denom
+    eta = ARCSEC_PER_RAD * (sin_d * cos_d0 - cos_d * sin_d0 * cos_dra) / denom
+    return xi, eta
+
+
+def tangent_arcsec_to_sky(
+    xi_arcsec: NDArray[np.float64] | float,
+    eta_arcsec: NDArray[np.float64] | float,
+    ra_ref_deg: float,
+    dec_ref_deg: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Deproject gnomonic tangent-plane `(xi, eta)` [arcsec] back to ICRS `(ra_deg, dec_deg)`."""
+    xi = np.asarray(xi_arcsec, dtype=np.float64) / ARCSEC_PER_RAD
+    eta = np.asarray(eta_arcsec, dtype=np.float64) / ARCSEC_PER_RAD
+    ra0 = math.radians(ra_ref_deg)
+    dec0 = math.radians(dec_ref_deg)
+    rho = np.hypot(xi, eta)
+    c = np.arctan(rho)
+    sin_c, cos_c = np.sin(c), np.cos(c)
+    sin_d0, cos_d0 = math.sin(dec0), math.cos(dec0)
+    safe_rho = np.where(rho > 1e-15, rho, 1.0)
+    dec = np.where(
+        rho > 1e-15,
+        np.arcsin(np.clip(cos_c * sin_d0 + (eta * sin_c * cos_d0) / safe_rho, -1.0, 1.0)),
+        dec0,
+    )
+    ra = np.where(
+        rho > 1e-15,
+        ra0 + np.arctan2(xi * sin_c, safe_rho * cos_d0 * cos_c - eta * sin_d0 * sin_c),
+        ra0,
+    )
+    return np.rad2deg(ra) % 360.0, np.rad2deg(dec)
+
+
+def local_wcs_jacobian(
+    wcs: WCS, x_px: float, y_px: float, *, eps_px: float = 1e-3
+) -> NDArray[np.float64]:
+    """Compute local tangent Jacobian `d(xi, eta)/d(x, y)` [arcsec/px] at 0-based `(x, y)`."""
+    ra_v, dec_v = wcs.pixel_to_world_values(
+        [x_px, x_px + eps_px, x_px], [y_px, y_px, y_px + eps_px]
+    )
+    xi_d, eta_d = sky_to_tangent_arcsec(ra_v[1:], dec_v[1:], float(ra_v[0]), float(dec_v[0]))
+    return np.array(
+        [
+            [float(xi_d[0]) / eps_px, float(xi_d[1]) / eps_px],
+            [float(eta_d[0]) / eps_px, float(eta_d[1]) / eps_px],
+        ],
+        dtype=np.float64,
+    )
+
+
 __all__ = [
+    "ARCSEC_PER_RAD",
     "WCSMetrics",
     "box_footprint",
     "circle_footprint",
     "extract_wcs_metrics",
     "healpix9_nested",
+    "local_wcs_jacobian",
+    "sky_to_tangent_arcsec",
     "spherical_polygon_area_sr",
     "spherical_polygon_overlap",
+    "tangent_arcsec_to_sky",
     "wrap_angle_180",
 ]
