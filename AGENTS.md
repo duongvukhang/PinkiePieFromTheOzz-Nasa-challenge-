@@ -75,6 +75,7 @@ Code runs; relevant tests pass (state command and result).
 Shrink pass done (section 2.5), tests still pass.
 No unrelated files changed.
 docs/STATUS.md updated; any doc that became wrong is patched.
+Commit and push the code to origin after every task with the name of the task as the commit message.
 10. STATUS.md template (under 60 lines)
 ## Current phase: <n>
 ## Last session: <model> | <date> | <task>
