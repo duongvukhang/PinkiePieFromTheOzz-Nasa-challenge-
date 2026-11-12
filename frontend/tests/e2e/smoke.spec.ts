@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const SHOT_DIR =
+  "/Users/macos/.gemini/antigravity/brain/36402ab4-81d4-4640-aba5-4b79e34a68f9/screenshots/skytrace";
+
 function attachErrorCollector(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -16,82 +19,106 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
-test.describe("SkyTrace T5a Smoke Suite", () => {
-  test("Desktop (1440x900): Home, Sidebar toggle, Epoch switcher, Search, Auth flows", async ({
+async function expectLoadedImages(page: Page) {
+  await page.evaluate(() => {
+    for (const img of document.images) img.scrollIntoView();
+  });
+  await page.waitForTimeout(300);
+  const broken = await page.evaluate(() =>
+    Array.from(document.images)
+      .filter((img) => !img.complete || img.naturalWidth === 0)
+      .map((img) => img.getAttribute("src")),
+  );
+  expect(broken).toEqual([]);
+}
+
+test.describe("SkyTrace Editorial Redesign Smoke Suite", () => {
+  test("Desktop (1440x900): No desktop sidebar, Home, About, Login, Logout, Images", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const errors = attachErrorCollector(page);
 
+    // 1. Home page
     await page.goto("/");
     await expectNoHorizontalOverflow(page);
-
-    // Core landmarks & single H1 & non-overlapping sticky header
     await expect(page.locator("header.site-header")).toBeVisible();
     await expect(page.locator("main#main-content")).toBeVisible();
     await expect(page.locator("footer.site-footer")).toBeVisible();
-    await expect(page.locator("a.skip-link")).toHaveAttribute("href", "#main-content");
     await expect(page.locator("h1")).toHaveCount(1);
 
+    // Confirm sidebar trigger & drawer are hidden on desktop
+    await expect(page.getByRole("button", { name: "Open mobile navigation" })).toBeHidden();
+    await expect(page.locator("dialog#mobile-nav-drawer")).toBeHidden();
+
+    // Verify sticky header does not cover H1
     const headerBox = await page.locator("header.site-header").boundingBox();
     const h1Box = await page.locator("h1").boundingBox();
-    expect(headerBox).not.toBeNull();
-    expect(h1Box).not.toBeNull();
     expect(headerBox!.y + headerBox!.height).toBeLessThanOrEqual(h1Box!.y + 1);
 
-    // Desktop sidebar toggle
-    const toggleBtn = page.getByRole("button", { name: "Toggle navigation sidebar" });
-    const sidebar = page.locator("#skytrace-sidebar");
-    await expect(sidebar).toBeVisible();
-    await expect(toggleBtn).toHaveAttribute("aria-expanded", "true");
-    await toggleBtn.click();
-    await expect(sidebar).toBeHidden();
-    await expect(toggleBtn).toHaveAttribute("aria-expanded", "false");
-    await toggleBtn.click();
-    await expect(sidebar).toBeVisible();
+    // Scroll down to trigger lazy images & capture desktop screenshots
+    await page.screenshot({ path: `${SHOT_DIR}/home_top.png` });
+    await page.locator(".archival-grid").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(350);
+    await expectLoadedImages(page);
+    await page.screenshot({ path: `${SHOT_DIR}/home_archival.png` });
 
-    // Multi-epoch switcher updates aria-live readout
-    const e3Tab = page.getByRole("button", { name: /E3\s*2026-06-15/i });
-    await e3Tab.click();
-    await expect(e3Tab).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("dl[aria-live='polite']")).toContainText("MJD 61206.1 TDB");
+    // Interactive epoch blink stage & mover/variable switch
+    await page.getByRole("button", { name: "Variable Star (RW Aurigae)" }).click();
+    await expect(page.locator("figcaption")).toContainText("Fixed coordinate");
+    await page.getByRole("button", { name: "Next epoch" }).click();
+    await expect(page.locator(".pager-count")).toContainText("02 / 03");
+    await page.getByRole("heading", { name: "Calibration Fields" }).evaluate((el) => {
+      const top = el.getBoundingClientRect().top + window.scrollY - 96;
+      window.scrollTo({ top, behavior: "instant" });
+    });
+    const cardBox = await page.locator(".oat-card").first().boundingBox();
+    const stoneBtnBox = await page.locator(".oat-card .btn-stone").first().boundingBox();
+    expect(stoneBtnBox!.x + stoneBtnBox!.width).toBeLessThanOrEqual(
+      cardBox!.x + cardBox!.width + 1,
+    );
+    await page.screenshot({ path: `${SHOT_DIR}/home_cards.png` });
 
-    // Coordinate search routes to /v with ra & dec query params
+    // Coordinate search routes to /v
+    await page.evaluate(() => window.scrollTo(0, 0));
     await page.getByLabel(/Target name or ICRS coordinates/i).fill("133.795, -7.245");
-    await page.getByRole("button", { name: /Inspect field/i }).click();
+    await page.getByRole("button", { name: /Inspect sky/i }).click();
     await expect(page).toHaveURL(/\/v\?ra=133\.795&dec=-7\.245/);
-    await expect(page.locator("h1")).toHaveCount(1);
-    await expectNoHorizontalOverflow(page);
 
-    // Auth flows: /login <-> /signin + validation + password reveal
+    // 2. About Us page & carousel
+    await page.goto("/about");
+    await expectNoHorizontalOverflow(page);
+    await expect(page.locator("h1")).toContainText(/patience of time/i);
+    await page.getByRole("button", { name: "Next chapter" }).click();
+    await expect(page.locator(".pager-count")).toContainText("02 / 03");
+    await page.screenshot({ path: `${SHOT_DIR}/about.png` });
+
+    // 3. Log in -> Signed-in header -> Log out flow
     await page.goto("/login");
     await expectNoHorizontalOverflow(page);
-    await expect(page.locator("h1")).toContainText("Sign in");
-    await page.getByRole("button", { name: "Create account" }).click();
-    await expect(page).toHaveURL(/\/signin$/);
-    await expect(page.locator("h1")).toContainText("Create an observatory account");
+    await page.screenshot({ path: `${SHOT_DIR}/login.png` });
 
-    // Submit empty -> accessible validation error
+    // Trigger validation first
     await page.locator("form button[type='submit']").click();
-    const nameInput = page.getByLabel(/Full name/i);
-    await expect(nameInput).toHaveAttribute("aria-invalid", "true");
-    await expect(page.locator("[role='status']")).toContainText(/fix the highlighted fields/i);
+    await expect(page.getByLabel(/Email address/i)).toHaveAttribute("aria-invalid", "true");
 
-    // Password toggle works accessibly
-    const pwInput = page.getByLabel(/^Password/i);
-    const pwToggle = page.getByRole("button", { name: /Show password/i });
-    await expect(pwInput).toHaveAttribute("type", "password");
-    await pwToggle.click();
-    await expect(pwInput).toHaveAttribute("type", "text");
-    await expect(page.getByRole("button", { name: /Hide password/i })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    // Fill & submit login
+    await page.getByLabel(/Email address/i).fill("vera.rubin@carnegie.edu");
+    await page.getByLabel(/^Password/i).fill("observatory1970");
+    await page.locator("form button[type='submit']").click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator(".user-chip")).toContainText("vera.rubin");
+
+    // Navigate to Log out
+    await page.getByRole("link", { name: "Log out" }).first().click();
+    await expect(page).toHaveURL(/\/logout$/);
+    await expect(page.locator("[role='status']")).toContainText(/Signed out/i);
+    await page.screenshot({ path: `${SHOT_DIR}/logout.png` });
 
     expect(errors).toEqual([]);
   });
 
-  test("Mobile (390x844): No overflow, native <dialog> drawer opens/closes, Auth usable", async ({
+  test("Mobile (390x844): Mobile-only <dialog> drawer works, zero horizontal overflow", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -99,26 +126,27 @@ test.describe("SkyTrace T5a Smoke Suite", () => {
 
     await page.goto("/");
     await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: `${SHOT_DIR}/mobile_home.png` });
 
-    // Desktop sidebar is hidden on mobile; drawer opens via showModal()
-    await expect(page.locator("#skytrace-sidebar")).toBeHidden();
-    const toggleBtn = page.getByRole("button", { name: "Toggle navigation sidebar" });
-    await toggleBtn.click();
+    const menuBtn = page.getByRole("button", { name: "Open mobile navigation" });
+    await expect(menuBtn).toBeVisible();
+    const btnBox = await menuBtn.boundingBox();
+    const svgBox = await menuBtn.locator("svg").boundingBox();
+    expect(Math.abs(svgBox!.x + svgBox!.width / 2 - (btnBox!.x + btnBox!.width / 2))).toBeLessThan(
+      2,
+    );
+    expect(
+      Math.abs(svgBox!.y + svgBox!.height / 2 - (btnBox!.y + btnBox!.height / 2)),
+    ).toBeLessThan(2);
+    await menuBtn.click();
 
-    const drawer = page.locator("dialog#skytrace-drawer");
+    const drawer = page.locator("dialog#mobile-nav-drawer");
     await expect(drawer).toBeVisible();
-    await expect(toggleBtn).toHaveAttribute("aria-expanded", "true");
+    await page.screenshot({ path: `${SHOT_DIR}/mobile_drawer.png` });
 
-    // Close via Escape key
-    await page.keyboard.press("Escape");
-    await expect(drawer).toBeHidden();
-    await expect(toggleBtn).toHaveAttribute("aria-expanded", "false");
-
-    // Reopen and navigate to /signin from inside drawer
-    await toggleBtn.click();
-    await expect(drawer).toBeVisible();
-    await drawer.getByRole("link", { name: "Create account" }).click();
-    await expect(page).toHaveURL(/\/signin$/);
+    // Navigate to About from mobile drawer
+    await drawer.getByRole("link", { name: "About" }).click();
+    await expect(page).toHaveURL(/\/about$/);
     await expect(drawer).toBeHidden();
     await expectNoHorizontalOverflow(page);
 

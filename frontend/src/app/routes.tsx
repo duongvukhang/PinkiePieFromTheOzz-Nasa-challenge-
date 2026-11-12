@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import { BrowserRouter, Link, Route, Routes, useLocation } from "react-router-dom";
-import { Kicker } from "../design/components/Primitives";
+import { AboutPage } from "../pages/AboutPage";
 import { AuthPage } from "../pages/AuthPage";
 import { Home } from "../pages/Home";
+import { LogoutPage } from "../pages/LogoutPage";
 import { AppShell } from "./layout/AppShell";
 
 function StubPage({ kicker, title, body }: { kicker: string; title: string; body: string }) {
@@ -10,15 +11,23 @@ function StubPage({ kicker, title, body }: { kicker: string; title: string; body
     <section className="section">
       <div
         className="container"
-        style={{ display: "grid", gap: "var(--space-4)", maxWidth: "56rem" }}
+        style={{ display: "grid", gap: "var(--space-4)", maxWidth: "48rem" }}
       >
-        <Kicker>{kicker}</Kicker>
-        <h1 id="main-heading" className="chapter-title">
+        <span className="drawer-kicker">{kicker}</span>
+        <h1 id="main-heading" style={{ fontSize: "var(--text-3xl)" }}>
           {title}
         </h1>
-        <p className="prose-lead">{body}</p>
+        <p
+          style={{
+            fontFamily: "var(--font-serif)",
+            fontSize: "var(--text-lg)",
+            color: "var(--ink-1)",
+          }}
+        >
+          {body}
+        </p>
         <div>
-          <Link to="/" className="btn btn-secondary">
+          <Link to="/" className="nav-pill">
             ← Return to Journal Home
           </Link>
         </div>
@@ -31,15 +40,16 @@ function DocumentTitleSync() {
   const { pathname } = useLocation();
   useEffect(() => {
     const titles: Record<string, string> = {
-      "/": "SkyTrace — SPHEREx Moving-Object & Trajectory Platform",
-      "/login": "Sign in | SkyTrace",
+      "/": "SkyTrace — Observational Journal & SPHEREx Trajectory Archive",
+      "/about": "About Us | SkyTrace",
+      "/company": "About Us | SkyTrace",
+      "/login": "Log in | SkyTrace",
       "/signin": "Create account | SkyTrace",
       "/signup": "Create account | SkyTrace",
+      "/logout": "Log out | SkyTrace",
       "/v": "Observatory Viewer | SkyTrace",
       "/methodology": "Methodology & Limits | SkyTrace",
-      "/examples": "Calibration Targets | SkyTrace",
-      "/docs": "Documentation & API | SkyTrace",
-      "/credits": "Data Sources & Credits | SkyTrace",
+      "/credits": "Archive Credits | SkyTrace",
     };
     document.title = titles[pathname] ?? "SkyTrace";
   }, [pathname]);
@@ -60,22 +70,10 @@ const STUB_ROUTES = [
     body: "Detailed chaptered documentation covering native-frame astrometry, Hungarian identity matching, proper motion vs. parallax fitting, and noise rejection.",
   },
   {
-    path: "/examples",
-    kicker: "Validation",
-    title: "Five Calibration Targets",
-    body: "Preset fields for WISE 0855, Barnard's Star, ε Indi B, RW Aurigae, and R Draconis.",
-  },
-  {
-    path: "/docs",
-    kicker: "Documentation",
-    title: "OpenAPI, Python & Embed Parameters",
-    body: "URL query schema, /embed iframe parameters, and REST API documentation.",
-  },
-  {
     path: "/credits",
     kicker: "Provenance",
-    title: "Archive Credits & Software Acknowledgements",
-    body: "NASA / IPAC IRSA, SPHEREx, Gaia DR3, CatWISE2020, Astropy, photutils, SEP, and Aladin Lite.",
+    title: "Archive Credits & Acknowledgements",
+    body: "NASA / IPAC IRSA, SPHEREx, Gaia DR3, CatWISE2020, Astropy, photutils, SEP, Aladin Lite, and archival celestial atlas engravings via Wikimedia Commons & NASA Image Library.",
   },
   {
     path: "*",
@@ -92,9 +90,12 @@ export function AppRoutes() {
       <AppShell>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/about" element={<AboutPage />} />
+          <Route path="/company" element={<AboutPage />} />
           <Route path="/login" element={<AuthPage defaultMode="login" />} />
           <Route path="/signin" element={<AuthPage defaultMode="signin" />} />
           <Route path="/signup" element={<AuthPage defaultMode="signin" />} />
+          <Route path="/logout" element={<LogoutPage />} />
           {STUB_ROUTES.map(({ path, ...props }) => (
             <Route key={path} path={path} element={<StubPage {...props} />} />
           ))}

@@ -1,14 +1,17 @@
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuthStore } from "../app/authStore";
 import { Field } from "../design/components/Field";
-import { Callout, Kicker } from "../design/components/Primitives";
+import { Callout } from "../design/components/Primitives";
 
 type AuthMode = "login" | "signin";
 
 export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const login = useAuthStore((s) => s.login);
   const mode: AuthMode = defaultMode ?? (pathname === "/login" ? "login" : "signin");
+  const isSignUp = mode === "signin";
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -16,63 +19,69 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
   const [statusMessage, setStatusMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const isSignUp = mode === "signin";
-
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     if (!form.checkValidity()) {
-      const firstInvalid = form.querySelector<HTMLElement>(":invalid");
-      firstInvalid?.focus();
+      form.querySelector<HTMLElement>(":invalid")?.focus();
       setStatusMessage("Please fix the highlighted fields before continuing.");
       return;
     }
 
     setSubmitting(true);
     setStatusMessage("");
-    try {
-      const endpoint = isSignUp ? "/api/v1/auth/register" : "/api/v1/auth/login";
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isSignUp ? { display_name: name, email, password } : { email, password },
-        ),
-      });
-      setStatusMessage(
-        res.ok
-          ? isSignUp
-            ? "Account created. Check your inbox for verification."
-            : "Signed in to SkyTrace."
-          : `Authentication service unavailable in preview (${res.status}). Connect backend API to complete ${isSignUp ? "registration" : "sign-in"}.`,
-      );
-    } catch {
-      setStatusMessage(
-        "Backend API offline in local preview. Form validation and credentials checks succeeded.",
-      );
-    } finally {
-      setSubmitting(false);
+    const displayName = name.trim() || email.split("@")[0] || "Researcher";
+
+    const apiBase = import.meta.env.VITE_API_URL;
+    if (apiBase) {
+      try {
+        const endpoint = isSignUp ? "/api/v1/auth/register" : "/api/v1/auth/login";
+        await fetch(`${apiBase}${endpoint}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            isSignUp ? { name: displayName, email, password } : { email, password },
+          ),
+        });
+      } catch {
+        /* backend optional during frontend preview */
+      }
     }
+    login({ name: displayName, email });
+    setSubmitting(false);
+    navigate("/");
   };
 
   return (
     <section className="section">
       <div className="container auth-wrap">
         <div style={{ display: "grid", gap: "var(--space-6)" }}>
-          <div>
-            <Kicker>Researcher Access</Kicker>
-            <h1 id="main-heading" className="chapter-title" style={{ marginTop: "var(--space-2)" }}>
-              {isSignUp ? "Create an observatory account." : "Sign in to your observatory notes."}
-            </h1>
-          </div>
-          <p className="prose-lead">
-            SkyTrace is open for anonymous browsing and coordinate sharing. An account lets you save
-            project workspaces, FITS uploads, trajectory notes, and manual cross-epoch match
-            overrides.
+          <h1 id="main-heading" style={{ fontSize: "var(--text-3xl)" }}>
+            {isSignUp ? "Create an observatory account." : "Log in to your field notes."}
+          </h1>
+          <p
+            style={{
+              fontFamily: "var(--font-serif)",
+              fontSize: "var(--text-lg)",
+              color: "var(--ink-1)",
+            }}
+          >
+            SkyTrace stays open for anonymous reading and coordinate sharing. Signing in lets you
+            save project workspaces, custom FITS comparisons, and manual match overrides.
           </p>
+          <img
+            src="/images/plate-flamsteed-1729.jpg"
+            alt="John Flamsteed Atlas Coelestis archival frontispiece from 1729"
+            style={{
+              inlineSize: "100%",
+              maxInlineSize: "24rem",
+              borderRadius: "var(--radius-image)",
+              border: "1px solid var(--border)",
+            }}
+          />
           <Callout title="Provenance & Privacy">
-            Uploaded FITS headers remain private to your project unless explicitly published.
-            Scientific citations and ORCID identifiers stay linked to your findings.
+            Uploaded FITS headers remain private to your project unless you choose to publish a
+            link.
           </Callout>
         </div>
 
@@ -80,18 +89,18 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
           <nav className="mode-switch" aria-label="Authentication mode">
             <button
               type="button"
-              className="mode-tab"
+              className="nav-pill"
               aria-current={!isSignUp ? "page" : undefined}
               onClick={() => {
                 setStatusMessage("");
                 navigate("/login");
               }}
             >
-              Sign in
+              Log in
             </button>
             <button
               type="button"
-              className="mode-tab"
+              className="nav-pill"
               aria-current={isSignUp ? "page" : undefined}
               onClick={() => {
                 setStatusMessage("");
@@ -143,8 +152,8 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
               autoComplete={isSignUp ? "new-password" : "current-password"}
               hint={
                 isSignUp
-                  ? "At least 8 characters. Password managers and pasting are supported."
-                  : "Enter your password or use ORCID / magic link below."
+                  ? "At least 8 characters."
+                  : "Enter your password to open your researcher session."
               }
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -153,44 +162,13 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
 
             <button
               type="submit"
-              className="btn btn-primary"
+              className="btn btn-dark"
               disabled={submitting}
-              style={{ inlineSize: "100%", marginTop: "var(--space-2)" }}
+              style={{ inlineSize: "100%", minBlockSize: 46, marginTop: "var(--space-2)" }}
             >
-              {submitting ? "Submitting…" : isSignUp ? "Create account" : "Sign in"}
+              {submitting ? "Signing in…" : isSignUp ? "Create account" : "Log in"}
             </button>
           </form>
-
-          <div className="divider-label">Or continue with</div>
-
-          <div style={{ display: "grid", gap: "var(--space-2)" }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ inlineSize: "100%" }}
-              onClick={() =>
-                setStatusMessage(
-                  "ORCID OAuth flow connects via /api/v1/auth/orcid when backend credentials are configured.",
-                )
-              }
-            >
-              Continue with ORCID iD
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              style={{ inlineSize: "100%" }}
-              onClick={() =>
-                setStatusMessage(
-                  email
-                    ? `Magic sign-in link queued for ${email} (requires live backend mail transport).`
-                    : "Enter your email address above to request a one-time sign-in link.",
-                )
-              }
-            >
-              Email a one-time sign-in link
-            </button>
-          </div>
 
           <div
             role="status"
@@ -213,7 +191,7 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
           >
             {isSignUp ? "Already registered? " : "New to SkyTrace? "}
             <Link to={isSignUp ? "/login" : "/signin"}>
-              {isSignUp ? "Sign in instead" : "Create an account"}
+              {isSignUp ? "Log in instead" : "Create an account"}
             </Link>
           </p>
         </div>

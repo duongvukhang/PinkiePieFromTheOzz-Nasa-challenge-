@@ -1,38 +1,34 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Kicker } from "../../design/components/Primitives";
+import { useAuthStore } from "../authStore";
 import { PRIMARY_NAV, Sidebar } from "./Sidebar";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
-  const [isDesktop, setIsDesktop] = useState(
-    () => typeof window !== "undefined" && window.matchMedia?.("(min-width: 1024px)").matches,
-  );
-  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const user = useAuthStore((s) => s.user);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 24);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia?.("(min-width: 1024px)");
     if (!mq) return;
-    const onChange = () => {
-      setIsDesktop(mq.matches);
-      if (mq.matches) setMobileDrawerOpen(false);
+    const closeOnDesktop = () => {
+      if (mq.matches) setDrawerOpen(false);
     };
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
+    mq.addEventListener("change", closeOnDesktop);
+    return () => mq.removeEventListener("change", closeOnDesktop);
   }, []);
-
-  useEffect(() => {
-    setMobileDrawerOpen(false);
-  }, [pathname]);
-
-  const toggleMenu = () => {
-    if (isDesktop) setDesktopSidebarOpen((v) => !v);
-    else setMobileDrawerOpen((v) => !v);
-  };
-
-  const isMenuExpanded = isDesktop ? desktopSidebarOpen : mobileDrawerOpen;
 
   return (
     <div className="app-shell">
@@ -40,16 +36,65 @@ export function AppShell({ children }: { children: ReactNode }) {
         Skip to main content
       </a>
 
-      <header className="site-header">
-        <div className="container header-row">
-          <div className="header-left">
+      <header className={`site-header${scrolled ? " is-scrolled" : ""}`}>
+        <div className="container header-inner">
+          <nav className="primary-pills" aria-label="Primary">
+            {PRIMARY_NAV.map((item) => (
+              <Link
+                key={item.to}
+                to={item.to}
+                className="nav-pill"
+                aria-current={pathname === item.to ? "page" : undefined}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+
+          <Link className="masthead" to="/">
+            SkyTrace
+          </Link>
+
+          <div className="header-right">
+            {user ? (
+              <>
+                <span className="user-chip">{user.name}</span>
+                <Link
+                  to="/logout"
+                  className="nav-pill"
+                  aria-current={pathname === "/logout" ? "page" : undefined}
+                >
+                  Log out
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link
+                  to="/login"
+                  className="nav-pill desktop-auth-secondary"
+                  aria-current={pathname === "/login" ? "page" : undefined}
+                >
+                  Log in
+                </Link>
+                <Link
+                  to="/signin"
+                  className="btn btn-dark"
+                  aria-current={
+                    pathname === "/signin" || pathname === "/signup" ? "page" : undefined
+                  }
+                >
+                  Create account
+                </Link>
+              </>
+            )}
+
             <button
               type="button"
-              className="btn btn-icon"
-              aria-label="Toggle navigation sidebar"
-              aria-expanded={isMenuExpanded}
-              aria-controls={isDesktop ? "skytrace-sidebar" : "skytrace-drawer"}
-              onClick={toggleMenu}
+              className="btn-icon-sq mobile-only"
+              aria-label="Open mobile navigation"
+              aria-expanded={drawerOpen}
+              aria-controls="mobile-nav-drawer"
+              onClick={() => setDrawerOpen(true)}
             >
               <svg
                 width="18"
@@ -57,134 +102,88 @@ export function AppShell({ children }: { children: ReactNode }) {
                 viewBox="0 0 18 18"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="1.75"
+                strokeWidth="1.6"
                 aria-hidden="true"
               >
                 <path d="M2 4.5h14M2 9h14M2 13.5h14" />
               </svg>
             </button>
-            <Link className="wordmark" to="/">
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
-                <circle cx="14.5" cy="9.5" r="1.5" fill="var(--accent-terracotta)" stroke="none" />
-              </svg>
-              <span>SkyTrace</span>
-            </Link>
-          </div>
-
-          <nav className="primary-nav" aria-label="Primary">
-            <ul>
-              {PRIMARY_NAV.map((item) => (
-                <li key={item.to}>
-                  <Link
-                    to={item.to}
-                    className="nav-link"
-                    aria-current={pathname === item.to ? "page" : undefined}
-                  >
-                    {item.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
-
-          <div className="header-actions">
-            <Link
-              to="/login"
-              className="btn btn-ghost"
-              aria-current={pathname === "/login" ? "page" : undefined}
-            >
-              Sign in
-            </Link>
-            <Link
-              to="/signin"
-              className="btn btn-primary"
-              aria-current={pathname === "/signin" || pathname === "/signup" ? "page" : undefined}
-            >
-              Create account
-            </Link>
           </div>
         </div>
       </header>
 
-      <div className={`app-body${desktopSidebarOpen ? " has-sidebar" : ""}`}>
-        <Sidebar
-          desktopOpen={desktopSidebarOpen}
-          drawerOpen={mobileDrawerOpen}
-          onCloseDrawer={() => setMobileDrawerOpen(false)}
-        />
-        <main id="main-content" tabIndex={-1}>
-          {children}
-        </main>
-      </div>
+      <Sidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+
+      <main id="main-content" tabIndex={-1}>
+        {children}
+      </main>
 
       <footer className="site-footer">
         <div className="container">
           <div className="footer-grid">
             <div>
-              <span className="wordmark" style={{ color: "var(--sky-text)" }}>
+              <span className="masthead" style={{ color: "var(--sky-text)" }}>
                 SkyTrace
               </span>
               <p
                 style={{
                   marginTop: "var(--space-3)",
                   fontSize: "var(--text-sm)",
-                  color: "#c8cdd6",
+                  color: "#c8c5bc",
                   maxWidth: "38ch",
                 }}
               >
-                An independent astronomical journal and SPHEREx multi-epoch astrometric observatory.
-                Every position carries uncertainty; every candidate remains unconfirmed until
-                independently verified.
+                An independent astronomical journal and SPHEREx multi-epoch observatory. Every
+                measurement carries uncertainty; every candidate stays open to doubt.
               </p>
             </div>
             <div>
-              <Kicker>Observatory</Kicker>
+              <span className="drawer-kicker" style={{ color: "var(--sky-muted)" }}>
+                Journal
+              </span>
               <ul className="footer-links">
                 <li>
-                  <Link to="/">Journal Home</Link>
+                  <Link to="/">Home</Link>
+                </li>
+                <li>
+                  <Link to="/about">About Us</Link>
                 </li>
                 <li>
                   <Link to="/methodology">Methodology &amp; Limits</Link>
                 </li>
                 <li>
-                  <Link to="/examples">Five Calibration Targets</Link>
-                </li>
-                <li>
-                  <Link to="/v">Launch Sky Viewer</Link>
+                  <Link to="/v">Sky Viewer</Link>
                 </li>
               </ul>
             </div>
             <div>
-              <Kicker>Access &amp; Provenance</Kicker>
+              <span className="drawer-kicker" style={{ color: "var(--sky-muted)" }}>
+                Account &amp; Sources
+              </span>
               <ul className="footer-links">
+                {user ? (
+                  <li>
+                    <Link to="/logout">Log out ({user.name})</Link>
+                  </li>
+                ) : (
+                  <>
+                    <li>
+                      <Link to="/login">Log in</Link>
+                    </li>
+                    <li>
+                      <Link to="/signin">Create account</Link>
+                    </li>
+                  </>
+                )}
                 <li>
-                  <Link to="/login">Sign in</Link>
-                </li>
-                <li>
-                  <Link to="/signin">Create account</Link>
-                </li>
-                <li>
-                  <Link to="/docs">API &amp; Embed Guide</Link>
-                </li>
-                <li>
-                  <Link to="/credits">IRSA / SPHEREx Credits</Link>
+                  <Link to="/credits">Archive Credits</Link>
                 </li>
               </ul>
             </div>
           </div>
           <div className="footer-meta">
             <span>DATA: NASA / IPAC IRSA · SPHEREX · GAIA DR3 · CATWISE2020</span>
-            <span>FRAME: ICRS J2016.0 · TIME: MJD / TDB · SOFTWARE: ASTROPY · ALADIN LITE</span>
+            <span>FRAME: ICRS J2016.0 · TIME: MJD / TDB</span>
           </div>
         </div>
       </footer>
