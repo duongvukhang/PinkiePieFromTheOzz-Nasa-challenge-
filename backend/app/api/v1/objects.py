@@ -1,4 +1,4 @@
-"""Analyses, tracked objects, associations, spectra, lightcurves, and A-vs-B compare."""
+"""Analyses, tracked objects, associations, spectra, and lightcurves."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from astropy.coordinates import SkyCoord
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.deps import (
-    COMMON_501,
     APIProblemError,
     enforce_fov_quota,
     get_gaia_provider,
@@ -23,7 +22,6 @@ from app.api.deps import (
     get_storage,
     get_store,
     get_wise_provider,
-    not_implemented,
     paginate_items,
     require_succeeded_job,
 )
@@ -34,9 +32,6 @@ from app.schemas.objects import (
     AnalysisCreateRequest,
     AssociationOverrideRequest,
     AssociationOverrideResponse,
-    CompareAcceptedResponse,
-    CompareRequest,
-    CompareResultResponse,
     DetectionRead,
     LightcurveResponse,
     MotionFitRead,
@@ -73,7 +68,7 @@ _ALLOWED_MOTION_MODELS = frozenset(
     {"static", "linear", "astrometric5", "astrometric5_prior", "keplerian", "shift_stack"}
 )
 
-router = APIRouter(responses=COMMON_501)
+router = APIRouter()
 _ANALYSIS_RESPONSES: dict[int | str, dict[str, Any]] = {
     403: {"model": ProblemDetail},
     404: {"model": ProblemDetail},
@@ -723,15 +718,3 @@ async def get_object_lightcurve(
     """Fetch multi-epoch photometry lightcurve and variability indices."""
     bundle = _require_object_bundle(store, object_id)
     return build_object_lightcurve(bundle)
-
-
-@router.post("/compare", status_code=status.HTTP_202_ACCEPTED, tags=["compare"])
-async def create_comparison(payload: CompareRequest) -> CompareAcceptedResponse:
-    """Launch an A-vs-B FITS comparison job (diff, sum, ratio, headers, sources)."""
-    not_implemented()
-
-
-@router.get("/compare/{compare_id}", tags=["compare"])
-async def get_comparison(compare_id: UUID) -> CompareResultResponse:
-    """Retrieve A-vs-B comparison products, header diff, and source changes."""
-    not_implemented()

@@ -42,21 +42,21 @@ def _extract_2d_image(fits_bytes: bytes) -> np.ndarray:
     raise ValueError("FITS payload contains no 2D image array")
 
 
-def render_cutout_products(
-    fits_bytes: bytes,
+def render_array_products(
+    arr: np.ndarray,
     storage: StorageBackend,
     prefix: str,
 ) -> dict[str, Any]:
     """Render 8-bit asinh-stretched WebP display tile and little-endian float32 science tile."""
-    arr = _extract_2d_image(fits_bytes)
-    finite = arr[np.isfinite(arr)]
+    arr32 = np.asarray(arr, dtype=np.float32)
+    finite = arr32[np.isfinite(arr32)]
     if finite.size == 0:
         vmin, vmax = 0.0, 1.0
-        norm = np.zeros_like(arr, dtype=np.float32)
+        norm = np.zeros_like(arr32, dtype=np.float32)
     else:
         vmin, vmax = (float(x) for x in np.percentile(finite, [1.0, 99.5]))
         span = max(vmax - vmin, 1e-12)
-        scaled = np.clip((np.nan_to_num(arr, nan=vmin) - vmin) / span, 0.0, 1.0)
+        scaled = np.clip((np.nan_to_num(arr32, nan=vmin) - vmin) / span, 0.0, 1.0)
         norm = np.arcsinh(10.0 * scaled) / np.arcsinh(10.0)
 
     u8 = np.clip(np.round(norm * 255.0), 0, 255).astype(np.uint8)
@@ -67,7 +67,7 @@ def render_cutout_products(
     )
     sci_obj = storage.put_bytes(
         f"{prefix}/science.bin",
-        np.asarray(arr, dtype="<f4").tobytes(),
+        np.asarray(arr32, dtype="<f4").tobytes(),
         content_type="application/octet-stream",
     )
     return {
@@ -78,9 +78,18 @@ def render_cutout_products(
             "percentile": [1.0, 99.5],
             "vmin": vmin,
             "vmax": vmax,
-            "shape": list(arr.shape),
+            "shape": list(arr32.shape),
         },
     }
+
+
+def render_cutout_products(
+    fits_bytes: bytes,
+    storage: StorageBackend,
+    prefix: str,
+) -> dict[str, Any]:
+    """Render 8-bit asinh-stretched WebP display tile and little-endian float32 science tile."""
+    return render_array_products(_extract_2d_image(fits_bytes), storage, prefix)
 
 
 def _build_cutout_frame(

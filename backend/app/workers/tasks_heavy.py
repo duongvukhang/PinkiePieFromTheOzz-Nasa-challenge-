@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import math
 import os
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ from uuid import UUID, uuid5
 import astropy.units as u
 import numpy as np
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 from astropy.time import Time
 
 from app.db.flags import DetectionFlag
@@ -24,8 +26,10 @@ from app.services.jobs import JobStore, get_job_store
 from app.services.storage import StorageBackend, compute_sha256, get_storage_backend
 from app.services.tracking import flux_to_ujy_and_mag
 from app.workers.celery_app import celery_app
+from app.workers.tasks_fast import render_array_products
 from sphx_core.calib import HARD_BAD_MASK, FrameData, band_group_for_wavelength, load_frame
 from sphx_core.classify import classify_source
+from sphx_core.comparison import SourceComparisonEntry, compare_epochs
 from sphx_core.consensus import evaluate_mover_consensus
 from sphx_core.difference import difference_frames
 from sphx_core.extraction import ExtractionResult, extract_sources
@@ -38,13 +42,14 @@ from sphx_core.identity import (
     format_public_id,
     link_epochs,
 )
-from sphx_core.io import inspect_fits
+from sphx_core.io import evaluate_compatibility, inspect_fits
 from sphx_core.motion import MotionFitResult, fit_motion, forced_photometry_at_sky
 from sphx_core.registration import register_exposure
 from sphx_core.wcs import healpix9_nested, tangent_arcsec_to_sky
 
 ANALYSIS_TASK_NAME = "app.workers.tasks_heavy.run_analysis"
 TRACKS_TASK_NAME = "app.workers.tasks_heavy.run_tracks"
+COMPARE_TASK_NAME = "app.workers.tasks_heavy.run_compare"
 _ANALYSIS_FRAME_NS = UUID("9f4a21c8-7d3e-4b9a-a210-6c5e8f123401")
 _MOVER_REASONS = frozenset(
     {"Mover dipole in diff", "High PM candidate", "Red+moving", "Fast-mover streak", "Known SSO"}
@@ -1468,6 +1473,251 @@ def execute_run_tracks(
 def run_tracks(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
     """Celery task wrapper executing multi-epoch tracking, fitting, and classification."""
     return execute_run_tracks(
+        UUID(job_id),
+        params,
+        store=get_job_store(),
+        storage=get_storage_backend(),
+    )
+
+
+def _finite_float(val: float | None) -> float | None:
+    return None if val is None or not math.isfinite(float(val)) else float(val)
+
+
+def _write_compare_fits(
+    arr: np.ndarray,
+    frame_a: FrameData,
+    *,
+    storage: StorageBackend,
+    key: str,
+    extname: str,
+    kappa: float,
+    psf_match: str,
+    variance: np.ndarray | None = None,
+) -> str:
+    hdr = frame_a.wcs.to_header(relax=True)
+    hdr["BUNIT"] = frame_a.bunit or ""
+    hdr["KAPPA"] = round(float(kappa), 6)
+    hdr["PSFMATCH"] = psf_match
+    hdr["EXTNAME"] = extname
+    hdus: list[fits.PrimaryHDU | fits.ImageHDU] = [
+        fits.PrimaryHDU(data=np.asarray(arr, dtype=np.float32), header=hdr)
+    ]
+    if variance is not None:
+        vhdr = frame_a.wcs.to_header(relax=True)
+        vhdr["EXTNAME"] = "VARIANCE"
+        hdus.append(fits.ImageHDU(data=np.asarray(variance, dtype=np.float32), header=vhdr))
+    buf = io.BytesIO()
+    fits.HDUList(hdus).writeto(buf)
+    return storage.put_bytes(key, buf.getvalue(), content_type="application/fits").key
+
+
+def _serialize_compare_entry(entry: SourceComparisonEntry) -> dict[str, Any]:
+    return {
+        "ra": float(entry.ra_deg),
+        "dec": float(entry.dec_deg),
+        "status": entry.status,
+        "flux_a": _finite_float(entry.flux_a),
+        "flux_a_err": _finite_float(entry.flux_a_err),
+        "flux_b": _finite_float(entry.flux_b),
+        "flux_b_err": _finite_float(entry.flux_b_err),
+        "delta_mag": _finite_float(entry.delta_mag),
+        "sigma_delta_mag": _finite_float(entry.sigma_delta_mag),
+        "flux_significance_sigma": _finite_float(entry.flux_significance_sigma),
+        "offset_arcsec": _finite_float(entry.offset_arcsec),
+        "offset_sigma": _finite_float(entry.offset_sigma),
+        "flags_a": int(entry.flags_a),
+        "flags_b": int(entry.flags_b),
+        "dipole_favored": bool(entry.dipole_favored),
+        "monopole_favored": bool(entry.monopole_favored),
+        "notes": entry.notes,
+    }
+
+
+def execute_run_compare(
+    job_id: UUID,
+    params: dict[str, Any],
+    *,
+    store: JobStore,
+    storage: StorageBackend,
+) -> dict[str, Any]:
+    """Execute A-vs-B FITS comparison: compatibility, products, header diff, source changes."""
+    compare_id = UUID(str(params["compare_id"]))
+    store.update_job(job_id, status="running", progress=0.05, started_at=datetime.now(UTC))
+    store.update_comparison_job(compare_id, status="running")
+    try:
+        fits_a_id = UUID(str(params["fits_a"]))
+        fits_b_id = UUID(str(params["fits_b"]))
+        ops = [str(op) for op in params["ops"]]
+        psf_match = str(params.get("psf_match", "none"))
+
+        rec_a = store.get_fits_file(fits_a_id)
+        rec_b = store.get_fits_file(fits_b_id)
+        if rec_a is None or rec_b is None:
+            missing = fits_a_id if rec_a is None else fits_b_id
+            raise ValueError(f"FITS file {missing} is not registered.")
+
+        raw_a = storage.get_bytes(str(rec_a["storage_path"]), verify_checksum=False)
+        raw_b = storage.get_bytes(str(rec_b["storage_path"]), verify_checksum=False)
+        insp_a = inspect_fits(raw_a, user_epoch=rec_a.get("mjd_tdb_mid"))
+        insp_b = inspect_fits(raw_b, user_epoch=rec_b.get("mjd_tdb_mid"))
+        compat = evaluate_compatibility(insp_b, reference=insp_a)
+        if not compat.valid:
+            raise ValueError("; ".join(compat.errors) or "Incompatible FITS frames for comparison.")
+
+        store.update_job(job_id, progress=0.25)
+        fa = load_frame(raw_a, user_epoch=rec_a.get("mjd_tdb_mid"))
+        fb = load_frame(raw_b, user_epoch=rec_b.get("mjd_tdb_mid"))
+        cmp_res = compare_epochs(fa, fb)
+        store.update_job(job_id, progress=0.65)
+
+        ops_set = set(ops)
+        artifacts: dict[str, str] = {}
+        products_urls: dict[str, str] = {}
+        shapes: dict[str, list[int]] = {}
+        base_url = f"/api/v1/compare/{compare_id}/products"
+
+        for op_name, arr, var_arr, fname, extname in (
+            ("diff", cmp_res.diff_image, cmp_res.diff_variance, "diff", "DIFF"),
+            ("sum", cmp_res.sum_image, None, "sum", "SUM"),
+            ("ratio", cmp_res.ratio_image, None, "ratio", "RATIO"),
+        ):
+            if op_name not in ops_set:
+                continue
+            artifacts[fname] = _write_compare_fits(
+                arr,
+                fa,
+                storage=storage,
+                key=f"compare/{compare_id}/{fname}.fits",
+                extname=extname,
+                kappa=cmp_res.flux_scale_kappa,
+                psf_match=psf_match,
+                variance=var_arr,
+            )
+            products_urls[fname] = f"{base_url}/{fname}.fits"
+            rendered = render_array_products(arr, storage, f"compare/{compare_id}/{fname}")
+            artifacts[f"{fname}_display"] = str(rendered["display_key"])
+            artifacts[f"{fname}_science"] = str(rendered["science_key"])
+            products_urls[f"{fname}_display"] = f"{base_url}/{fname}.webp"
+            products_urls[f"{fname}_science"] = f"{base_url}/{fname}.bin"
+            shapes[f"{fname}.bin"] = [int(x) for x in rendered["stretch"]["shape"]]
+
+        if "diff" in ops_set:
+            artifacts["score_corr"] = _write_compare_fits(
+                cmp_res.score_corr,
+                fa,
+                storage=storage,
+                key=f"compare/{compare_id}/score_corr.fits",
+                extname="SCORE_CORR",
+                kappa=cmp_res.flux_scale_kappa,
+                psf_match=psf_match,
+            )
+            products_urls["score_corr"] = f"{base_url}/score_corr.fits"
+
+        header_diff: dict[str, Any] | None = None
+        if "header_diff" in ops_set:
+            header_diff = {k: dict(v) for k, v in cmp_res.header_diff.items()}
+            header_diff["time"] |= {
+                "date_obs_a": insp_a.epoch.utc_iso if insp_a.epoch else None,
+                "date_obs_b": insp_b.epoch.utc_iso if insp_b.epoch else None,
+            }
+            header_diff["wcs"] |= {
+                "ra_center_a": insp_a.wcs.ra_center_deg if insp_a.wcs else None,
+                "dec_center_a": insp_a.wcs.dec_center_deg if insp_a.wcs else None,
+                "ra_center_b": insp_b.wcs.ra_center_deg if insp_b.wcs else None,
+                "dec_center_b": insp_b.wcs.dec_center_deg if insp_b.wcs else None,
+                "has_sip_a": insp_a.wcs.has_sip if insp_a.wcs else False,
+                "has_sip_b": insp_b.wcs.has_sip if insp_b.wcs else False,
+                "overlap_pct": compat.overlap_pct,
+                "pixscale_ratio": compat.pixscale_ratio,
+                "parity_match": compat.parity_match,
+                "reprojection_needed": compat.reprojection_needed,
+            }
+            header_diff["instrument"]["band_match"] = compat.band_match
+            header_diff["calibration"] |= {
+                "flux_scale_kappa": _finite_float(cmp_res.flux_scale_kappa),
+                "kappa_n_stars": int(cmp_res.kappa_n_stars),
+            }
+            header_diff |= {
+                "hdus": {
+                    "a": insp_a.header_summary.get("hdus", []),
+                    "b": insp_b.header_summary.get("hdus", []),
+                },
+                "comparison": {"psf_match_requested": psf_match, "psf_match_applied": "zogy"},
+                "warnings": list(compat.warnings),
+                "accuracy_notes": list(compat.accuracy_notes),
+            }
+
+        source_changes: dict[str, Any] | None = None
+        if "sources" in ops_set:
+            serialized = [_serialize_compare_entry(s) for s in cmp_res.sources]
+            buckets: dict[str, list[dict[str, Any]]] = {
+                "appeared": [],
+                "disappeared": [],
+                "moved": [],
+                "changed_brightness": [],
+                "unchanged": [],
+            }
+            for item in serialized:
+                buckets.setdefault(item["status"].replace(" ", "_"), []).append(item)
+            source_changes = {
+                "flux_scale_kappa": _finite_float(cmp_res.flux_scale_kappa),
+                "kappa_n_stars": int(cmp_res.kappa_n_stars),
+                "counts": {**{k: len(v) for k, v in buckets.items()}, "total": len(serialized)},
+                **buckets,
+                "photometry_diff": serialized,
+            }
+
+        compare_result = {
+            "compare_id": str(compare_id),
+            "status": "succeeded",
+            "products": products_urls,
+            "header_diff": header_diff,
+            "source_changes": source_changes,
+        }
+        store.update_comparison_job(
+            compare_id,
+            status="succeeded",
+            products=artifacts,
+            header_diff=header_diff,
+            source_changes=source_changes,
+        )
+        store.record_provenance(
+            processing_job_id=job_id,
+            entity_table="comparison_jobs",
+            entity_id=str(compare_id),
+            inputs=[str(fits_a_id), str(fits_b_id)],
+            params={"ops": ops, "psf_match": psf_match},
+        )
+        outputs = {
+            "compare_id": str(compare_id),
+            "artifacts": artifacts,
+            "shapes": shapes,
+            "compare_result": compare_result,
+        }
+        store.update_job(
+            job_id,
+            status="succeeded",
+            progress=1.0,
+            outputs=outputs,
+            finished_at=datetime.now(UTC),
+        )
+        return outputs
+    except Exception as exc:
+        store.update_comparison_job(compare_id, status="failed")
+        store.update_job(
+            job_id,
+            status="failed",
+            error={"type": type(exc).__name__, "detail": str(exc)},
+            finished_at=datetime.now(UTC),
+        )
+        raise
+
+
+@celery_app.task(name=COMPARE_TASK_NAME, queue="heavy")  # type: ignore[untyped-decorator]
+def run_compare(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Celery task wrapper running A-vs-B FITS comparison."""
+    return execute_run_compare(
         UUID(job_id),
         params,
         store=get_job_store(),

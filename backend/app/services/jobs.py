@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
+    ComparisonJob,
     DataRelease,
     Detection,
     FitsFile,
@@ -38,6 +39,7 @@ TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "cance
 _CUTOUT_TASK = "app.workers.tasks_fast.build_cutouts"
 _UPLOAD_TASK = "app.workers.tasks_fast.validate_upload"
 _ANALYSIS_TASK = "app.workers.tasks_heavy.run_analysis"
+_COMPARE_TASK = "app.workers.tasks_heavy.run_compare"
 
 
 def compute_params_hash(task: str, params: Mapping[str, Any], release: str = "") -> bytes:
@@ -109,6 +111,41 @@ class JobStore(ABC):
     def get_analysis_job(self, analysis_id: UUID) -> JobStatusResponse | None:
         """Fetch analysis job associated with `analysis_id`."""
         return self.get_job_by_param(_ANALYSIS_TASK, "analysis_id", str(analysis_id))
+
+    def get_compare_job(self, compare_id: UUID) -> JobStatusResponse | None:
+        """Fetch comparison job associated with `compare_id`."""
+        return self.get_job_by_param(_COMPARE_TASK, "compare_id", str(compare_id))
+
+    @abstractmethod
+    def create_comparison_job(
+        self,
+        *,
+        compare_id: UUID,
+        fits_a: UUID,
+        fits_b: UUID,
+        ops: Sequence[str],
+        params: dict[str, Any],
+        status: str,
+        processing_job_id: UUID,
+        project_id: UUID | None = None,
+    ) -> None:
+        """Persist initial A-vs-B comparison job record."""
+
+    @abstractmethod
+    def update_comparison_job(
+        self,
+        compare_id: UUID,
+        *,
+        status: str,
+        products: dict[str, str] | None = None,
+        header_diff: dict[str, Any] | None = None,
+        source_changes: dict[str, Any] | None = None,
+    ) -> None:
+        """Update A-vs-B comparison job status and computed outputs."""
+
+    @abstractmethod
+    def get_comparison_job(self, compare_id: UUID) -> dict[str, Any] | None:
+        """Fetch persisted A-vs-B comparison job record by `compare_id`."""
 
     @abstractmethod
     def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
@@ -257,6 +294,7 @@ class InMemoryJobStore(InMemoryObjectMixin, JobStore):
         self._next_det_id = 1
         self._provenance: list[dict[str, Any]] = []
         self._releases: dict[str, DataReleaseRead] = {}
+        self._comparisons: dict[UUID, dict[str, Any]] = {}
         self._init_object_store()
 
     @staticmethod
@@ -301,7 +339,7 @@ class InMemoryJobStore(InMemoryObjectMixin, JobStore):
             }
             self._jobs[jid] = rec
             self._by_hash[params_hash] = jid
-            for key in ("cutout_id", "upload_id", "analysis_id", "fits_file_id"):
+            for key in ("cutout_id", "upload_id", "analysis_id", "fits_file_id", "compare_id"):
                 if key in params:
                     self._by_param[(task, key, str(params[key]))] = jid
             self._cond.notify_all()
@@ -455,6 +493,59 @@ class InMemoryJobStore(InMemoryObjectMixin, JobStore):
                 yield snap
             if snap.status in TERMINAL_JOB_STATUSES or time.monotonic() >= deadline:
                 return
+
+    def create_comparison_job(
+        self,
+        *,
+        compare_id: UUID,
+        fits_a: UUID,
+        fits_b: UUID,
+        ops: Sequence[str],
+        params: dict[str, Any],
+        status: str,
+        processing_job_id: UUID,
+        project_id: UUID | None = None,
+    ) -> None:
+        with self._lock:
+            self._comparisons[compare_id] = {
+                "id": compare_id,
+                "project_id": project_id,
+                "fits_a": fits_a,
+                "fits_b": fits_b,
+                "ops": list(ops),
+                "params": dict(params),
+                "status": status,
+                "products": {},
+                "header_diff": None,
+                "source_changes": None,
+                "processing_job_id": processing_job_id,
+            }
+
+    def update_comparison_job(
+        self,
+        compare_id: UUID,
+        *,
+        status: str,
+        products: dict[str, str] | None = None,
+        header_diff: dict[str, Any] | None = None,
+        source_changes: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            rec = self._comparisons.get(compare_id)
+            if rec is None:
+                return
+            rec["status"] = status
+            if products is not None:
+                rec["products"] = dict(products)
+            if header_diff is not None:
+                rec["header_diff"] = dict(header_diff)
+            if source_changes is not None:
+                rec["source_changes"] = dict(source_changes)
+
+    def get_comparison_job(self, compare_id: UUID) -> dict[str, Any] | None:
+        with self._lock:
+            rec = self._comparisons.get(compare_id)
+            return dict(rec) if rec is not None else None
 
 
 class SqlAlchemyJobStore(SqlAlchemyObjectMixin, JobStore):
@@ -713,6 +804,78 @@ class SqlAlchemyJobStore(SqlAlchemyObjectMixin, JobStore):
             if snap.status in TERMINAL_JOB_STATUSES or time.monotonic() >= deadline:
                 return
             time.sleep(min(poll_interval_s, max(0.01, deadline - time.monotonic())))
+
+    def create_comparison_job(
+        self,
+        *,
+        compare_id: UUID,
+        fits_a: UUID,
+        fits_b: UUID,
+        ops: Sequence[str],
+        params: dict[str, Any],
+        status: str,
+        processing_job_id: UUID,
+        project_id: UUID | None = None,
+    ) -> None:
+        with self._session_factory() as session:
+            if session.get(ComparisonJob, compare_id) is None:
+                valid_proj = project_id if project_id and session.get(Project, project_id) else None
+                session.add(
+                    ComparisonJob(
+                        id=compare_id,
+                        project_id=valid_proj,
+                        fits_a=fits_a,
+                        fits_b=fits_b,
+                        ops=list(ops),
+                        params=dict(params),
+                        status=status,
+                        processing_job_id=processing_job_id,
+                    )
+                )
+                session.commit()
+
+    def update_comparison_job(
+        self,
+        compare_id: UUID,
+        *,
+        status: str,
+        products: dict[str, str] | None = None,
+        header_diff: dict[str, Any] | None = None,
+        source_changes: dict[str, Any] | None = None,
+    ) -> None:
+        with self._session_factory() as session:
+            row = session.get(ComparisonJob, compare_id)
+            if row is None:
+                return
+            row.status = status
+            if products is not None:
+                row.products = dict(products)
+            if header_diff is not None:
+                row.header_diff = dict(header_diff)
+            if source_changes is not None:
+                row.source_changes = dict(source_changes)
+            session.commit()
+
+    def get_comparison_job(self, compare_id: UUID) -> dict[str, Any] | None:
+        with self._session_factory() as session:
+            row = session.get(ComparisonJob, compare_id)
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "project_id": row.project_id,
+                "fits_a": row.fits_a,
+                "fits_b": row.fits_b,
+                "ops": list(row.ops),
+                "params": dict(row.params or {}),
+                "status": row.status or "queued",
+                "products": dict(row.products or {}),
+                "header_diff": dict(row.header_diff) if row.header_diff is not None else None,
+                "source_changes": (
+                    dict(row.source_changes) if row.source_changes is not None else None
+                ),
+                "processing_job_id": row.processing_job_id,
+            }
 
 
 _default_memory_store = InMemoryJobStore()
