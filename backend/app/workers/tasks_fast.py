@@ -17,6 +17,7 @@ from PIL import Image
 from app.providers.base import Provider, StoredFrame, default_registry
 from app.schemas.fields import CutoutFrame, CutoutSetResponse, FieldSummary
 from app.services.fields import group_frames_into_epochs, parse_bands_query, parse_utc_query
+from app.services.fits_validator import DEFAULT_UPLOAD_MAX_BYTES, validate_fits_upload
 from app.services.jobs import JobStore, compute_params_hash, get_job_store
 from app.services.storage import StorageBackend, get_storage_backend
 from app.workers.celery_app import celery_app
@@ -24,6 +25,8 @@ from sphx_core.calib import load_frame
 from sphx_core.wcs import healpix9_nested
 
 _FRAME_UUID_NS = UUID("2e75b5fe-3a8a-4e4e-9f7e-2e5bc8d54a01")
+CUTOUT_TASK_NAME = "app.workers.tasks_fast.build_cutouts"
+UPLOAD_TASK_NAME = "app.workers.tasks_fast.validate_upload"
 
 
 def _extract_2d_image(fits_bytes: bytes) -> np.ndarray:
@@ -200,10 +203,112 @@ def execute_build_cutouts(
         raise
 
 
-@celery_app.task(name="app.workers.tasks_fast.build_cutouts", queue="fast")  # type: ignore[untyped-decorator]
+@celery_app.task(name=CUTOUT_TASK_NAME, queue="fast")  # type: ignore[untyped-decorator]
 def build_cutouts(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
     """Celery task wrapper building sky cutouts with persisted progress updates."""
     return execute_build_cutouts(
+        UUID(job_id),
+        params,
+        store=get_job_store(),
+        storage=get_storage_backend(),
+    )
+
+
+def execute_validate_upload(
+    job_id: UUID,
+    params: dict[str, Any],
+    *,
+    store: JobStore,
+    storage: StorageBackend,
+) -> dict[str, Any]:
+    """Validate staged FITS upload, persist valid files, and record provenance."""
+    store.update_job(job_id, status="running", progress=0.10, started_at=datetime.now(UTC))
+    staged_key = str(params["staged_key"])
+    try:
+        upload_id = UUID(str(params["upload_id"]))
+        fits_file_id = UUID(str(params["fits_file_id"]))
+        max_bytes = int(params.get("max_bytes", DEFAULT_UPLOAD_MAX_BYTES))
+        user_id = UUID(str(params["user_id"])) if params.get("user_id") else None
+        project_id = UUID(str(params["project_id"])) if params.get("project_id") else None
+
+        reference: dict[str, Any] | None = None
+        if params.get("reference_upload_id"):
+            ref_job = store.get_upload_job(UUID(str(params["reference_upload_id"])))
+            if ref_job and ref_job.outputs:
+                reference = ref_job.outputs.get("fits_file_metadata")
+        elif params.get("reference_field"):
+            reference = dict(params["reference_field"])
+
+        raw_bytes = storage.get_bytes(staged_key, verify_checksum=True)
+        store.update_job(job_id, progress=0.45)
+
+        res = validate_fits_upload(
+            raw_bytes,
+            reference=reference,
+            upload_id=upload_id,
+            fits_file_id=fits_file_id,
+            max_bytes=max_bytes,
+            user_epoch=params.get("user_epoch"),
+            storage=storage,
+            storage_key=str(params["final_key"]),
+        )
+        store.update_job(job_id, progress=0.80)
+
+        if res.compatibility.valid and res.storage_path and res.sha256 and res.fits_file_metadata:
+            store.register_fits_file(
+                fits_file_id=fits_file_id,
+                metadata=res.fits_file_metadata,
+                sha256_hex=res.sha256,
+                storage_path=res.storage_path,
+                uploader_id=user_id,
+                project_id=project_id,
+            )
+
+        store.record_provenance(
+            processing_job_id=job_id,
+            entity_table="fits_files" if res.compatibility.valid else "processing_jobs",
+            entity_id=str(fits_file_id if res.compatibility.valid else job_id),
+            inputs=[
+                {
+                    "filename": params.get("filename"),
+                    "payload_sha256": params.get("payload_sha256"),
+                    "reference_upload_id": params.get("reference_upload_id"),
+                    "reference_field": params.get("reference_field"),
+                }
+            ],
+            params=params,
+        )
+
+        outputs = {
+            "report": res.report.model_dump(mode="json"),
+            "fits_file_metadata": res.fits_file_metadata,
+            "storage_path": res.storage_path,
+            "sha256": res.sha256,
+        }
+        store.update_job(
+            job_id,
+            status="succeeded",
+            progress=1.0,
+            outputs=outputs,
+            finished_at=datetime.now(UTC),
+        )
+        return outputs
+    except Exception as exc:
+        store.update_job(
+            job_id,
+            status="failed",
+            error={"type": type(exc).__name__, "detail": str(exc)},
+            finished_at=datetime.now(UTC),
+        )
+        raise
+    finally:
+        storage.delete(staged_key)
+
+
+@celery_app.task(name=UPLOAD_TASK_NAME, queue="fast")  # type: ignore[untyped-decorator]
+def validate_upload(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Celery task wrapper validating an uploaded FITS file."""
+    return execute_validate_upload(
         UUID(job_id),
         params,
         store=get_job_store(),

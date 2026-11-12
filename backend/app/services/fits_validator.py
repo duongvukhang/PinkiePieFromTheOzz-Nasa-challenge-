@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,15 @@ if TYPE_CHECKING:
     from app.providers.base import FrameRef
 
 DEFAULT_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
+AUTHENTICATED_UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def get_upload_max_bytes(*, authenticated: bool) -> int:
+    """Return configured upload size cap in bytes for anonymous or authenticated callers."""
+    env_key = "SPHX_UPLOAD_MAX_BYTES_AUTH" if authenticated else "SPHX_UPLOAD_MAX_BYTES_ANON"
+    default = AUTHENTICATED_UPLOAD_MAX_BYTES if authenticated else DEFAULT_UPLOAD_MAX_BYTES
+    raw = os.environ.get(env_key)
+    return int(raw) if raw and raw.isdigit() and int(raw) > 0 else default
 
 
 @dataclass(frozen=True)
@@ -146,6 +156,7 @@ def validate_fits_upload(
         "array_id": inspection.array_id,
         "wavelength_min_um": inspection.wavelength_um[0] if inspection.wavelength_um else None,
         "wavelength_max_um": inspection.wavelength_um[1] if inspection.wavelength_um else None,
+        "wavelength_um": list(inspection.wavelength_um) if inspection.wavelength_um else None,
         "date_obs_utc": epoch.utc_iso if epoch else None,
         "mjd_tdb_mid": epoch.mjd_tdb_mid if epoch else None,
         "exptime_s": epoch.exptime_s if epoch else None,
@@ -155,6 +166,7 @@ def validate_fits_upload(
         "naxis2": wcs.naxis2 if wcs else None,
         "pixscale_arcsec": wcs.pixscale_arcsec if wcs else None,
         "rotation_deg": wcs.rotation_deg if wcs else None,
+        "parity": wcs.parity if wcs else None,
         "wcs_header": wcs.wcs_header if wcs else "",
         "footprint": wcs.footprint if wcs else None,
         "healpix9": wcs.healpix9 if wcs else None,
@@ -208,8 +220,10 @@ def validate_fits_set(
 
 
 __all__ = [
+    "AUTHENTICATED_UPLOAD_MAX_BYTES",
     "DEFAULT_UPLOAD_MAX_BYTES",
     "FitsUploadValidationResult",
+    "get_upload_max_bytes",
     "validate_fits_set",
     "validate_fits_upload",
 ]

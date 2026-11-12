@@ -1,4 +1,4 @@
-"""Sky field query, cutouts, FITS uploads, catalog overlays, releases, and examples."""
+"""Sky field query, cutouts, catalog overlays, releases, and examples."""
 
 from __future__ import annotations
 
@@ -6,10 +6,9 @@ import contextlib
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.deps import (
-    COMMON_501,
     APIProblemError,
     get_cache,
     get_gaia_provider,
@@ -19,7 +18,6 @@ from app.api.deps import (
     get_storage,
     get_store,
     get_wise_provider,
-    not_implemented,
 )
 from app.providers import Provider
 from app.schemas.common import DecDeg, JobStatus, ProblemDetail, RaDeg
@@ -31,8 +29,6 @@ from app.schemas.fields import (
     ExamplesResponse,
     FieldFramesResponse,
     ResolveResponse,
-    UploadCompatibilityReport,
-    UploadResponse,
 )
 from app.schemas.objects import CatalogOverlayResponse
 from app.services.cache import CacheBackend
@@ -279,22 +275,6 @@ async def get_cutout_fits(
             "Cache-Control": "public, max-age=2592000, immutable",
         },
     )
-
-
-@router.post(
-    "/uploads", status_code=status.HTTP_202_ACCEPTED, tags=["uploads"], responses=COMMON_501
-)
-async def upload_fits(file: Annotated[UploadFile, File()]) -> UploadResponse:
-    """Upload a FITS image for validation and WCS/epoch inspection."""
-    del file
-    not_implemented()
-
-
-@router.get("/uploads/{upload_id}/report", tags=["uploads"], responses=COMMON_501)
-async def get_upload_report(upload_id: UUID) -> UploadCompatibilityReport:
-    """Retrieve FITS validation and multi-epoch compatibility report."""
-    del upload_id
-    not_implemented()
 
 
 @router.get("/catalogs/overlay", tags=["catalogs"])

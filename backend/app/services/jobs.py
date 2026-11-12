@@ -18,12 +18,22 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.models import DataRelease, ProcessingJob, Provenance
+from app.db.models import (
+    DataRelease,
+    FitsFile,
+    ProcessingJob,
+    Project,
+    ProjectFile,
+    Provenance,
+    User,
+)
 from app.db.session import get_session_factory
 from app.schemas.common import JobStatus, JobStatusResponse
 from app.schemas.fields import DataReleaseRead
 
 TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
+_CUTOUT_TASK = "app.workers.tasks_fast.build_cutouts"
+_UPLOAD_TASK = "app.workers.tasks_fast.validate_upload"
 
 
 def compute_params_hash(task: str, params: Mapping[str, Any], release: str = "") -> bytes:
@@ -77,8 +87,37 @@ class JobStore(ABC):
         """Fetch job status by `job_id`."""
 
     @abstractmethod
+    def get_job_params(self, job_id: UUID) -> dict[str, Any] | None:
+        """Fetch raw job parameter dict by `job_id`."""
+
+    @abstractmethod
+    def get_job_by_param(self, task: str, key: str, value: str) -> JobStatusResponse | None:
+        """Fetch latest job matching `task` and stringified `params[key] == value`."""
+
     def get_cutout_job(self, cutout_id: UUID) -> JobStatusResponse | None:
         """Fetch cutout job associated with `cutout_id`."""
+        return self.get_job_by_param(_CUTOUT_TASK, "cutout_id", str(cutout_id))
+
+    def get_upload_job(self, upload_id: UUID) -> JobStatusResponse | None:
+        """Fetch upload validation job associated with `upload_id`."""
+        return self.get_job_by_param(_UPLOAD_TASK, "upload_id", str(upload_id))
+
+    @abstractmethod
+    def register_fits_file(
+        self,
+        *,
+        fits_file_id: UUID,
+        metadata: dict[str, Any],
+        sha256_hex: str,
+        storage_path: str,
+        uploader_id: UUID | None = None,
+        project_id: UUID | None = None,
+    ) -> None:
+        """Persist validated FITS file metadata and optional project link."""
+
+    @abstractmethod
+    def get_fits_file(self, fits_file_id: UUID) -> dict[str, Any] | None:
+        """Fetch persisted FITS file metadata by `fits_file_id`."""
 
     @abstractmethod
     def update_job(
@@ -126,7 +165,8 @@ class InMemoryJobStore(JobStore):
         self._cond = threading.Condition(self._lock)
         self._jobs: dict[UUID, dict[str, Any]] = {}
         self._by_hash: dict[bytes, UUID] = {}
-        self._by_cutout: dict[UUID, UUID] = {}
+        self._by_param: dict[tuple[str, str, str], UUID] = {}
+        self._fits_files: dict[UUID, dict[str, Any]] = {}
         self._provenance: list[dict[str, Any]] = []
         self._releases: dict[str, DataReleaseRead] = {}
 
@@ -172,8 +212,9 @@ class InMemoryJobStore(JobStore):
             }
             self._jobs[jid] = rec
             self._by_hash[params_hash] = jid
-            if "cutout_id" in params:
-                self._by_cutout[UUID(str(params["cutout_id"]))] = jid
+            for key in ("cutout_id", "upload_id"):
+                if key in params:
+                    self._by_param[(task, key, str(params[key]))] = jid
             self._cond.notify_all()
             return self._to_schema(rec), False
 
@@ -182,13 +223,41 @@ class InMemoryJobStore(JobStore):
             rec = self._jobs.get(job_id)
             return self._to_schema(rec) if rec is not None else None
 
-    def get_cutout_job(self, cutout_id: UUID) -> JobStatusResponse | None:
+    def get_job_params(self, job_id: UUID) -> dict[str, Any] | None:
         with self._lock:
-            jid = self._by_cutout.get(cutout_id)
-            if jid is None:
-                return None
-            rec = self._jobs.get(jid)
+            rec = self._jobs.get(job_id)
+            return dict(rec["params"]) if rec is not None else None
+
+    def get_job_by_param(self, task: str, key: str, value: str) -> JobStatusResponse | None:
+        with self._lock:
+            jid = self._by_param.get((task, key, value))
+            rec = self._jobs.get(jid) if jid is not None else None
             return self._to_schema(rec) if rec is not None else None
+
+    def register_fits_file(
+        self,
+        *,
+        fits_file_id: UUID,
+        metadata: dict[str, Any],
+        sha256_hex: str,
+        storage_path: str,
+        uploader_id: UUID | None = None,
+        project_id: UUID | None = None,
+    ) -> None:
+        with self._lock:
+            self._fits_files[fits_file_id] = {
+                **metadata,
+                "id": fits_file_id,
+                "sha256": sha256_hex,
+                "storage_path": storage_path,
+                "uploader_id": uploader_id,
+                "project_id": project_id,
+            }
+
+    def get_fits_file(self, fits_file_id: UUID) -> dict[str, Any] | None:
+        with self._lock:
+            rec = self._fits_files.get(fits_file_id)
+            return dict(rec) if rec is not None else None
 
     def update_job(
         self,
@@ -335,19 +404,112 @@ class SqlAlchemyJobStore(JobStore):
             job = session.get(ProcessingJob, job_id)
             return JobStatusResponse.model_validate(job) if job is not None else None
 
-    def get_cutout_job(self, cutout_id: UUID) -> JobStatusResponse | None:
-        cid = str(cutout_id)
+    def get_job_params(self, job_id: UUID) -> dict[str, Any] | None:
+        with self._session_factory() as session:
+            job = session.get(ProcessingJob, job_id)
+            return dict(job.params) if job is not None else None
+
+    def get_job_by_param(self, task: str, key: str, value: str) -> JobStatusResponse | None:
         with self._session_factory() as session:
             job = session.scalar(
                 select(ProcessingJob)
                 .where(
-                    ProcessingJob.task == "app.workers.tasks_fast.build_cutouts",
-                    ProcessingJob.params["cutout_id"].astext == cid,
+                    ProcessingJob.task == task,
+                    ProcessingJob.params[key].astext == value,
                 )
                 .order_by(ProcessingJob.created_at.desc())
                 .limit(1)
             )
             return JobStatusResponse.model_validate(job) if job is not None else None
+
+    def register_fits_file(
+        self,
+        *,
+        fits_file_id: UUID,
+        metadata: dict[str, Any],
+        sha256_hex: str,
+        storage_path: str,
+        uploader_id: UUID | None = None,
+        project_id: UUID | None = None,
+    ) -> None:
+        with self._session_factory() as session:
+            if session.get(FitsFile, fits_file_id) is None:
+                lam_min = metadata.get("wavelength_min_um")
+                lam_max = metadata.get("wavelength_max_um")
+                lam_ctr = (
+                    0.5 * (float(lam_min) + float(lam_max))
+                    if lam_min is not None and lam_max is not None
+                    else None
+                )
+                valid_user = uploader_id if uploader_id and session.get(User, uploader_id) else None
+                row = FitsFile(
+                    id=fits_file_id,
+                    origin=str(metadata.get("origin", "upload")),
+                    provider="upload",
+                    obs_id=str(fits_file_id),
+                    uploader_id=valid_user,
+                    storage_path=storage_path,
+                    sha256=bytes.fromhex(sha256_hex),
+                    size_bytes=int(metadata["size_bytes"]),
+                    array_id=metadata.get("array_id"),
+                    band_label=metadata.get("band_label"),
+                    wavelength_min_um=lam_min,
+                    wavelength_max_um=lam_max,
+                    wavelength_center_um=lam_ctr,
+                    date_obs_utc=metadata.get("date_obs_utc"),
+                    mjd_tdb_mid=metadata.get("mjd_tdb_mid"),
+                    exptime_s=metadata.get("exptime_s"),
+                    ra_center=metadata.get("ra_center"),
+                    dec_center=metadata.get("dec_center"),
+                    naxis1=metadata.get("naxis1"),
+                    naxis2=metadata.get("naxis2"),
+                    pixscale_arcsec=metadata.get("pixscale_arcsec"),
+                    rotation_deg=metadata.get("rotation_deg"),
+                    wcs_header=str(metadata.get("wcs_header", "")),
+                    footprint=metadata.get("footprint"),
+                    healpix9=metadata.get("healpix9"),
+                    header_summary=dict(metadata.get("header_summary") or {}),
+                    validation=metadata.get("validation"),
+                )
+                session.add(row)
+            if (
+                project_id is not None
+                and session.get(Project, project_id) is not None
+                and session.get(ProjectFile, (project_id, fits_file_id)) is None
+            ):
+                session.add(ProjectFile(project_id=project_id, fits_file_id=fits_file_id))
+            session.commit()
+
+    def get_fits_file(self, fits_file_id: UUID) -> dict[str, Any] | None:
+        with self._session_factory() as session:
+            row = session.get(FitsFile, fits_file_id)
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "origin": row.origin,
+                "storage_path": row.storage_path,
+                "sha256": row.sha256.hex(),
+                "size_bytes": row.size_bytes,
+                "band_label": row.band_label,
+                "array_id": row.array_id,
+                "wavelength_min_um": row.wavelength_min_um,
+                "wavelength_max_um": row.wavelength_max_um,
+                "date_obs_utc": row.date_obs_utc,
+                "mjd_tdb_mid": row.mjd_tdb_mid,
+                "exptime_s": row.exptime_s,
+                "ra_center": row.ra_center,
+                "dec_center": row.dec_center,
+                "naxis1": row.naxis1,
+                "naxis2": row.naxis2,
+                "pixscale_arcsec": row.pixscale_arcsec,
+                "rotation_deg": row.rotation_deg,
+                "wcs_header": row.wcs_header,
+                "footprint": row.footprint,
+                "healpix9": row.healpix9,
+                "header_summary": row.header_summary,
+                "validation": row.validation,
+            }
 
     def update_job(
         self,

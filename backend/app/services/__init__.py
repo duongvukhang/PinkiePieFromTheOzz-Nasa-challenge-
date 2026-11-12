@@ -7,8 +7,10 @@ from app.services.cache import (
     get_cache_backend,
 )
 from app.services.fits_validator import (
+    AUTHENTICATED_UPLOAD_MAX_BYTES,
     DEFAULT_UPLOAD_MAX_BYTES,
     FitsUploadValidationResult,
+    get_upload_max_bytes,
     validate_fits_set,
     validate_fits_upload,
 )
@@ -31,6 +33,7 @@ from app.services.storage import (
 )
 
 __all__ = [
+    "AUTHENTICATED_UPLOAD_MAX_BYTES",
     "CacheBackend",
     "ChecksumMismatchError",
     "DEFAULT_UPLOAD_MAX_BYTES",
@@ -50,6 +53,7 @@ __all__ = [
     "get_cache_backend",
     "get_job_store",
     "get_storage_backend",
+    "get_upload_max_bytes",
     "validate_fits_set",
     "validate_fits_upload",
 ]
