@@ -578,6 +578,7 @@ def _make_forced_det(
     status: str = "LOW_SNR_FORCED",
     is_upper_limit: bool = False,
 ) -> EpochDetection:
+    ambig = confidence < 0.90
     return EpochDetection(
         detection_id=det_id,
         epoch_index=epoch_index,
@@ -597,10 +598,10 @@ def _make_forced_det(
         flux_band_mjy={band_id or "ALL": (flux, flux_err)},
         snr=snr,
         real_bogus=real_bogus,
-        flags=flags,
+        flags=flags | (int(DetectionFlag.AMBIGUOUS_MATCH) if ambig else 0),
         band_id=band_id,
         confidence=confidence,
-        ambiguous_match=confidence < 0.90,
+        ambiguous_match=ambig,
         is_upper_limit=is_upper_limit,
         status=status,
     )
@@ -795,9 +796,10 @@ class _TrackProto:
     gaia_id: int | None = None
     catalog_id: str | None = None
     catalog_matches: list[CatalogMatch] = field(default_factory=list)
-    links_by_epoch: dict[int, tuple[EpochDetection, float, float, Literal["auto", "user"]]] = field(
-        default_factory=dict
-    )
+    links_by_epoch: dict[
+        int,
+        tuple[EpochDetection, float, float, float, tuple[float, float], Literal["auto", "user"]],
+    ] = field(default_factory=dict)
     non_detect_links: dict[int, EpochLink] = field(default_factory=dict)
     user_locks: dict[int, tuple[str, str | None]] = field(default_factory=dict)
     excluded_dets: set[tuple[int, str]] = field(default_factory=set)
@@ -818,7 +820,8 @@ def _flux_to_mag(flux: float) -> float:
 def _update_track_photometry(track: _TrackProto) -> None:
     track.flux_by_band.clear()
     mags_all: dict[str, list[float]] = {}
-    for det, _, _, _ in track.links_by_epoch.values():
+    dets = [det for det, *_ in track.links_by_epoch.values()]
+    for det in dets:
         if (
             det.flux is not None
             and det.flux > 0.0
@@ -830,6 +833,7 @@ def _update_track_photometry(track: _TrackProto) -> None:
     track.mag_by_band = {b: float(np.median(vals)) for b, vals in mags_all.items()}
     mads = [float(mad_std(vals)) for vals in mags_all.values() if len(vals) >= 3]
     track.sigma_var_mag = min(2.5, max([0.10, *mads]))
+    track.is_red_cool = bool(dets) and all(d.band_id in _IR_RED_BANDS for d in dets)
 
 
 def _predict_at_epoch(
@@ -926,7 +930,7 @@ def _pair_cost(
     # Morphology consistency penalty (stars vs extended/streak artifacts).
     c_morph = 0.0
     if track.links_by_epoch:
-        prev_dets = [d for d, _, _, _ in track.links_by_epoch.values()]
+        prev_dets = [d for d, *_ in track.links_by_epoch.values()]
         prev_ext = (
             sum(
                 bool(p.flags & int(DetectionFlag.EXTENDED | DetectionFlag.STREAK))
@@ -990,7 +994,10 @@ def _seed_tracks(
         cov5[3, 3] = sig_mu**2
         cov5[4, 4] = (0.05 if cat_match is None else 0.01) ** 2
         plx_as = (cat_match.parallax_mas or 0.0) * 1e-3 if cat_match else 0.0
-        th5 = np.array([0.0, 0.0, mu_est[0], mu_est[1], plx_as], dtype=np.float64)
+        pa_0, pd_0 = parallax_factors(v0.bary_au, d0.ra_deg, d0.dec_deg) if plx_as else (0.0, 0.0)
+        th5 = np.array(
+            [-plx_as * pa_0, -plx_as * pd_0, mu_est[0], mu_est[1], plx_as], dtype=np.float64
+        )
         tr = _TrackProto(
             object_id=f"obj_{idx_k}",
             label=_session_label(idx_k),
@@ -1004,7 +1011,7 @@ def _seed_tracks(
             catalog_matches=[cat_match] if cat_match else [],
         )
         for vv, dd in seed_dets:
-            tr.links_by_epoch[vv.epoch_index] = (dd, 0.0, 0.99, "auto")
+            tr.links_by_epoch[vv.epoch_index] = (dd, 0.0, 0.0, 0.99, (0.0, 0.0), "auto")
             claimed.add((vv.epoch_index, dd.detection_id))
         _update_track_photometry(tr)
         tracks.append(tr)
@@ -1060,7 +1067,12 @@ def _seed_tracks(
             best_dk = None
             best_r = lim
             for dk in vk.detections:
-                if dk.flags & int(HARD_BAD_MASK) or dk.ra_deg is None or dk.dec_deg is None:
+                if (
+                    (vk.epoch_index, dk.detection_id) in claimed
+                    or (dk.flags & int(HARD_BAD_MASK))
+                    or dk.ra_deg is None
+                    or dk.dec_deg is None
+                ):
                     continue
                 r = math.hypot(*sky_to_tangent_arcsec(dk.ra_deg, dk.dec_deg, d0.ra_deg, d0.dec_deg))
                 if float(r) < best_r:
@@ -1156,7 +1168,7 @@ def _refit_track_state(track: _TrackProto, fit_parallax: bool | None = None) -> 
     """Refit WLS 4/5-param trajectory on linked detections and update covariance (§G.1)."""
     meas: list[MotionMeasurement] = []
     det_refs: list[tuple[int, EpochDetection]] = []
-    for ei, (det, _, _, _) in sorted(track.links_by_epoch.items()):
+    for ei, (det, *_) in sorted(track.links_by_epoch.items()):
         if (
             det.ra_deg is None
             or det.dec_deg is None
@@ -1184,7 +1196,10 @@ def _refit_track_state(track: _TrackProto, fit_parallax: bool | None = None) -> 
         return
     try:
         mfit = fit_motion(meas, fit_parallax=fit_parallax)
-    except ValueError:
+    except ValueError as exc:
+        msg = f"REFIT_FAILED: {exc}"
+        if msg not in track.notes:
+            track.notes.append(msg)
         return
 
     # Propagate outlier flags into excluded set for next EM pass.
@@ -1278,8 +1293,8 @@ def _solve_epoch_hungarian(
         tr = tracks[k]
         p_xy, p_cov, _ = preds[k]
         snr_est = max(
-            [d.snr for d, _, _, _ in tr.links_by_epoch.values() if d.band_id == view.band_id]
-            or [d.snr for d, _, _, _ in tr.links_by_epoch.values()]
+            [d.snr for d, *_ in tr.links_by_epoch.values() if d.band_id == view.band_id]
+            or [d.snr for d, *_ in tr.links_by_epoch.values()]
             or [8.0]
         )
         p_d = float(np.clip(ndtr(snr_est - 5.0), 0.01, 0.99))
@@ -1317,7 +1332,7 @@ def _solve_epoch_hungarian(
             prob = 1.0 / (1.0 + math.exp(-min(dc_2nd, 30.0)))
             n_clean_anchors = sum(
                 1
-                for ei_p, (prev_d, _, _, _) in tracks[k].links_by_epoch.items()
+                for ei_p, (prev_d, *_) in tracks[k].links_by_epoch.items()
                 if ei_p != view.epoch_index and not (prev_d.flags & int(DetectionFlag.BLENDED))
             )
             if (det.flags & int(DetectionFlag.BLENDED)) and (dc_2nd < 6.0 or n_clean_anchors < 2):
@@ -1391,7 +1406,14 @@ def link_epochs(
                     if dec_by == "user":
                         d_flags |= int(DetectionFlag.USER_OVERRIDE)
                     det_linked = replace(det, confidence=conf, ambiguous_match=ambig, flags=d_flags)
-                    tr.links_by_epoch[v.epoch_index] = (det_linked, cost_v, conf, dec_by)
+                    tr.links_by_epoch[v.epoch_index] = (
+                        det_linked,
+                        cost_v,
+                        dc_2nd,
+                        conf,
+                        resid,
+                        dec_by,
+                    )
                     claimed_by_epoch[v.epoch_index].add(det.detection_id)
                     cur_sig[(tr.object_id, v.epoch_index)] = det.detection_id
                 else:
@@ -1425,7 +1447,14 @@ def link_epochs(
                                 v.band_id,
                                 confidence=conf,
                             )
-                            tr.links_by_epoch[v.epoch_index] = (det_forced, cost_v, conf, "auto")
+                            tr.links_by_epoch[v.epoch_index] = (
+                                det_forced,
+                                cost_v,
+                                dc_2nd,
+                                conf,
+                                resid,
+                                "auto",
+                            )
                     tr.non_detect_links[v.epoch_index] = EpochLink(
                         tr.object_id,
                         v.epoch_index,
@@ -1459,7 +1488,7 @@ def link_epochs(
                         theta=np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
                         cov=np.diag([0.09, 0.09, sigma_mu_0**2, sigma_mu_0**2, 0.01]),
                     )
-                    nt.links_by_epoch[v.epoch_index] = (d, 0.0, 1.0, "auto")
+                    nt.links_by_epoch[v.epoch_index] = (d, 0.0, 10.0, 1.0, (0.0, 0.0), "auto")
                     _update_track_photometry(nt)
                     tracks.append(nt)
 
@@ -1479,8 +1508,8 @@ def link_epochs(
             continue
         cur_set = {
             (ei, det.detection_id)
-            for ei, (det, _, _, _) in tr.links_by_epoch.items()
-            if not det.detection_id.endswith("_forced")
+            for ei, (det, *_) in tr.links_by_epoch.items()
+            if "_forced_" not in det.detection_id
         }
         if not cur_set:
             continue
@@ -1538,7 +1567,7 @@ def link_epochs(
         for v in ordered:
             ei = v.epoch_index
             if ei in tr.links_by_epoch:
-                det, c_v, c_p, dec_b = tr.links_by_epoch[ei]
+                det, c_v, dc_2nd, c_p, resid, dec_b = tr.links_by_epoch[ei]
                 consec_miss = 0
                 links_out.append(
                     EpochLink(
@@ -1546,13 +1575,13 @@ def link_epochs(
                         epoch_index=ei,
                         epoch_id=v.epoch_id,
                         detection_id=det.detection_id,
-                        status="AMBIGUOUS_MATCH"
-                        if det.ambiguous_match
-                        else ("LOW_SNR_FORCED" if det.status == "LOW_SNR_FORCED" else "LINKED"),
+                        status="LOW_SNR_FORCED"
+                        if det.status == "LOW_SNR_FORCED"
+                        else ("AMBIGUOUS_MATCH" if det.ambiguous_match else "LINKED"),
                         cost_ll=c_v,
-                        delta_c_2nd=0.0,
+                        delta_c_2nd=dc_2nd,
                         match_prob=c_p,
-                        residual_arcsec=(0.0, 0.0),
+                        residual_arcsec=resid,
                         decided_by=dec_b,
                     )
                 )

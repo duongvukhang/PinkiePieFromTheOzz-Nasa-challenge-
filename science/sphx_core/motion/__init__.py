@@ -1034,8 +1034,8 @@ def detect_streaks(
                 math.sqrt(max(float(cov_s[3, 3]), 1e-4)),
             )
             sig_ang_deg = math.degrees(math.sqrt(max(float(cov_s[4, 4]), 1e-6)))
-        except Exception:
-            sig_f, sig_l, sig_ang_deg = max(f_init * 0.2, 1.0), 0.5, 10.0
+        except np.linalg.LinAlgError:
+            continue
 
         snr_s = max(flux_f / max(sig_f, 1e-9), float(snr_mf[iy, ix]))
         if snr_s < min_snr or len_f < min_length_px:

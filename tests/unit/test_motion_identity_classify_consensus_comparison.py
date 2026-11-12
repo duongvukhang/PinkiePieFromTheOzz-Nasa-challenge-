@@ -19,6 +19,10 @@ from sphx_core.comparison import compare_epochs
 from sphx_core.consensus import evaluate_mover_consensus
 from sphx_core.extraction import extract_sources
 from sphx_core.identity import (
+    UserOverride,
+    _predict_at_epoch,
+    _seed_tracks,
+    _to_epoch_views,
     apply_manual_override,
     format_public_id,
     link_epochs,
@@ -26,11 +30,12 @@ from sphx_core.identity import (
 )
 from sphx_core.motion import (
     MotionMeasurement,
+    _expand_multi_hdu_frames,
     check_single_fits_motion,
     detect_streaks,
     fit_motion,
 )
-from sphx_core.wcs import tangent_arcsec_to_sky
+from sphx_core.wcs import sky_to_tangent_arcsec, tangent_arcsec_to_sky
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[2])
 if _REPO_ROOT not in sys.path:
@@ -227,6 +232,35 @@ def test_identity_overrides_merge_lost_out_of_field_and_persistence() -> None:
     m_rej = next(t for t in over_rej if t.object_id == mover_tr.object_id)
     assert all(d.epoch_index != 1 for d in m_rej.detections)
 
+    alt_det = replace(
+        next(d for d in mover_tr.detections if d.epoch_index == 1),
+        detection_id="manual_reassign_e1",
+    )
+    over_reas = apply_manual_override(
+        over_rej,
+        object_id=mover_tr.object_id,
+        epoch_index=1,
+        action="reassign",
+        new_detection=alt_det,
+        reason="manual re-link",
+    )
+    m_reas = next(t for t in over_reas if t.object_id == mover_tr.object_id)
+    assert any(
+        d.detection_id == "manual_reassign_e1" and d.epoch_index == 1 for d in m_reas.detections
+    )
+    assert any(
+        lk.epoch_index == 1
+        and lk.detection_id == "manual_reassign_e1"
+        and lk.status == "LINKED"
+        and lk.decided_by == "user"
+        for lk in m_reas.links
+    )
+    assert m_reas.user_locked_pairs[1] == ("reassign", "manual_reassign_e1")
+    with pytest.raises(ValueError, match="new_detection"):
+        apply_manual_override(
+            over_rej, object_id=mover_tr.object_id, epoch_index=1, action="reassign"
+        )
+
     # Test merge_tracks
     if len(tracks) >= 2:
         merged = merge_tracks(tracks, tracks[0].object_id, tracks[1].object_id)
@@ -373,3 +407,165 @@ def test_classify_asteroid_artifact_candidate_consensus_and_compare() -> None:
         ).status
         == "moved"
     )
+
+
+def test_seed_high_parallax_predicts_t0_detection() -> None:
+    """High-parallax catalogue seed must predict zero tangent offset at its t0 detection."""
+    ra0, dec0 = 210.0, -15.0
+    mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
+    src = InjectedSource("hi_plx", ra0, dec0, mjd0, parallax_mas=750.0, base_flux=250.0)
+    cut = generate_synthetic_cutout(
+        seed=960, sources=[src], ra_center_deg=ra0, dec_center_deg=dec0, mjd_tdb_mid=mjd0
+    )
+    cat = [
+        {
+            "catalog": "gaiadr3",
+            "source_id": "9990001",
+            "gaia_id": 9990001,
+            "ra_deg": ra0,
+            "dec_deg": dec0,
+            "ref_epoch_mjd": mjd0,
+            "pmra_mas_yr": 1500.0,
+            "pmdec_mas_yr": -800.0,
+            "parallax_mas": 750.0,
+            "mags": {"G": 14.0},
+        }
+    ]
+    views = _to_epoch_views([extract_sources(cut.fits_bytes)])
+    tracks = _seed_tracks(views, cat, high_pm_mode=False, sigma_mu_0=2.0, max_pm_arcsec_yr=25.0)
+    assert len(tracks) == 1
+    d0 = views[0].detections[0]
+    pred_xy, _, ra_p, dec_p = _predict_at_epoch(tracks[0], views[0])
+    assert np.allclose(pred_xy, [0.0, 0.0], atol=1e-9)
+    assert (
+        math.hypot(*sky_to_tangent_arcsec(ra_p, dec_p, float(d0.ra_deg), float(d0.dec_deg))) < 1e-9
+    )
+
+
+def test_multiband_red_cool_band_uncovered_no_lost() -> None:
+    """B5/B6-only faint red mover marks B1-B3 epochs BAND_UNCOVERED without LOST flag."""
+    ra0, dec0 = 133.8, -7.24
+    mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
+    bands = ["B6", "B2", "B2", "B6", "B2", "B6"]
+    red_mover = InjectedSource(
+        "red_mover",
+        ra0,
+        dec0,
+        mjd0,
+        pmra_arcsec_yr=-3.5,
+        pmdec_arcsec_yr=0.8,
+        flux_fn=lambda _m, b: 180.0 if b == "B6" else 0.0,
+        kind="mover",
+    )
+    anchor = InjectedSource("anc", ra0 + 0.02, dec0 - 0.02, mjd0, base_flux=250.0, kind="static")
+    frames = [
+        generate_synthetic_cutout(
+            seed=970 + k,
+            sources=[anchor, red_mover],
+            ra_center_deg=ra0,
+            dec_center_deg=dec0,
+            mjd_tdb_mid=mjd0 + 150.0 * k,
+            band_id=band,
+        )
+        for k, band in enumerate(bands)
+    ]
+    tracks = link_epochs(
+        [extract_sources(f.fits_bytes) for f in frames],
+        frames=[f.fits_bytes for f in frames],
+        catalog_sources=[],
+        high_pm_mode=True,
+    )
+    mover_tr = max(tracks, key=lambda t: t.state.chi2_mu)
+    assert len(mover_tr.detections) == 3
+    by_ep = {lk.epoch_index: lk for lk in mover_tr.links}
+    assert all(by_ep[e].status == "BAND_UNCOVERED" for e in (1, 2, 4))
+    assert (mover_tr.flags & int(DetectionFlag.LOST)) == 0
+    assert mover_tr.status == "active"
+
+
+def test_link_epochs_overrides_and_low_snr_forced() -> None:
+    """Verify link_epochs(overrides=...) and LOW_SNR_FORCED via forced photometry."""
+    ra0, dec0 = 52.0, 14.0
+    mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
+    epochs = [mjd0 + 180.0 * k for k in range(3)]
+    bright = InjectedSource(
+        "bright", ra0 - 0.015, dec0 + 0.015, mjd0, base_flux=250.0, kind="static"
+    )
+    fader = InjectedSource(
+        "fader",
+        ra0 + 0.015,
+        dec0 - 0.015,
+        mjd0,
+        flux_fn=lambda m, _b: 11.0 if abs(m - epochs[1]) < 1.0 else 220.0,
+        kind="variable",
+    )
+    seq = generate_synthetic_sequence(
+        seed=985,
+        sources=[bright, fader],
+        ra_center_deg=ra0,
+        dec_center_deg=dec0,
+        epochs_mjd=epochs,
+        band_id="B6",
+    )
+    exts = [extract_sources(f.fits_bytes) for f in seq]
+    raw_frames = [f.fits_bytes for f in seq]
+    tracks = link_epochs(exts, frames=raw_frames, catalog_sources=[])
+    fader_tr = min(
+        (t for t in tracks if len(t.detections) == 3),
+        key=lambda t: min(d.snr for d in t.detections),
+    )
+    lk_e1 = next(lk for lk in fader_tr.links if lk.epoch_index == 1)
+    det_e1 = next(d for d in fader_tr.detections if d.epoch_index == 1)
+    assert lk_e1.status == "LOW_SNR_FORCED"
+    assert det_e1.status == "LOW_SNR_FORCED" and "_forced_" in det_e1.detection_id
+    if det_e1.ambiguous_match:
+        assert (det_e1.flags & int(DetectionFlag.AMBIGUOUS_MATCH)) != 0
+
+    bright_tr = max(tracks, key=lambda t: min(d.snr for d in t.detections))
+    det_idx_e1 = next(d.source_index for d in bright_tr.detections if d.epoch_index == 1)
+    rej_tracks = link_epochs(
+        exts,
+        frames=raw_frames,
+        catalog_sources=[],
+        overrides=[UserOverride(bright_tr.object_id, 1, "reject", reason="masked")],
+    )
+    rej_tr = next(t for t in rej_tracks if t.object_id == bright_tr.object_id)
+    assert all(d.epoch_index != 1 for d in rej_tr.detections)
+    assert rej_tr.user_locked_pairs[1][0] == "reject"
+
+    acc_tracks = link_epochs(
+        exts,
+        frames=raw_frames,
+        catalog_sources=[],
+        overrides=[
+            UserOverride(bright_tr.object_id, 1, "accept", detection_index=det_idx_e1, reason="ok")
+        ],
+    )
+    acc_tr = next(t for t in acc_tracks if t.object_id == bright_tr.object_id)
+    acc_lk = next(lk for lk in acc_tr.links if lk.epoch_index == 1)
+    acc_det = next(d for d in acc_tr.detections if d.epoch_index == 1)
+    assert acc_lk.decided_by == "user" and acc_lk.match_prob > 0.9999 and acc_lk.delta_c_2nd == 12.0
+    assert (acc_det.flags & int(DetectionFlag.USER_OVERRIDE)) != 0
+
+
+def test_expand_multi_hdu_frames_multiple_2d_science_hdus() -> None:
+    """_expand_multi_hdu_frames expands multi-extension 2D science HDUs with distinct epochs."""
+    ny, nx = 32, 32
+    t0 = Time("2025-08-10T00:00:00", scale="tdb").mjd
+    w = make_tan_wcs(nx, ny, 120.0, 25.0, pixscale_arcsec=6.2)
+    prim = fits.PrimaryHDU()
+    prim.header.update({"EXPTIME": 120.0, "TIMESYS": "UTC", "BAND": "B2"})
+    hdus: list[fits.PrimaryHDU | fits.ImageHDU] = [prim]
+    for k in range(3):
+        hdr = w.to_header(relax=True)
+        hdr["DATE-OBS"] = str(Time(t0 + k * 0.25, format="mjd", scale="tdb").utc.isot)
+        hdus.append(
+            fits.ImageHDU(np.full((ny, nx), 5.0 + k, dtype=np.float32), header=hdr, name=f"SCI_{k}")
+        )
+    hdus.append(fits.ImageHDU(np.ones((ny, nx), dtype=np.float32), name="VARIANCE"))
+
+    frames = _expand_multi_hdu_frames(fits.HDUList(hdus))
+    assert len(frames) == 3
+    assert all(fr.shape == (ny, nx) and fr.epoch.exptime_s == 120.0 for fr in frames)
+    mjds = [fr.epoch.mjd_tdb_mid for fr in frames]
+    assert mjds[0] < mjds[1] < mjds[2]
