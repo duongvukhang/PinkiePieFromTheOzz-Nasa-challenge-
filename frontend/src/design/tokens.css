@@ -1,0 +1,116 @@
+@layer reset, base, theme, components, utilities;
+
+@layer theme {
+  :root {
+    color-scheme: light;
+
+    /* Editorial Light Palette (Anthropic warmth + New Yorker clarity) */
+    --paper-0: #faf9f5;
+    --paper-1: #f3f0e8;
+    --paper-mat: #eae6dc;
+    --ink-0: #141413;
+    --ink-1: #3d3c38;
+    --ink-2: #66635c;
+    --rule: #ddd8cc;
+    --rule-strong: #141413;
+    --accent-terracotta: #b84318;
+    --accent-ochre: #9a6b16;
+    --link-slate: #1e4e79;
+    --error-light: #b3261e;
+    --error-bg-light: #fceeed;
+    --valid-light: #1b6e35;
+
+    /* Observatory Dark Palette */
+    --sky-0: #07090d;
+    --sky-1: #0e1218;
+    --sky-2: #171d26;
+    --sky-rule: #252e3b;
+    --sky-text: #edebe4;
+    --sky-muted: #8f98a6;
+    --sky-amber: #e59838;
+
+    /* Semantic Surface & Ink Tokens */
+    --bg: var(--paper-0);
+    --surface: var(--paper-1);
+    --mat: var(--paper-mat);
+    --fg: var(--ink-0);
+    --fg-muted: var(--ink-1);
+    --fg-subtle: var(--ink-2);
+    --border: var(--rule);
+    --border-strong: var(--rule-strong);
+    --accent: var(--accent-terracotta);
+    --accent-ink: #faf9f5;
+    --link: var(--link-slate);
+    --focus: var(--link-slate);
+
+    /* Scientific Overlay Palette (Okabe-Ito, color-blind safe) */
+    --oi-orange: #e69f00;
+    --oi-sky: #56b4e9;
+    --oi-green: #009e73;
+    --oi-yellow: #f0e442;
+    --oi-blue: #0072b2;
+    --oi-vermilion: #d55e00;
+    --oi-pink: #cc79a7;
+
+    /* Typography */
+    --font-serif: "Newsreader", "Source Serif 4", Georgia, "Times New Roman", serif;
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+    /* 1.25 Modular Type Scale */
+    --text-xs: 0.75rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.375rem;
+    --text-2xl: 1.75rem;
+    --text-3xl: 2.375rem;
+    --text-4xl: clamp(2.125rem, 3.6vw, 3.125rem);
+
+    /* 8-px Spacing Scale */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --space-12: 48px;
+    --space-16: 64px;
+    --space-24: 96px;
+    --space-32: 128px;
+
+    /* Radii & Layout */
+    --radius-xs: 2px;
+    --radius-sm: 4px;
+    --radius-pill: 9999px;
+    --header-h: 72px;
+    --sidebar-w: 272px;
+    --container-max: 1240px;
+    --measure: 66ch;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+    color: var(--fg);
+    background-color: var(--bg);
+    accent-color: var(--accent);
+  }
+
+  [data-theme="dark"] {
+    color-scheme: only dark;
+    --bg: var(--sky-0);
+    --surface: var(--sky-1);
+    --mat: var(--sky-2);
+    --fg: var(--sky-text);
+    --fg-muted: #c8cdd6;
+    --fg-subtle: var(--sky-muted);
+    --border: var(--sky-rule);
+    --border-strong: var(--sky-text);
+    --accent: var(--sky-amber);
+    --accent-ink: #07090d;
+    --link: #8ec5f8;
+    --focus: var(--sky-amber);
+
+    color: var(--fg);
+    background-color: var(--bg);
+    accent-color: var(--accent);
+  }
+}
