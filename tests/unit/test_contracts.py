@@ -1,11 +1,10 @@
-"""Unit tests for MVP DB metadata, flag bitmasks, offline DDL, schemas, and 501 stubs."""
+"""Unit tests for MVP DB metadata, flag bitmasks, offline DDL, schemas, and OpenAPI coverage."""
 
 from __future__ import annotations
 
 import io
 import uuid
 from contextlib import redirect_stdout
-from typing import Any
 
 from alembic import command
 from alembic.config import Config
@@ -162,29 +161,18 @@ IMPLEMENTED_OPS: set[tuple[str, str]] = {
     ("GET", "/api/v1/examples"),
     ("GET", "/api/v1/jobs/{job_id}"),
     ("GET", "/api/v1/jobs/{job_id}/events"),
+    ("GET", "/api/v1/oembed"),
+    ("GET", "/api/v1/render.gif"),
+    ("GET", "/embed"),
 }
 
 
-def test_stub_endpoints_return_501() -> None:
-    """Exercise every unimplemented MVP endpoint stub and assert 501 RFC 9457 problem+json."""
-    client = TestClient(app)
-    cases: list[tuple[str, str, dict[str, Any]]] = [
-        ("GET", "/api/v1/oembed?url=https://example.org/v?ra=1", {}),
-        ("GET", "/api/v1/render.gif?ra=133.795&dec=-7.245", {}),
-        ("GET", "/embed?ra=133.795&dec=-7.245", {}),
-    ]
-    for method, url, kwargs in cases:
-        res = client.request(method, url, **kwargs)
-        assert res.status_code == 501, f"{method} {url} -> {res.status_code}: {res.text}"
-        assert res.headers["content-type"].startswith("application/problem+json")
-        body = res.json()
-        assert body["status"] == 501
-
+def test_all_mvp_contract_ops_implemented() -> None:
+    """Verify every OpenAPI MVP route is accounted for with zero remaining 501 stubs."""
     spec_ops = {
         (method.upper(), path)
         for path, ops in app.openapi()["paths"].items()
         if path != "/health"
         for method in ops
     }
-    assert len(cases) + len(IMPLEMENTED_OPS) == len(spec_ops)
-    assert IMPLEMENTED_OPS.issubset(spec_ops)
+    assert spec_ops == IMPLEMENTED_OPS

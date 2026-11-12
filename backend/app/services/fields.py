@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 from collections.abc import Callable, Sequence
@@ -10,7 +11,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import astropy.units as u
+import numpy as np
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 from astropy.time import Time
 
 from app.providers.base import CatalogSource, FrameRef, Provider, ProviderQueryError
@@ -26,6 +29,7 @@ from app.schemas.fields import (
 from app.schemas.objects import CatalogOverlayResponse, CatalogOverlaySource
 from app.services.cache import CacheBackend
 from app.services.jobs import JobStore
+from sphx_core.calib import load_frame
 from sphx_core.timeutil import parse_user_epoch
 from sphx_core.wcs import healpix9_nested
 
@@ -305,3 +309,34 @@ def list_examples_service(*, reference_path: Path | None = None) -> ExamplesResp
             )
         )
     return ExamplesResponse(targets=items)
+
+
+def extract_2d_image(fits_bytes: bytes) -> np.ndarray:
+    """Extract primary 2D float32 science array via `load_frame` with FITS fallback."""
+    try:
+        return np.asarray(load_frame(fits_bytes).image, dtype=np.float32)
+    except Exception:
+        with fits.open(io.BytesIO(fits_bytes), memmap=False) as hdul:
+            for hdu in hdul:
+                if getattr(hdu, "data", None) is not None and hdu.data.ndim >= 2:
+                    arr = np.asarray(hdu.data, dtype=np.float32)
+                    return arr[0] if arr.ndim > 2 else arr
+    raise ValueError("FITS payload contains no 2D image array")
+
+
+def asinh_stretch_u8(
+    arr: np.ndarray, *, vmin: float | None = None, vmax: float | None = None
+) -> tuple[np.ndarray, float, float]:
+    """Stretch a 2D array with asinh scaling into uint8 `[0, 255]` and return `(u8, vmin, vmax)`."""
+    arr32 = np.asarray(arr, dtype=np.float32)
+    if vmin is None or vmax is None:
+        finite = arr32[np.isfinite(arr32)]
+        if finite.size == 0:
+            return np.zeros(arr32.shape, dtype=np.uint8), 0.0, 1.0
+        p_lo, p_hi = (float(x) for x in np.percentile(finite, [1.0, 99.5]))
+        vmin = p_lo if vmin is None else vmin
+        vmax = p_hi if vmax is None else vmax
+    span = max(vmax - vmin, 1e-12)
+    scaled = np.clip((np.nan_to_num(arr32, nan=vmin) - vmin) / span, 0.0, 1.0)
+    norm = np.arcsinh(10.0 * scaled) / np.arcsinh(10.0)
+    return np.clip(np.round(norm * 255.0), 0, 255).astype(np.uint8), float(vmin), float(vmax)

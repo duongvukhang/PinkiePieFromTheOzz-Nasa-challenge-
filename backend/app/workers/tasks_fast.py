@@ -10,37 +10,28 @@ from uuid import UUID, uuid5
 import astropy.units as u
 import numpy as np
 from astropy.coordinates import SkyCoord
-from astropy.io import fits
 from astropy.time import Time
 from PIL import Image
 
 from app.providers.base import Provider, StoredFrame, default_registry
 from app.schemas.fields import CutoutFrame, CutoutSetResponse, FieldSummary
-from app.services.fields import group_frames_into_epochs, parse_bands_query, parse_utc_query
+from app.services.fields import (
+    asinh_stretch_u8,
+    extract_2d_image,
+    group_frames_into_epochs,
+    parse_bands_query,
+    parse_utc_query,
+)
 from app.services.fits_validator import DEFAULT_UPLOAD_MAX_BYTES, validate_fits_upload
 from app.services.jobs import JobStore, compute_params_hash, get_job_store
 from app.services.storage import StorageBackend, get_storage_backend
 from app.workers.celery_app import celery_app
-from sphx_core.calib import load_frame
 from sphx_core.wcs import healpix9_nested
 
 _FRAME_UUID_NS = UUID("2e75b5fe-3a8a-4e4e-9f7e-2e5bc8d54a01")
 CUTOUT_TASK_NAME = "app.workers.tasks_fast.build_cutouts"
 UPLOAD_TASK_NAME = "app.workers.tasks_fast.validate_upload"
 EXPORT_TASK_NAME = "app.workers.tasks_fast.export_project"
-
-
-def _extract_2d_image(fits_bytes: bytes) -> np.ndarray:
-    """Extract primary 2D science array via `sphx_core.calib.load_frame` with FITS fallback."""
-    try:
-        return np.asarray(load_frame(fits_bytes).image, dtype=np.float32)
-    except Exception:
-        with fits.open(io.BytesIO(fits_bytes), memmap=False) as hdul:
-            for hdu in hdul:
-                if getattr(hdu, "data", None) is not None and hdu.data.ndim >= 2:
-                    arr = np.asarray(hdu.data, dtype=np.float32)
-                    return arr[0] if arr.ndim > 2 else arr
-    raise ValueError("FITS payload contains no 2D image array")
 
 
 def render_array_products(
@@ -50,17 +41,7 @@ def render_array_products(
 ) -> dict[str, Any]:
     """Render 8-bit asinh-stretched WebP display tile and little-endian float32 science tile."""
     arr32 = np.asarray(arr, dtype=np.float32)
-    finite = arr32[np.isfinite(arr32)]
-    if finite.size == 0:
-        vmin, vmax = 0.0, 1.0
-        norm = np.zeros_like(arr32, dtype=np.float32)
-    else:
-        vmin, vmax = (float(x) for x in np.percentile(finite, [1.0, 99.5]))
-        span = max(vmax - vmin, 1e-12)
-        scaled = np.clip((np.nan_to_num(arr32, nan=vmin) - vmin) / span, 0.0, 1.0)
-        norm = np.arcsinh(10.0 * scaled) / np.arcsinh(10.0)
-
-    u8 = np.clip(np.round(norm * 255.0), 0, 255).astype(np.uint8)
+    u8, vmin, vmax = asinh_stretch_u8(arr32)
     webp_buf = io.BytesIO()
     Image.fromarray(u8, mode="L").save(webp_buf, format="WEBP", quality=90)
     disp_obj = storage.put_bytes(
@@ -90,7 +71,7 @@ def render_cutout_products(
     prefix: str,
 ) -> dict[str, Any]:
     """Render 8-bit asinh-stretched WebP display tile and little-endian float32 science tile."""
-    return render_array_products(_extract_2d_image(fits_bytes), storage, prefix)
+    return render_array_products(extract_2d_image(fits_bytes), storage, prefix)
 
 
 def _build_cutout_frame(
