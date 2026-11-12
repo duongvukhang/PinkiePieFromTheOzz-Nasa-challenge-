@@ -840,3 +840,120 @@ def test_classify_catwise_gate_mover_renorm_indices_disagreements_and_cap() -> N
     assert cls_px.label == "candidate_planet_x"
     assert "unverified" in cls_px.notes_text.lower()
     assert "confirmed" not in cls_px.notes_text.lower()
+
+
+def test_refit_pm_outlier_and_hungarian_masked_pixel() -> None:
+    """Verify _refit_track_state PM_OUTLIER emission and _solve_epoch_hungarian MASKED link."""
+    from sphx_core.calib import DetectionFlag
+    from sphx_core.identity import (
+        EpochDetection,
+        _refit_track_state,
+        _solve_epoch_hungarian,
+        _TrackProto,
+    )
+    from sphx_core.motion import as_frame_data
+
+    ra0, dec0 = 120.0, 15.0
+    mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
+    # 1) _refit_track_state removes PM outlier from links_by_epoch and emits PM_OUTLIER EpochLink
+    tr = _TrackProto(
+        object_id="obj_out",
+        label="A",
+        t0_mjd=mjd0,
+        ra0_deg=ra0,
+        dec0_deg=dec0,
+        theta=np.array([0.0, 0.0, 2.0, -1.0, 0.0]),
+        cov=np.diag([0.01, 0.01, 0.1, 0.1, 0.01]),
+    )
+    for k in range(5):
+        dt = k * 0.5
+        dx = 2.0 * dt + (4.0 if k == 2 else 0.0)
+        dy = -1.0 * dt - (3.5 if k == 2 else 0.0)
+        ra_k, dec_k = tangent_arcsec_to_sky(dx, dy, ra0, dec0)
+        det = EpochDetection(
+            detection_id=f"e{k}_s0",
+            epoch_index=k,
+            epoch_id=f"epoch_{k}",
+            mjd_tdb=mjd0 + k * 182.625,
+            detector_id=1,
+            x_px=30.0,
+            y_px=30.0,
+            ra_deg=float(ra_k),
+            dec_deg=float(dec_k),
+            cov_sky_arcsec2=(0.0025, 0.0025, 0.0),
+            cov_px=(0.01, 0.01, 0.0),
+            sig_ra_arcsec=0.05,
+            sig_dec_arcsec=0.05,
+            flux=200.0,
+            flux_err=5.0,
+            flux_band_mjy={"B2": (200.0, 5.0)},
+            snr=40.0,
+            real_bogus=0.95,
+            flags=0,
+            band_id="B2",
+        )
+        tr.links_by_epoch[k] = (det, -3.0, 8.0, 0.99, (0.0, 0.0), "auto")
+
+    _refit_track_state(tr, fit_parallax=False)
+    assert 2 not in tr.links_by_epoch
+    assert (2, "e2_s0") in tr.excluded_dets
+    assert tr.non_detect_links[2].status == "PM_OUTLIER"
+    assert tr.non_detect_links[2].detection_id == "e2_s0"
+    assert len(tr.links_by_epoch) == 4
+
+    # 2) _solve_epoch_hungarian emits MASKED with zero miss penalty when pixel has HARD_BAD_MASK
+    cut0 = generate_synthetic_cutout(
+        seed=991,
+        sources=[InjectedSource("s", ra0, dec0, mjd0, base_flux=250.0)],
+        ra_center_deg=ra0,
+        dec_center_deg=dec0,
+        mjd_tdb_mid=mjd0,
+        band_id="B2",
+    )
+    cut1 = generate_synthetic_cutout(
+        seed=992,
+        sources=[],
+        ra_center_deg=ra0,
+        dec_center_deg=dec0,
+        mjd_tdb_mid=mjd0 + 180.0,
+        band_id="B2",
+    )
+    fr0 = as_frame_data(cut0.fits_bytes)
+    fr1 = as_frame_data(cut1.fits_bytes)
+    x_pred, y_pred = (float(v) for v in fr1.wcs.world_to_pixel_values(ra0, dec0))
+    flags1 = np.zeros(fr1.shape, dtype=np.int32) if fr1.flags is None else fr1.flags.copy()
+    flags1[int(round(y_pred)), int(round(x_pred))] |= int(DetectionFlag.BAD_PIX)
+    fr1 = replace(fr1, flags=flags1)
+
+    views = _to_epoch_views([extract_sources(fr0), extract_sources(fr1)], frames=[fr0, fr1])
+    tr_m = _TrackProto(
+        object_id="obj_mask",
+        label="A",
+        t0_mjd=mjd0,
+        ra0_deg=ra0,
+        dec0_deg=dec0,
+        theta=np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        cov=np.diag([0.01, 0.01, 0.01, 0.01, 0.001]),
+    )
+    res = _solve_epoch_hungarian([tr_m], views[1])
+    assert res == {}
+    lk_mask = tr_m.non_detect_links[1]
+    assert lk_mask.status == "MASKED" and lk_mask.cost_ll == 0.0 and lk_mask.detection_id is None
+
+    # End-to-end link_epochs also preserves MASKED without flagging LOST
+    cut2 = generate_synthetic_cutout(
+        seed=993,
+        sources=[InjectedSource("s", ra0, dec0, mjd0 + 360.0, base_flux=250.0)],
+        ra_center_deg=ra0,
+        dec_center_deg=dec0,
+        mjd_tdb_mid=mjd0 + 360.0,
+        band_id="B2",
+    )
+    fr2 = as_frame_data(cut2.fits_bytes)
+    tracks = link_epochs([fr0, fr1, fr2])
+    assert len(tracks) == 1
+    assert any(
+        lk.epoch_index == 1 and lk.status == "MASKED" and lk.cost_ll == 0.0
+        for lk in tracks[0].links
+    )
+    assert (tracks[0].flags & int(DetectionFlag.LOST)) == 0

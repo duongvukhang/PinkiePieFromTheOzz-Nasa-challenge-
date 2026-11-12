@@ -510,7 +510,7 @@ def fit_motion(
     match_radius_arcsec: float = 15.0,
     outlier_sigma: float = 4.0,
     min_parallax_dt_yr: float = 0.8,
-    min_parallax_span_au: float = 0.85,
+    min_parallax_span_au: float = 1.0,
     prior_parallax_mas: float | None = None,
 ) -> MotionFitResult:
     """Fit 2/4/5-parameter astrometric motion in ICRS tangent plane (§C.3-C.4, §B.8).

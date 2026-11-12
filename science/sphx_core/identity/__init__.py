@@ -1212,11 +1212,25 @@ def _refit_track_state(track: _TrackProto, fit_parallax: bool | None = None) -> 
             track.notes.append(msg)
         return
 
-    # Propagate outlier flags into excluded set for next EM pass.
+    # Propagate outlier flags into excluded set for next EM pass and emit PM_OUTLIER link.
     for out_idx in mfit.outlier_indices:
         if 0 <= out_idx < len(det_refs):
             ei_bad, det_bad = det_refs[out_idx]
             track.excluded_dets.add((ei_bad, det_bad.detection_id))
+            if (removed := track.links_by_epoch.pop(ei_bad, None)) is not None:
+                _, c_v, dc_2nd, c_p, resid, dec_b = removed
+                track.non_detect_links[ei_bad] = EpochLink(
+                    track.object_id,
+                    ei_bad,
+                    det_bad.epoch_id,
+                    det_bad.detection_id,
+                    "PM_OUTLIER",
+                    c_v,
+                    dc_2nd,
+                    c_p,
+                    resid,
+                    dec_b,
+                )
 
     xi0, eta0 = sky_to_tangent_arcsec(
         mfit.ra_ref_deg, mfit.dec_ref_deg, mfit.ra_ref_deg, mfit.dec_ref_deg
@@ -1264,26 +1278,24 @@ def _solve_epoch_hungarian(
         x_p, y_p = (float(v) for v in view.wcs.world_to_pixel_values(ra_p, dec_p))
         in_fov = _in_footprint(x_p, y_p, view.shape)
         band_ok = not (tr.is_red_cool and (view.band_id or "") in _OPTICAL_BANDS)
-        active = in_fov and band_ok
-        if not in_fov:
+        masked = False
+        if in_fov and view.frame is not None and view.frame.flags is not None:
+            ny, nx = view.shape
+            ix, iy = int(np.clip(round(x_p), 0, nx - 1)), int(np.clip(round(y_p), 0, ny - 1))
+            masked = bool(int(view.frame.flags[iy, ix]) & HARD_BAD_MASK)
+        active = in_fov and band_ok and not masked
+        nd_status: Literal["OUT_OF_FIELD", "BAND_UNCOVERED", "MASKED"] | None = (
+            "OUT_OF_FIELD"
+            if not in_fov
+            else ("BAND_UNCOVERED" if not band_ok else ("MASKED" if masked else None))
+        )
+        if nd_status is not None:
             tr.non_detect_links[view.epoch_index] = EpochLink(
                 tr.object_id,
                 view.epoch_index,
                 view.epoch_id,
                 None,
-                "OUT_OF_FIELD",
-                0.0,
-                10.0,
-                1.0,
-                (0.0, 0.0),
-            )
-        elif not band_ok:
-            tr.non_detect_links[view.epoch_index] = EpochLink(
-                tr.object_id,
-                view.epoch_index,
-                view.epoch_id,
-                None,
-                "BAND_UNCOVERED",
+                nd_status,
                 0.0,
                 10.0,
                 1.0,
@@ -1430,7 +1442,9 @@ def link_epochs(
                     cur_sig[(tr.object_id, v.epoch_index)] = None
                     # Check forced PSF photometry if frame available (§G.2).
                     p_xy, _, ra_p, dec_p = _predict_at_epoch(tr, v)
-                    status_nd: Literal["LOW_SNR_FORCED", "UPPER_LIMIT"] = "UPPER_LIMIT"
+                    status_nd: Literal["LOW_SNR_FORCED", "UPPER_LIMIT", "PM_OUTLIER"] = (
+                        "UPPER_LIMIT"
+                    )
                     if v.frame is not None:
                         fl, fe, snr_f, flg_f = forced_photometry_at_sky(v.frame, ra_p, dec_p)
                         if 2.5 <= snr_f < 5.0:
@@ -1465,11 +1479,16 @@ def link_epochs(
                                 resid,
                                 "auto",
                             )
+                    det_excl = next(
+                        (did for e, did in tr.excluded_dets if e == v.epoch_index), None
+                    )
+                    if status_nd == "UPPER_LIMIT" and det_excl is not None:
+                        status_nd = "PM_OUTLIER"
                     tr.non_detect_links[v.epoch_index] = EpochLink(
                         tr.object_id,
                         v.epoch_index,
                         v.epoch_id,
-                        None,
+                        det_excl if status_nd == "PM_OUTLIER" else None,
                         status_nd,
                         cost_v,
                         dc_2nd,
