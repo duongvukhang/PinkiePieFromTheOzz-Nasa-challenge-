@@ -35,7 +35,9 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(isSignUp ? { name, email, password } : { email, password }),
+        body: JSON.stringify(
+          isSignUp ? { display_name: name, email, password } : { email, password },
+        ),
       });
       setStatusMessage(
         res.ok

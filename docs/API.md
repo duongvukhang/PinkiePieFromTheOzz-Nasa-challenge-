@@ -43,39 +43,68 @@
 
 **Data volumes per typical request** (10′ FOV, 3 surveys): SPHEREx cutouts ~ 102 channels × 3 × ~100 KB ≈ 30 MB raw float32 (display WebP ≈ 2 MB); catalog cones ~ 1–5 MB. Full-frame SSO/Planet X jobs: ~ GBs (worker-side only).
 
-## 3. Own public API (REST, OpenAPI 3.1, `/api/v1`)
+## 3. Own public API (REST, OpenAPI 3.1, `/api/v1`, schema at `/api/v1/openapi.json`)
 
-Conventions: JSON; angles in deg, rates in mas/yr or arcsec/hr (field name carries unit), times as ISO-UTC **and** `mjd_tdb`; errors RFC 9457; pagination `?cursor=`; async jobs return `202` + `job_id`. Auth: cookie session or `Authorization: Bearer <token>`; anonymous allowed for read-only viewer endpoints (rate-limited).
+Conventions: JSON; angles in decimal deg (`RaDeg` in `[0, 360)`, `DecDeg` in `[-90, 90]`), rates in mas/yr or arcsec/hr (field name carries unit), times as ISO-UTC **and** `mjd_tdb`; errors RFC 9457 (`application/problem+json`); pagination `?cursor=&limit=`; async jobs return `202` + `job_id`. Auth: `HttpOnly` cookie session or `Authorization: Bearer <token>`; anonymous allowed for read-only viewer endpoints (FOV ≤ 15′; authenticated up to 60′).
+
+### Implemented endpoints (MVP)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/resolve?name=` | Sesame name → coords (+PM) |
-| GET | `/fields/frames?ra=&dec=&fov=&from=&to=&release=&bands=` | list available epochs/frames |
-| POST | `/cutouts` | build cutout set (async) |
-| GET | `/cutouts/{id}` | metadata + frame URLs (display/science/FITS) |
-| POST | `/uploads` (multipart / tus resumable) | upload FITS |
-| GET | `/uploads/{id}/report` | compatibility report |
-| POST | `/analyses` | run pipeline (register→extract→suggest) on a frame set (async) |
-| GET | `/analyses/{id}/sources?bbox=` | extracted sources |
-| GET | `/analyses/{id}/suggestions` | suggested objects with reasons |
-| POST | `/projects/{pid}/objects` | select objects (box / list / suggestion ids) → persistent labels |
-| POST | `/projects/{pid}/tracks` | associate + fit + classify (async) |
-| GET | `/objects/{oid}` | full object: measurements, fits, classification, consensus |
-| GET | `/objects/{oid}/associations` | per-epoch matches + alternatives |
-| PATCH | `/objects/{oid}/associations/{epoch}` | accept/reject/reassign (manual correction) |
-| GET | `/objects/{oid}/spectrum?epoch=` | on-the-fly SED |
-| GET | `/objects/{oid}/lightcurve` | photometry vs time |
-| GET | `/catalogs/overlay?cat=gaia&ra=&dec=&fov=&epoch=` | overlay sources propagated to epoch |
-| POST | `/compare` | A vs B job |
-| GET | `/compare/{id}` | products, header diff, source changes |
-| POST | `/planetx/runs` | start Planet X run (logged-in) |
-| GET | `/planetx/runs/{id}` / `/candidates` | status, efficiency, candidates |
-| GET | `/jobs/{id}` ; `/jobs/{id}/events` (SSE) | job status/progress |
-| CRUD | `/projects`, `/projects/{pid}/notes`, `/findings`, `/views`, `/versions`, `/share` | workspace |
-| POST | `/projects/{pid}/exports` | CSV/JSON/FITS/PNG/GIF/MP4/ADES |
-| GET | `/releases` | known data releases & status |
-| GET | `/oembed?url=` | embed metadata |
-| GET | `/examples` | the 5 presets + latest validation results |
+| GET | `/health` *(root)* | Service liveness (`{"status":"ok","version":"0.1.0"}`) |
+| POST | `/auth/register` | Register email/password account (`display_name` optional) → `201 UserRead` |
+| POST | `/auth/login` | Login with email/password (sets session cookie + returns Bearer token) |
+| POST | `/auth/logout` | Revoke session and clear cookie → `204` |
+| GET | `/auth/me` | Authenticated user profile (`UserRead`) |
+| POST | `/auth/tokens` | Mint scoped API token (`ApiTokenCreated`) |
+| GET | `/auth/tokens` | List user API tokens (`list[ApiTokenRead]`) |
+| DELETE | `/auth/tokens/{token_id}` | Revoke API token → `204` |
+| GET | `/resolve?name=` | SIMBAD / Sesame target name → ICRS decimal coords (+PM) |
+| GET | `/fields/frames?ra=&dec=&fov=&from=&to=&release=&bands=` | List available epochs/frames (`ra`, `dec` in decimal deg) |
+| POST | `/cutouts` | Build multi-epoch cutout set (async `202` → `cutout_id`, `job_id`) |
+| GET | `/cutouts/{cutout_id}` | Cutout metadata + per-frame URLs (`display_url`, `science_url`, `fits_url`, WCS, stretch) |
+| GET | `/cutouts/{cutout_id}/frames/{frame_id}/display.webp` | 8-bit asinh-stretched WebP display tile |
+| GET | `/cutouts/{cutout_id}/frames/{frame_id}/science.bin` | Little-endian `float32` science array (`X-Dtype`, `X-Shape` headers) |
+| GET | `/cutouts/{cutout_id}/frames/{frame_id}/frame.fits` | Downloadable FITS cutout |
+| POST | `/uploads` (`multipart/form-data`) | Upload FITS (`file` + optional `user_epoch`, reference field/upload, `project_id`) → `202` |
+| GET | `/uploads/{upload_id}/report` | FITS validation & multi-epoch compatibility report |
+| POST | `/analyses` | Run registration → extraction → suggestion on `fits_file_ids`, `cutout_id`, or `ra`/`dec` (`202`) |
+| GET | `/analyses/{analysis_id}/sources?bbox=&cursor=&limit=` | Extracted detections (`bbox=ra_min,dec_min,ra_max,dec_max`) |
+| GET | `/analyses/{analysis_id}/suggestions` | Ranked moving/anomalous object suggestions with reasons |
+| POST | `/projects/{project_id}/objects` | Select objects (`box` / `suggestion` / `catalog` / `manual`) → persistent labels (`201`) |
+| POST | `/projects/{project_id}/tracks` | Cross-epoch associate + fit motion + classify (async `202`) |
+| GET | `/objects/{object_id}` | Full object: measurements, preferred motion fit, classification + consensus, caveats |
+| GET | `/objects/{object_id}/associations` | Per-epoch match hypotheses + alternatives |
+| PATCH | `/objects/{object_id}/associations/{epoch}` | Accept/reject/reassign detection (`detection_id: int`) + trigger refit |
+| GET | `/objects/{object_id}/spectrum?epoch=` | On-the-fly forced-PSF SED (`wavelength_um`, `flux_ujy`, `mjd_tdb`) |
+| GET | `/objects/{object_id}/lightcurve` | Multi-epoch photometry + variability indices |
+| GET | `/catalogs/overlay?cat=gaia\|catwise&ra=&dec=&fov=&epoch=` | Reference catalog sources propagated to epoch |
+| POST | `/compare` | Launch A-vs-B FITS comparison (`a`, `b` `fits_file_id` UUIDs; async `202`) |
+| GET | `/compare/{compare_id}` | Product URLs, header diff, source changes |
+| GET | `/compare/{compare_id}/products/{product_name}` | Download `diff\|sum\|ratio.{fits,webp,bin}` or `score_corr.fits` |
+| GET | `/jobs/{job_id}` ; `/jobs/{job_id}/events` (SSE) | Job status/progress (`0..1`) and SSE `progress` stream |
+| GET / POST | `/projects` ; `GET / PATCH / DELETE /projects/{project_id}` | Project workspace CRUD (`?share_token=` supported on read) |
+| GET / POST | `/projects/{project_id}/notes` ; `PATCH / DELETE /projects/{project_id}/notes/{note_id}` | Markdown notes |
+| GET / POST | `/projects/{project_id}/findings` ; `PATCH / DELETE /projects/{project_id}/findings/{finding_id}` | Scientific findings |
+| GET / POST | `/projects/{project_id}/views` ; `DELETE /projects/{project_id}/views/{view_id}` | Saved viewer URL bookmarks |
+| GET / POST | `/projects/{project_id}/versions` ; `POST /projects/{project_id}/versions/{version}/restore` | Immutable project snapshots |
+| POST / DELETE | `/projects/{project_id}/share` | Create/rotate or revoke revocable share link |
+| POST | `/projects/{project_id}/exports` | Export job (`csv`, `json`, `fits`, `png`, `gif`, `ades`; async `202`) |
+| GET | `/projects/{project_id}/exports/{export_id}` | Download completed export artifact (`export_id` = `job_id`) |
+| GET | `/releases` | Known data releases & indexing status |
+| GET | `/examples` | The 5 mandatory benchmark presets (`targets` list) |
+| GET | `/oembed?url=&maxwidth=&maxheight=` | oEmbed iframe metadata |
+| GET | `/render.gif?ra=&dec=&fov=&bands=&release=&from=&to=&fps=` | Cached animated multi-epoch GIF |
+| GET | `/embed` *(root)* | Chrome-less cookie-less viewer (`?ra=&dec=&target=&fov=&mode=&bands=&release=&from=&to=&overlay=&track=`) |
+
+### Deferred endpoints / capabilities (Phase 2 — not implemented in MVP)
+
+- **Planet X search mode:** `POST /api/v1/planetx/runs`, `GET /api/v1/planetx/runs/{id}`, and `/candidates` are deferred to Phase 2 (`# PHASE2` in `backend/app/api/v1/__init__.py`).
+- **OAuth / magic-link auth:** `/api/v1/auth/orcid` and email magic-link login are deferred to Phase 2.
+- **Resumable uploads:** `tus` chunked upload protocol on `POST /api/v1/uploads` is deferred to Phase 2 (multipart only in MVP).
+- **Additional catalog overlays:** `GET /api/v1/catalogs/overlay` currently supports `cat=gaia` and `cat=catwise` only (`2mass`, `panstarrs`, `simbad`, `sso` deferred).
+- **Video export:** `mp4` format on `POST /api/v1/projects/{project_id}/exports` is deferred to Phase 2.
+- **Note for Viewer integration:** `POST /api/v1/compare` requires registered `fits_file_id` UUIDs (e.g., from `POST /api/v1/uploads`), whereas `CutoutFrame` returns `frame_id`s; client-side epoch A-vs-B differencing uses `GET /api/v1/cutouts/{cutout_id}/frames/{frame_id}/science.bin`. Selecting/tracking objects (`POST /api/v1/projects/{project_id}/objects`) requires an existing `project_id`.
 
 ### 3.1 Examples
 
@@ -83,70 +112,94 @@ Conventions: JSON; angles in deg, rates in mas/yr or arcsec/hr (field name carri
 GET /api/v1/fields/frames?ra=133.79513&dec=-7.24515&fov=10&bands=arr5,arr6
 200 OK
 {
-  "field": {"ra": 133.79513, "dec": -7.24515, "fov_arcmin": 10, "healpix9": 1234567},
+  "field": {"ra": 133.79513, "dec": -7.24515, "fov_arcmin": 10.0, "healpix9": 1234567},
   "release": "spherex_qr_2026-10",
   "epochs": [
     {"epoch": "S1", "mjd_tdb_mean": 60850.41, "utc_mean": "2025-06-21T09:50:24Z",
      "n_frames": 34, "arrays": [5, 6], "lambda_um": [3.82, 5.00],
      "flagged_fraction": 0.031},
-    {"epoch": "S2", "mjd_tdb_mean": 61031.77, "utc_mean": "2025-12-19T18:28:48Z", "n_frames": 36,
-     "arrays": [5, 6], "lambda_um": [3.82, 5.00], "flagged_fraction": 0.044}
+    {"epoch": "S2", "mjd_tdb_mean": 61031.77, "utc_mean": "2025-12-19T18:28:48Z",
+     "n_frames": 36, "arrays": [5, 6], "lambda_um": [3.82, 5.00],
+     "flagged_fraction": 0.044}
   ],
-  "warnings": ["High-PM target: position propagated per epoch (see SCIENCE §F.3)."]
+  "warnings": []
 }
 ```
 *(values illustrative)*
 
 ```http
-POST /api/v1/projects/7f3c.../objects
-{"analysis_id": "an_91", "mode": "box", "epoch": "S1",
+POST /api/v1/projects/00000000-0000-0000-0000-000000000001/objects
+{"analysis_id": "00000000-0000-0000-0000-000000000091", "mode": "box", "epoch": "S1",
  "box": {"ra_min": 133.790, "ra_max": 133.800, "dec_min": -7.250, "dec_max": -7.240}}
 201 Created
-{"objects": [{"id": "obj_1", "label": "A", "ra": 133.7951, "dec": -7.2452,
-              "crossmatch": null, "flux_ujy": {"arr6": 41.2}, "selection_mode": "box"}]}
+{"objects": [{"id": "00000000-0000-0000-0000-000000000101", "label": "A",
+              "ra": 133.7951, "dec": -7.2452, "crossmatch": null,
+              "flux_ujy": {"arr6": 41.2}, "selection_mode": "box"}]}
 ```
 
 ```http
-GET /api/v1/objects/obj_1
+GET /api/v1/objects/00000000-0000-0000-0000-000000000101
 {
+  "id": "00000000-0000-0000-0000-000000000101",
   "label": "A",
-  "measurements": [{"epoch": "S1", "mjd_tdb": 60850.41, "ra": 133.79510, "dec": -7.24521,
-                    "sig_ra_mas": 310, "sig_dec_mas": 290, "corr": 0.05, "flags": [],
-                    "association_confidence": 0.97}],
+  "public_id": "J085510.8-071442",
+  "status": "active",
+  "identity_confidence": 0.97,
+  "measurements": [{"epoch": "S1", "source": "detection", "mjd_tdb": 60850.41,
+                    "ra": 133.79510, "dec": -7.24521, "sig_ra_mas": 310.0,
+                    "sig_dec_mas": 290.0, "corr_radec": 0.05, "band_group": "arr6",
+                    "flux_ujy": 41.2, "flux_err_ujy": 2.1, "is_upper_limit": false,
+                    "flags": 0, "association_confidence": 0.97}],
   "motion_fit": {"model": "linear", "ref_epoch_mjd_tdb": 60941.0,
-                 "pmra_masyr": -8090, "pmdec_masyr": 700, "pm_total_masyr": 8120, "pm_err_masyr": 420,
-                 "pa_deg": 274.9, "pa_err_deg": 3.0, "chi2_red": 0.9, "dof": 2, "baseline_yr": 1.0},
-  "classification": {"top": "brown_dwarf", "p": 0.83,
+                 "params": {"ra_deg": 133.7951, "dec_deg": -7.2452,
+                            "pmra_masyr": -8090.0, "pmdec_masyr": 700.0},
+                 "pm_total_masyr": 8120.0, "pm_total_err": 420.0,
+                 "pa_deg": 274.9, "pa_err": 3.0, "plx_mas": null, "plx_err": null,
+                 "chi2_red": 0.9, "dof": 2, "baseline_yr": 1.0, "is_preferred": true},
+  "classification": {"top_class": "brown_dwarf", "top_prob": 0.83,
                      "probabilities": {"brown_dwarf": 0.83, "candidate_new_mover": 0.09, "star_pm": 0.05, "artifact": 0.03},
-                     "evidence": ["μ = 8.1 ± 0.4 ″/yr (E3), E1 dipole 7.2σ", "4.5 µm excess; < 3σ at < 3 µm", "no Gaia counterpart"]},
-  "consensus": {"verdict": "Consistent", "estimators": {"E1": "agree", "E2": "n/a (no catalog)", "E3": "agree", "E4": "agree"}},
+                     "evidence": ["mu = 8.1 +/- 0.4 arcsec/yr", "4.5 um excess; no Gaia counterpart"],
+                     "consensus": {"verdict": "Consistent", "agreement_score": 1.0,
+                                   "estimators": {"E1": "agree", "E2": "n/a (no catalog)", "E3": "mover", "E6": "brown_dwarf"},
+                                   "disagreements": []}}},
   "caveats": ["Confidence < 0.9 at epoch S3 (possible blend)"]
 }
 ```
 *(values illustrative, not results)*
 
 ```http
-PATCH /api/v1/objects/obj_1/associations/S3
-{"action": "reassign", "detection_id": "det_88812", "reason": "visual: correct source is SW blob"}
-200 OK  {"refit_job_id": "job_552", "decided_by": "user"}
+PATCH /api/v1/objects/00000000-0000-0000-0000-000000000101/associations/S3
+{"action": "reassign", "detection_id": 88812, "reason": "visual: correct source is SW blob"}
+200 OK  {"refit_job_id": "00000000-0000-0000-0000-000000000552", "decided_by": "user"}
 ```
 
 ```http
 POST /api/v1/compare
-{"a": "fits_123", "b": "fits_456", "ops": ["diff","sum","ratio","header_diff","sources"], "psf_match": "zogy"}
-202 Accepted {"job_id": "job_77", "compare_id": "cmp_9"}
+{"a": "00000000-0000-0000-0000-000000000123",
+ "b": "00000000-0000-0000-0000-000000000456",
+ "ops": ["diff","sum","ratio","header_diff","sources"], "psf_match": "zogy"}
+202 Accepted {"job_id": "00000000-0000-0000-0000-000000000077",
+              "status": "queued",
+              "compare_id": "00000000-0000-0000-0000-000000000009"}
 ```
 
 ### 3.2 Embed scheme
-- `GET /embed?ra=&dec=&fov=&mode=&bands=&from=&to=` → chrome-less viewer page (same params as `/v`, see FRONTEND §4.3), cookie-less, `frame-ancestors *`.
-- `GET /api/v1/oembed?url=https://<host>/v?ra=...` → `{"type":"rich","html":"<iframe ...>","width":640,"height":480,"provider_name":"..."}`.
-- Image endpoint for static embeds: `GET /api/v1/render.gif?ra=&dec=&fov=&bands=` (cached animated GIF of epochs).
+- `GET /embed?ra=&dec=&fov=&mode=&bands=&from=&to=` → chrome-less viewer page (same params as `/v`, see FRONTEND §4.3; accepts decimal deg or sexagesimal `ra`/`dec` or `target=`), cookie-less, `frame-ancestors *`.
+- `GET /api/v1/oembed?url=https://<host>/v?ra=...` → `{"type":"rich","version":"1.0","html":"<iframe ...>","width":640,"height":480,"provider_name":"..."}`.
+- Image endpoint for static embeds: `GET /api/v1/render.gif?ra=&dec=&fov=&bands=` (cached animated GIF of epochs; `ra`, `dec` in decimal deg).
 
 ### 3.3 Python client snippet
 ```python
 import requests
-r = requests.get("https://<host>/api/v1/fields/frames",
-                 params={"ra": "08:55:10.831", "dec": "-07:14:42.53", "fov": 8, "bands": "arr6"})
+
+resolved = requests.get("https://<host>/api/v1/resolve", params={"name": "WISE 0855"})
+resolved.raise_for_status()
+coords = resolved.json()
+
+r = requests.get(
+    "https://<host>/api/v1/fields/frames",
+    params={"ra": coords["ra_deg"], "dec": coords["dec_deg"], "fov": 8, "bands": "arr6"},
+)
 r.raise_for_status()
 for e in r.json()["epochs"]:
     print(e["epoch"], e["utc_mean"], e["n_frames"])
