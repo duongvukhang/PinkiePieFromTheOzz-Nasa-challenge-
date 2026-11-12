@@ -20,7 +20,7 @@
 | filterpy | 1.4 | Kalman filtering |
 | healpy or astropy-healpix | 1.16 / 1.0 | HEALPix indexing |
 | FastAPI / Pydantic / SQLAlchemy / Alembic / Celery | 0.110 / 2.6 / 2.0 / 1.13 / 5.3 | backend |
-| Frontend | React 18, TypeScript 5, Vite 5, aladin-lite 3.x, uPlot 1.6, zustand 4, @tanstack/react-query 5, openapi-typescript 7 | |
+| Frontend | React 18, React Router 6, TypeScript 5, Vite 5, zustand 5, @tanstack/react-query 5 (planned/optional: aladin-lite 3.x, uPlot 1.6) | |
 
 ## 2. External sources
 
@@ -68,7 +68,7 @@ Conventions: JSON; angles in decimal deg (`RaDeg` in `[0, 360)`, `DecDeg` in `[-
 | GET | `/cutouts/{cutout_id}/frames/{frame_id}/frame.fits` | Downloadable FITS cutout |
 | POST | `/uploads` (`multipart/form-data`) | Upload FITS (`file` + optional `user_epoch`, reference field/upload, `project_id`) → `202` |
 | GET | `/uploads/{upload_id}/report` | FITS validation & multi-epoch compatibility report |
-| POST | `/analyses` | Run registration → extraction → suggestion on `fits_file_ids`, `cutout_id`, or `ra`/`dec` (`202`) |
+| POST | `/analyses` | Run registration → extraction → suggestion on `fits_file_ids`, `cutout_id`, or `ra`/`dec` (+ optional `fov_arcmin`, `release`) (`202`) |
 | GET | `/analyses/{analysis_id}/sources?bbox=&cursor=&limit=` | Extracted detections (`bbox=ra_min,dec_min,ra_max,dec_max`) |
 | GET | `/analyses/{analysis_id}/suggestions` | Ranked moving/anomalous object suggestions with reasons |
 | POST | `/projects/{project_id}/objects` | Select objects (`box` / `suggestion` / `catalog` / `manual`) → persistent labels (`201`) |
@@ -83,7 +83,7 @@ Conventions: JSON; angles in decimal deg (`RaDeg` in `[0, 360)`, `DecDeg` in `[-
 | GET | `/compare/{compare_id}` | Product URLs, header diff, source changes |
 | GET | `/compare/{compare_id}/products/{product_name}` | Download `diff\|sum\|ratio.{fits,webp,bin}` or `score_corr.fits` |
 | GET | `/jobs/{job_id}` ; `/jobs/{job_id}/events` (SSE) | Job status/progress (`0..1`) and SSE `progress` stream |
-| GET / POST | `/projects` ; `GET / PATCH / DELETE /projects/{project_id}` | Project workspace CRUD (`?share_token=` supported on read) |
+| GET / POST | `/projects` (`?cursor=&limit=` on `GET`) ; `GET / PATCH / DELETE /projects/{project_id}` | Project workspace CRUD (`?share_token=` / `X-Share-Token` supported on `GET /projects/{project_id}` and all read-only `/projects/{project_id}/*` endpoints) |
 | GET / POST | `/projects/{project_id}/notes` ; `PATCH / DELETE /projects/{project_id}/notes/{note_id}` | Markdown notes |
 | GET / POST | `/projects/{project_id}/findings` ; `PATCH / DELETE /projects/{project_id}/findings/{finding_id}` | Scientific findings |
 | GET / POST | `/projects/{project_id}/views` ; `DELETE /projects/{project_id}/views/{view_id}` | Saved viewer URL bookmarks |
@@ -161,7 +161,7 @@ GET /api/v1/objects/00000000-0000-0000-0000-000000000101
                      "evidence": ["mu = 8.1 +/- 0.4 arcsec/yr", "4.5 um excess; no Gaia counterpart"],
                      "consensus": {"verdict": "Consistent", "agreement_score": 1.0,
                                    "estimators": {"E1": "agree", "E2": "n/a (no catalog)", "E3": "mover", "E6": "brown_dwarf"},
-                                   "disagreements": []}}},
+                                   "disagreements": []}},
   "caveats": ["Confidence < 0.9 at epoch S3 (possible blend)"]
 }
 ```

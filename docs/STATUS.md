@@ -1,9 +1,9 @@
 ## Current phase: 1 (Backend API & OpenAPI 3.1 contract verified; Frontend Task 5a complete; 5b.1 API consistency complete)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-12 | T5b.1: API contract consistency
-Done: Audited FastAPI routers, Pydantic schemas, generated OpenAPI 3.1 spec, `docs/API.md` §3, `docs/STATUS.md`, and `frontend/src/` references. Corrected `docs/API.md` §3 to list all 50 implemented routes (plus `/health` and `/embed`), separated Phase 2 deferred endpoints (`/api/v1/planetx/*`, `/api/v1/auth/orcid`, `tus` uploads, non-`gaia`/`catwise` catalog overlays, `mp4` exports), aligned §3.1/§3.3 examples with actual Pydantic schemas and decimal-degree `/fields/frames` query params, fixed `AuthPage.tsx` registration payload (`name` -> `display_name` to match `UserRegisterRequest`), and corrected `docs/STATUS.md` next-task/auth notes.
-Files touched: `docs/API.md`, `docs/STATUS.md`, `frontend/src/pages/AuthPage.tsx`
-Verified by: `.venv/bin/pytest tests/unit/test_contracts.py tests/unit/test_api_*.py -q` (29/29 passed); `npm --prefix frontend run build && npm --prefix frontend run lint && npm --prefix frontend run format:check && npm --prefix frontend run test:e2e` (clean, 2/2 passed).
-Lines before -> after: `AuthPage.tsx` `221 -> 221` (1-token key fix); `docs/API.md` §3 `108 -> 161` (+auth/cutout-frame/compare-product/export-download/deferred contract rows).
+## Last session: Gemini 3.8 Flash (High) | 2026-11-13 | T5b.1-fix: docs/API.md inspection fixes
+Done: Fixed JSON syntax typo in `GET /api/v1/objects/{object_id}` example (`}}}` -> `}}`), aligned §1 Frontend row with `frontend/package.json` (`React 18, React Router 6, TypeScript 5, Vite 5, zustand 5, @tanstack/react-query 5`, marking `aladin-lite`/`uPlot` as planned/optional and dropping unused `openapi-typescript 7`), documented optional `fov_arcmin`/`release` on `POST /analyses`, and noted `?cursor=&limit=` on `GET /projects` plus `?share_token=` / `X-Share-Token` across all read-only `/projects/{project_id}/*` endpoints. Kept `[verify]` external archive items tracked below.
+Files touched: `docs/API.md`, `docs/STATUS.md`
+Verified by: Python `json.JSONDecoder().raw_decode` on all 8 JSON objects in `docs/API.md` §3.1 (8/8 valid); `.venv/bin/pytest tests/unit/test_contracts.py -q` (5/5 passed).
+Lines before -> after: `docs/API.md` `206 -> 206` (4 targeted line edits).
 ## Next task: 5b.2 — Build `/v` Observatory Viewer (Aladin Lite v3 + float32 WebGL2 canvas + A-vs-B comparison) wired to verified endpoints (`/api/v1/resolve`, `/api/v1/fields/frames`, `/api/v1/cutouts`, `/api/v1/cutouts/{cutout_id}`, `/api/v1/examples`, `/api/v1/releases`, `/api/v1/catalogs/overlay`, `/api/v1/analyses`, `/api/v1/objects/{object_id}`, `/api/v1/compare`, `/api/v1/jobs/{job_id}`) — Gemini 3.8 Flash (High)
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).
