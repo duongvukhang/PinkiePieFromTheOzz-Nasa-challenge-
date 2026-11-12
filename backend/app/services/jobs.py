@@ -31,7 +31,8 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.schemas.common import JobStatus, JobStatusResponse
 from app.schemas.fields import DataReleaseRead
-from app.schemas.objects import DetectionRead
+from app.schemas.objects import DetectionRead, SpectrumResponse, TrackedObjectSummary
+from app.services.object_store import InMemoryObjectMixin, SqlAlchemyObjectMixin
 
 TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 _CUTOUT_TASK = "app.workers.tasks_fast.build_cutouts"
@@ -171,8 +172,78 @@ class JobStore(ABC):
     ) -> Iterator[JobStatusResponse]:
         """Yield job snapshots until terminal status or timeout."""
 
+    @abstractmethod
+    def save_analysis_observations(
+        self, analysis_id: UUID, frames: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Persist per-frame observations for an analysis run."""
 
-class InMemoryJobStore(JobStore):
+    @abstractmethod
+    def get_analysis_observations(self, analysis_id: UUID) -> list[dict[str, Any]]:
+        """Fetch ordered observations associated with `analysis_id`."""
+
+    @abstractmethod
+    def select_tracked_objects(
+        self,
+        *,
+        project_id: UUID,
+        analysis_id: UUID,
+        fits_file_ids: Sequence[UUID],
+        candidates: Sequence[Mapping[str, Any]],
+        selection_mode: str,
+    ) -> list[TrackedObjectSummary]:
+        """Create or reuse persistent tracked objects and assign sequential project labels."""
+
+    @abstractmethod
+    def list_project_objects(
+        self, project_id: UUID, object_ids: Sequence[UUID] | None = None
+    ) -> list[dict[str, Any]]:
+        """List tracked objects belonging to `project_id`."""
+
+    @abstractmethod
+    def get_tracked_object_bundle(self, object_id: UUID) -> dict[str, Any] | None:
+        """Fetch tracked object with observations, measurements, fits, associations, and class."""
+
+    @abstractmethod
+    def save_track_results(
+        self,
+        object_id: UUID,
+        *,
+        obj_updates: Mapping[str, Any],
+        measurements: Sequence[Mapping[str, Any]],
+        associations: Sequence[Mapping[str, Any]],
+        motion_fits: Sequence[Mapping[str, Any]],
+        classification: Mapping[str, Any] | None,
+        crossmatches: Sequence[Mapping[str, Any]],
+        caveats: Sequence[str],
+    ) -> None:
+        """Persist tracking results while preserving user-locked associations."""
+
+    @abstractmethod
+    def apply_association_override(
+        self,
+        object_id: UUID,
+        epoch: str,
+        *,
+        action: str,
+        detection_id: int | None,
+        reason: str,
+        user_id: UUID | None,
+    ) -> dict[str, Any]:
+        """Apply manual user association override and append an audit-log entry."""
+
+    @abstractmethod
+    def get_cached_spectrum(
+        self, object_id: UUID, observation_id: UUID | None = None
+    ) -> SpectrumResponse | None:
+        """Return cached forced-PSF SED if available."""
+
+    @abstractmethod
+    def save_spectrum(self, spectrum: SpectrumResponse) -> None:
+        """Persist computed forced-PSF SED."""
+
+
+class InMemoryJobStore(InMemoryObjectMixin, JobStore):
     """Thread-safe in-memory job store with Condition-backed SSE progress streaming."""
 
     def __init__(self) -> None:
@@ -186,6 +257,7 @@ class InMemoryJobStore(JobStore):
         self._next_det_id = 1
         self._provenance: list[dict[str, Any]] = []
         self._releases: dict[str, DataReleaseRead] = {}
+        self._init_object_store()
 
     @staticmethod
     def _to_schema(rec: dict[str, Any]) -> JobStatusResponse:
@@ -385,7 +457,7 @@ class InMemoryJobStore(JobStore):
                 return
 
 
-class SqlAlchemyJobStore(JobStore):
+class SqlAlchemyJobStore(SqlAlchemyObjectMixin, JobStore):
     """PostgreSQL-backed job and provenance store using SQLAlchemy 2.0 sessions."""
 
     def __init__(self, session_factory: sessionmaker[Session] | None = None) -> None:

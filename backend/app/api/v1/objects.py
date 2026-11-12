@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import math
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
+import astropy.units as u
+from astropy.coordinates import SkyCoord
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.deps import (
@@ -36,6 +39,7 @@ from app.schemas.objects import (
     CompareResultResponse,
     DetectionRead,
     LightcurveResponse,
+    MotionFitRead,
     ObjectAssociationsResponse,
     SpectrumResponse,
     SuggestionItem,
@@ -47,9 +51,27 @@ from app.schemas.objects import (
 )
 from app.services.jobs import JobStore, compute_params_hash
 from app.services.storage import StorageBackend
+from app.services.tracking import (
+    build_object_lightcurve,
+    compute_object_spectrum,
+    in_sky_box,
+    resolve_epoch_observation,
+)
 from app.workers.celery_app import dispatch_task, is_eager_mode
 from app.workers.tasks_fast import UPLOAD_TASK_NAME
-from app.workers.tasks_heavy import ANALYSIS_TASK_NAME, execute_run_analysis, run_analysis
+from app.workers.tasks_heavy import (
+    ANALYSIS_TASK_NAME,
+    TRACKS_TASK_NAME,
+    execute_run_analysis,
+    execute_run_tracks,
+    run_analysis,
+    run_tracks,
+)
+from sphx_core.calib import HARD_BAD_MASK, band_group_for_wavelength
+
+_ALLOWED_MOTION_MODELS = frozenset(
+    {"static", "linear", "astrometric5", "astrometric5_prior", "keplerian", "shift_stack"}
+)
 
 router = APIRouter(responses=COMMON_501)
 _ANALYSIS_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -240,14 +262,7 @@ async def list_analysis_sources(
     if bbox is not None:
         ra_min, dec_min, ra_max, dec_max = _parse_bbox(bbox)
         detections = [
-            d
-            for d in detections
-            if dec_min <= d.dec <= dec_max
-            and (
-                (ra_min <= d.ra <= ra_max)
-                if ra_min <= ra_max
-                else (d.ra >= ra_min or d.ra <= ra_max)
-            )
+            d for d in detections if in_sky_box(d.ra, d.dec, ra_min, ra_max, dec_min, dec_max)
         ]
     page, next_cursor = paginate_items(detections, cursor, limit)
     return PaginatedResponse[DetectionRead](items=page, next_cursor=next_cursor)
@@ -274,54 +289,440 @@ async def list_analysis_suggestions(
     return SuggestionsResponse(analysis_id=analysis_id, suggestions=items)
 
 
+def _det_band_group(store: JobStore, det: DetectionRead) -> str | None:
+    frec = store.get_fits_file(det.fits_file_id)
+    if frec is None:
+        return None
+    if frec.get("band_label"):
+        return str(frec["band_label"])
+    lmin, lmax = frec.get("wavelength_min_um"), frec.get("wavelength_max_um")
+    if lmin is not None and lmax is not None:
+        return band_group_for_wavelength((float(lmin), float(lmax)))
+    return None
+
+
+def _require_object_bundle(store: JobStore, object_id: UUID) -> dict[str, Any]:
+    bundle = store.get_tracked_object_bundle(object_id)
+    if bundle is None:
+        raise APIProblemError(404, "Tracked Object Not Found", f"No object found for {object_id}.")
+    return bundle
+
+
+def _resolve_detection_ids(
+    detection_ids: Sequence[int], det_by_id: Mapping[int, DetectionRead]
+) -> list[DetectionRead]:
+    out: list[DetectionRead] = []
+    for did in detection_ids:
+        if did not in det_by_id:
+            raise APIProblemError(404, "Detection Not Found", f"Detection {did} not found.")
+        out.append(det_by_id[did])
+    return out
+
+
+def _cluster_box_detections(
+    dets: list[DetectionRead], radius_arcsec: float = 5.0
+) -> list[DetectionRead]:
+    """Deduplicate multi-epoch detections of the same sky source inside a drag box."""
+    ordered = sorted(dets, key=lambda d: (-(d.snr or 0.0), d.id))
+    kept: list[DetectionRead] = []
+    kept_coords: list[SkyCoord] = []
+    for d in ordered:
+        c = SkyCoord(ra=d.ra * u.deg, dec=d.dec * u.deg, frame="icrs")
+        if any(float(c.separation(kc).arcsec) <= radius_arcsec for kc in kept_coords):
+            continue
+        kept.append(d)
+        kept_coords.append(c)
+    return kept
+
+
+def _enqueue_tracks_job(
+    *,
+    project_id: UUID,
+    object_ids: list[UUID],
+    models: list[str],
+    run_classification: bool,
+    override_rev: int,
+    user_id: UUID | None,
+    store: JobStore,
+    storage: StorageBackend,
+    gaia: GaiaProvider,
+    wise: WiseProvider,
+    mpc: MpcProvider,
+) -> tuple[UUID, JobStatus]:
+    norm_params: dict[str, Any] = {
+        "project_id": str(project_id),
+        "object_ids": sorted(str(oid) for oid in object_ids),
+        "models": list(models),
+        "run_classification": run_classification,
+        "override_rev": override_rev,
+    }
+    job_params: dict[str, Any] = {
+        "project_id": str(project_id),
+        "object_ids": [str(oid) for oid in object_ids],
+        "models": list(models),
+        "run_classification": run_classification,
+    }
+    job, deduplicated = store.create_or_get_job(
+        task=TRACKS_TASK_NAME,
+        queue="heavy",
+        params=job_params,
+        params_hash=compute_params_hash(TRACKS_TASK_NAME, norm_params),
+        user_id=user_id,
+        project_id=project_id,
+    )
+    if deduplicated:
+        return job.id, job.status
+    if is_eager_mode():
+        with contextlib.suppress(Exception):
+            execute_run_tracks(
+                job.id,
+                job_params,
+                store=store,
+                storage=storage,
+                gaia_provider=gaia,
+                wise_provider=wise,
+                mpc_provider=mpc,
+            )
+    else:
+        dispatch_task(run_tracks, str(job.id), job_params, queue="heavy")
+    latest = store.get_job(job.id)
+    return job.id, (latest.status if latest else job.status)
+
+
 @router.post(
-    "/projects/{project_id}/objects", status_code=status.HTTP_201_CREATED, tags=["objects"]
+    "/projects/{project_id}/objects",
+    status_code=status.HTTP_201_CREATED,
+    tags=["objects"],
+    responses=_ANALYSIS_RESPONSES,
 )
 async def select_project_objects(
-    project_id: UUID, payload: TrackedObjectSelectRequest
+    project_id: UUID,
+    payload: TrackedObjectSelectRequest,
+    store: Annotated[JobStore, Depends(get_store)],
 ) -> TrackedObjectSelectResponse:
-    """Select objects via box-drag or suggestion into persistent project labels."""
-    not_implemented()
+    """Select objects via box-drag, suggestion, catalog, or manual coordinates."""
+    job = require_succeeded_job(
+        store.get_analysis_job(payload.analysis_id),
+        payload.analysis_id,
+        label="Analysis",
+        output_key="detection_ids",
+    )
+    assert job.outputs is not None
+    all_dets = store.get_detections_by_ids([int(i) for i in job.outputs["detection_ids"]])
+    det_by_id = {d.id: d for d in all_dets}
+    observations = store.get_analysis_observations(payload.analysis_id)
+    obs_by_id = {UUID(str(o["id"])): o for o in observations}
+    obs_by_fid = {UUID(str(o["fits_file_id"])): o for o in observations if o.get("fits_file_id")}
+    raw_fids = job.outputs.get("fits_file_ids") or dict.fromkeys(d.fits_file_id for d in all_dets)
+    fits_file_ids = [UUID(str(fid)) for fid in raw_fids]
+
+    target_obs: dict[str, Any] | None = None
+    filtered_dets = list(all_dets)
+    if payload.epoch is not None:
+        target_obs = resolve_epoch_observation(observations, payload.epoch)
+        if target_obs is None:
+            raise APIProblemError(
+                404,
+                "Epoch Not Found",
+                f"Epoch {payload.epoch!r} not found in analysis {payload.analysis_id}.",
+            )
+        target_oid = UUID(str(target_obs["id"]))
+        target_fid = target_obs.get("fits_file_id")
+        filtered_dets = [
+            d
+            for d in all_dets
+            if d.observation_id == target_oid or (target_fid and d.fits_file_id == target_fid)
+        ]
+
+    if payload.box is not None and payload.box.dec_min > payload.box.dec_max:
+        raise APIProblemError(422, "Invalid Sky Box", "dec_min must not exceed dec_max.")
+
+    selected_dets: list[DetectionRead] = []
+    manual_seed: dict[str, Any] | None = None
+
+    if payload.mode == "box":
+        if payload.box is None:
+            raise APIProblemError(422, "Missing Sky Box", "box is required when mode='box'.")
+        b = payload.box
+        in_box = [
+            d
+            for d in filtered_dets
+            if in_sky_box(d.ra, d.dec, b.ra_min, b.ra_max, b.dec_min, b.dec_max)
+        ]
+        clean_in_box = [
+            d for d in in_box if not d.is_difference and not (d.flags & HARD_BAD_MASK)
+        ] or in_box
+        selected_dets = (
+            clean_in_box if payload.epoch is not None else _cluster_box_detections(clean_in_box)
+        )
+    elif payload.mode == "suggestion":
+        if payload.detection_ids is not None:
+            selected_dets = _resolve_detection_ids(payload.detection_ids, det_by_id)
+        else:
+            sug_ids = [int(s["detection_id"]) for s in job.outputs.get("suggestions", [])]
+            cand_dets = [det_by_id[did] for did in sug_ids if did in det_by_id]
+            if payload.epoch is not None:
+                allowed = {d.id for d in filtered_dets}
+                cand_dets = [d for d in cand_dets if d.id in allowed]
+            if payload.box is not None:
+                b = payload.box
+                cand_dets = [
+                    d
+                    for d in cand_dets
+                    if in_sky_box(d.ra, d.dec, b.ra_min, b.ra_max, b.dec_min, b.dec_max)
+                ]
+            selected_dets = cand_dets
+    else:  # catalog or manual
+        if payload.detection_ids:
+            selected_dets = _resolve_detection_ids(payload.detection_ids, det_by_id)
+        elif payload.box is not None:
+            b = payload.box
+            selected_dets = [
+                d
+                for d in filtered_dets
+                if not d.is_difference
+                and in_sky_box(d.ra, d.dec, b.ra_min, b.ra_max, b.dec_min, b.dec_max)
+            ]
+            if not selected_dets and payload.mode == "manual":
+                ra_mid = (
+                    0.5 * (b.ra_min + b.ra_max)
+                    if b.ra_min <= b.ra_max
+                    else ((0.5 * (b.ra_min + b.ra_max + 360.0)) % 360.0)
+                )
+                dec_mid = 0.5 * (b.dec_min + b.dec_max)
+                ref_obs = target_obs or (observations[0] if observations else None)
+                manual_seed = {
+                    "detection_id": None,
+                    "ra": ra_mid,
+                    "dec": dec_mid,
+                    "mjd_tdb": float(ref_obs["mjd_tdb_mean"]) if ref_obs else 60850.0,
+                    "observation_id": ref_obs["id"] if ref_obs else None,
+                    "epoch_label": ref_obs["epoch_label"] if ref_obs else "S1",
+                    "flags": 0,
+                }
+        else:
+            raise APIProblemError(
+                422,
+                "Selection Input Required",
+                f"Provide detection_ids or box for mode='{payload.mode}'.",
+            )
+
+    candidates: list[dict[str, Any]] = []
+    for d in selected_dets:
+        obs = (
+            obs_by_id.get(d.observation_id)
+            if d.observation_id is not None
+            else obs_by_fid.get(d.fits_file_id)
+        )
+        frec = store.get_fits_file(d.fits_file_id)
+        mjd = (
+            float(obs["mjd_tdb_mean"])
+            if obs is not None
+            else float((frec or {}).get("mjd_tdb_mid") or 60850.0)
+        )
+        candidates.append(
+            {
+                "detection_id": d.id,
+                "ra": d.ra,
+                "dec": d.dec,
+                "mjd_tdb": mjd,
+                "observation_id": obs["id"] if obs is not None else d.observation_id,
+                "epoch_label": obs["epoch_label"] if obs is not None else None,
+                "sig_ra_mas": d.sig_ra_mas,
+                "sig_dec_mas": d.sig_dec_mas,
+                "corr_radec": d.corr_radec,
+                "band_group": _det_band_group(store, d),
+                "flux_ujy": d.flux_ujy,
+                "flux_err_ujy": d.flux_err_ujy,
+                "flags": int(d.flags),
+            }
+        )
+    if manual_seed is not None:
+        candidates.append(manual_seed)
+
+    try:
+        summaries = store.select_tracked_objects(
+            project_id=project_id,
+            analysis_id=payload.analysis_id,
+            fits_file_ids=fits_file_ids,
+            candidates=candidates,
+            selection_mode=payload.mode,
+        )
+    except KeyError as exc:
+        raise APIProblemError(404, "Project Not Found", str(exc)) from exc
+    return TrackedObjectSelectResponse(objects=summaries)
 
 
 @router.post(
-    "/projects/{project_id}/tracks", status_code=status.HTTP_202_ACCEPTED, tags=["objects"]
+    "/projects/{project_id}/tracks",
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["objects"],
+    responses=_ANALYSIS_RESPONSES,
 )
-async def run_project_tracks(project_id: UUID, payload: TrackRunRequest) -> JobAcceptedResponse:
+async def run_project_tracks(
+    project_id: UUID,
+    payload: TrackRunRequest,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    gaia: Annotated[GaiaProvider, Depends(get_gaia_provider)],
+    wise: Annotated[WiseProvider, Depends(get_wise_provider)],
+    mpc: Annotated[MpcProvider, Depends(get_mpc_provider)],
+    user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
+) -> JobAcceptedResponse:
     """Associate detections across epochs, fit astrometric motion, and classify."""
-    not_implemented()
+    if not payload.models or any(m not in _ALLOWED_MOTION_MODELS for m in payload.models):
+        raise APIProblemError(
+            422,
+            "Invalid Motion Models",
+            f"models must be non-empty and within {sorted(_ALLOWED_MOTION_MODELS)}.",
+        )
+    try:
+        objs = store.list_project_objects(project_id, payload.object_ids)
+    except KeyError as exc:
+        raise APIProblemError(404, "Tracked Object Not Found", str(exc)) from exc
+    if not objs:
+        raise APIProblemError(
+            422, "No Tracked Objects", "Select at least one object in the project before tracking."
+        )
+
+    object_ids = [UUID(str(o["id"])) for o in objs]
+    override_rev = sum(int(o.get("override_rev", 0)) for o in objs)
+    job_id, job_status = _enqueue_tracks_job(
+        project_id=project_id,
+        object_ids=object_ids,
+        models=list(payload.models),
+        run_classification=payload.run_classification,
+        override_rev=override_rev,
+        user_id=user_id,
+        store=store,
+        storage=storage,
+        gaia=gaia,
+        wise=wise,
+        mpc=mpc,
+    )
+    return JobAcceptedResponse(job_id=job_id, status=job_status)
 
 
-@router.get("/objects/{object_id}", tags=["objects"])
-async def get_tracked_object(object_id: UUID) -> TrackedObjectDetailResponse:
+@router.get("/objects/{object_id}", tags=["objects"], responses=_ANALYSIS_RESPONSES)
+async def get_tracked_object(
+    object_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+) -> TrackedObjectDetailResponse:
     """Retrieve full tracked object measurements, motion fit, classification, and caveats."""
-    not_implemented()
+    bundle = _require_object_bundle(store, object_id)
+    fits_list = bundle.get("motion_fits") or []
+    pref_raw = next(
+        (f for f in fits_list if f.get("is_preferred")), fits_list[0] if fits_list else None
+    )
+    return TrackedObjectDetailResponse(
+        id=bundle["id"],
+        label=bundle["label"],
+        public_id=bundle.get("public_id"),
+        status=bundle.get("status") or "active",
+        identity_confidence=bundle.get("identity_confidence"),
+        measurements=bundle.get("measurements") or [],
+        motion_fit=MotionFitRead.model_validate(pref_raw) if pref_raw is not None else None,
+        classification=bundle.get("classification"),
+        caveats=bundle.get("caveats") or [],
+    )
 
 
-@router.get("/objects/{object_id}/associations", tags=["objects"])
-async def get_object_associations(object_id: UUID) -> ObjectAssociationsResponse:
+@router.get("/objects/{object_id}/associations", tags=["objects"], responses=_ANALYSIS_RESPONSES)
+async def get_object_associations(
+    object_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+) -> ObjectAssociationsResponse:
     """Retrieve per-epoch detection match hypotheses and alternatives."""
-    not_implemented()
+    bundle = _require_object_bundle(store, object_id)
+    return ObjectAssociationsResponse(
+        object_id=object_id, associations=bundle.get("associations") or []
+    )
 
 
-@router.patch("/objects/{object_id}/associations/{epoch}", tags=["objects"])
+@router.patch(
+    "/objects/{object_id}/associations/{epoch}",
+    tags=["objects"],
+    responses=_ANALYSIS_RESPONSES,
+)
 async def override_object_association(
-    object_id: UUID, epoch: str, payload: AssociationOverrideRequest
+    object_id: UUID,
+    epoch: str,
+    payload: AssociationOverrideRequest,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    gaia: Annotated[GaiaProvider, Depends(get_gaia_provider)],
+    wise: Annotated[WiseProvider, Depends(get_wise_provider)],
+    mpc: Annotated[MpcProvider, Depends(get_mpc_provider)],
+    user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
 ) -> AssociationOverrideResponse:
-    """Accept, reject, or reassign a per-epoch detection match."""
-    not_implemented()
+    """Accept, reject, or reassign a per-epoch detection match and refit motion."""
+    bundle = _require_object_bundle(store, object_id)
+    if payload.action == "reassign" and payload.detection_id is None:
+        raise APIProblemError(
+            422, "Missing Detection ID", "detection_id is required when action='reassign'."
+        )
+    if payload.detection_id is not None and not store.get_detections_by_ids([payload.detection_id]):
+        raise APIProblemError(
+            404, "Detection Not Found", f"No detection found for {payload.detection_id}."
+        )
+    try:
+        ov = store.apply_association_override(
+            object_id,
+            epoch,
+            action=payload.action,
+            detection_id=payload.detection_id,
+            reason=payload.reason,
+            user_id=user_id,
+        )
+    except LookupError as exc:
+        raise APIProblemError(404, "Epoch Or Detection Not Found", str(exc)) from exc
+
+    existing_models = [str(f["model"]) for f in (bundle.get("motion_fits") or [])] or [
+        "linear",
+        "astrometric5",
+    ]
+    refit_job_id, _ = _enqueue_tracks_job(
+        project_id=bundle["project_id"],
+        object_ids=[object_id],
+        models=existing_models,
+        run_classification=True,
+        override_rev=int(ov["override_rev"]),
+        user_id=user_id,
+        store=store,
+        storage=storage,
+        gaia=gaia,
+        wise=wise,
+        mpc=mpc,
+    )
+    return AssociationOverrideResponse(refit_job_id=refit_job_id, decided_by="user")
 
 
-@router.get("/objects/{object_id}/spectrum", tags=["objects"])
-async def get_object_spectrum(object_id: UUID, epoch: str | None = None) -> SpectrumResponse:
+@router.get("/objects/{object_id}/spectrum", tags=["objects"], responses=_ANALYSIS_RESPONSES)
+async def get_object_spectrum(
+    object_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    epoch: str | None = None,
+) -> SpectrumResponse:
     """Fetch on-the-fly forced-PSF SED across channels (um, uJy)."""
-    not_implemented()
+    bundle = _require_object_bundle(store, object_id)
+    obs_id: UUID | None = None
+    if epoch is not None:
+        obs = resolve_epoch_observation(bundle.get("observations") or [], epoch)
+        if obs is None:
+            raise APIProblemError(404, "Epoch Not Found", f"Epoch {epoch!r} not found for object.")
+        obs_id = UUID(str(obs["id"]))
+    return compute_object_spectrum(bundle, store=store, storage=storage, observation_id=obs_id)
 
 
-@router.get("/objects/{object_id}/lightcurve", tags=["objects"])
-async def get_object_lightcurve(object_id: UUID) -> LightcurveResponse:
+@router.get("/objects/{object_id}/lightcurve", tags=["objects"], responses=_ANALYSIS_RESPONSES)
+async def get_object_lightcurve(
+    object_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+) -> LightcurveResponse:
     """Fetch multi-epoch photometry lightcurve and variability indices."""
-    not_implemented()
+    bundle = _require_object_bundle(store, object_id)
+    return build_object_lightcurve(bundle)
 
 
 @router.post("/compare", status_code=status.HTTP_202_ACCEPTED, tags=["compare"])
