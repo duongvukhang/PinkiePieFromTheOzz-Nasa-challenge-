@@ -27,7 +27,10 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+const API_BASE =
+  (import.meta.env.VITE_API_URL as string | undefined) ??
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  "";
 
 function buildUrl(path: string, params?: Record<string, string | number | undefined>): string {
   const qs = new URLSearchParams();
@@ -43,20 +46,28 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
+  const text = await res.text();
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    const isHtml = /^\s*<(!doctype|html)/i.test(text);
+    throw new ApiError(
+      res.ok ? 502 : res.status,
+      isHtml
+        ? "Backend API unavailable (received HTML instead of JSON). Start the API server on port 8000."
+        : res.statusText || `Invalid JSON response (${res.status})`,
+    );
+  }
   if (!res.ok) {
-    let err: Partial<ProblemDetail> = {};
-    try {
-      err = (await res.json()) as Partial<ProblemDetail>;
-    } catch {
-      /* non-JSON body */
-    }
+    const err = (data ?? {}) as Partial<ProblemDetail>;
     throw new ApiError(
       res.status,
       err.detail ?? err.title ?? res.statusText,
       err.science_impact ?? undefined,
     );
   }
-  return (await res.json()) as T;
+  return data as T;
 }
 
 const postJson = <T>(path: string, body: unknown) =>
@@ -64,7 +75,9 @@ const postJson = <T>(path: string, body: unknown) =>
 
 export async function fetchScienceFrame(url: string): Promise<ScienceBuffer> {
   const res = await fetch(url.startsWith("http") ? url : `${API_BASE}${url}`);
-  if (!res.ok) throw new ApiError(res.status, `Science frame load failed (${res.status})`);
+  if (!res.ok || (res.headers.get("content-type") ?? "").includes("text/html")) {
+    throw new ApiError(res.ok ? 502 : res.status, `Science frame load failed (${res.status})`);
+  }
   const shape = (res.headers.get("X-Shape") ?? "")
     .split(",")
     .map((n) => Number.parseInt(n.trim(), 10))

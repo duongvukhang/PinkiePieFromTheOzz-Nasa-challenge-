@@ -145,7 +145,7 @@ export function Home() {
               src="/images/hero-sky.jpg"
               alt="Deep-sky infrared mosaic of dust and stars captured by NASA Spitzer Space Telescope"
               className="hero-bg-img"
-              fetchPriority="high"
+              {...({ fetchpriority: "high" } as Record<string, string>)}
             />
             <div className="hero-scrim" aria-hidden="true" />
 

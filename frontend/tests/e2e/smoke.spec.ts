@@ -85,10 +85,10 @@ test.describe("SkyTrace Editorial Redesign Smoke Suite", () => {
     await page.getByLabel(/Target name or ICRS coordinates/i).fill("133.795, -7.245");
     await page.getByRole("button", { name: /Inspect sky/i }).click();
     await expect(page).toHaveURL(/\/v\?ra=133\.795&dec=-7\.245/);
-    await page.unroute("**/api/v1/**");
 
     // 2. About Us page & carousel
     await page.goto("/about");
+    await page.unroute("**/api/v1/**");
     await expectNoHorizontalOverflow(page);
     await expect(page.locator("h1")).toContainText(/patience of time/i);
     await page.getByRole("button", { name: "Next chapter" }).click();

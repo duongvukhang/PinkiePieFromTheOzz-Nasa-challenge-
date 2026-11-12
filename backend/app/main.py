@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.deps import (
     APIProblemError,
@@ -27,6 +28,13 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="SPHEREx moving-object detection, astrometry, and trajectory API.",
         openapi_url="/api/v1/openapi.json",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.add_exception_handler(NotImplementedAPIError, not_implemented_handler)
     app.add_exception_handler(APIProblemError, api_problem_handler)

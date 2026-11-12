@@ -32,7 +32,7 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
     setStatusMessage("");
     const displayName = name.trim() || email.split("@")[0] || "Researcher";
 
-    const apiBase = import.meta.env.VITE_API_URL;
+    const apiBase = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL;
     if (apiBase) {
       try {
         const endpoint = isSignUp ? "/api/v1/auth/register" : "/api/v1/auth/login";
