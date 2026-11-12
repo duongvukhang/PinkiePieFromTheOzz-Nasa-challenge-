@@ -16,7 +16,7 @@ celery_app = Celery(
     "sphx",
     broker=os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0"),
     backend=os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1"),
-    include=["app.workers.tasks_fast"],
+    include=["app.workers.tasks_fast", "app.workers.tasks_heavy"],
 )
 
 celery_app.conf.update(

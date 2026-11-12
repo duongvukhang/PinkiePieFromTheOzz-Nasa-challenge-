@@ -8,12 +8,13 @@ from collections.abc import Sequence
 from typing import Any, NoReturn, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.providers import (
     GaiaProvider,
+    MpcProvider,
     ProviderError,
     ProviderQueryError,
     ProviderRateLimitError,
@@ -23,7 +24,7 @@ from app.providers import (
     WiseProvider,
     default_registry,
 )
-from app.schemas.common import ProblemDetail
+from app.schemas.common import JobStatusResponse, ProblemDetail
 from app.services.cache import CacheBackend, get_cache_backend
 from app.services.jobs import JobStore, get_job_store
 from app.services.storage import StorageBackend, get_storage_backend
@@ -255,6 +256,11 @@ def get_wise_provider() -> WiseProvider:
     return default_registry.get("wise", default_catalog="catwise_2020")  # type: ignore[return-value]
 
 
+def get_mpc_provider() -> MpcProvider:
+    """FastAPI dependency returning registered IAU MPC provider."""
+    return default_registry.get("mpc")  # type: ignore[return-value]
+
+
 def get_optional_user_id(request: Request) -> UUID | None:
     """Return authenticated user UUID if credentials are supplied, else None (anonymous)."""
     # PHASE2: wire full session/Bearer token lookup when projects/auth endpoints are implemented
@@ -265,3 +271,45 @@ def get_optional_user_id(request: Request) -> UUID | None:
         except ValueError:
             return None
     return None
+
+
+def enforce_fov_quota(fov_arcmin: float, user_id: UUID | None, *, max_anon: float = 15.0) -> None:
+    """Enforce anonymous FOV quota (arcmin) via RFC 9457 403 error."""
+    if user_id is None and fov_arcmin > max_anon:
+        raise APIProblemError(
+            status.HTTP_403_FORBIDDEN,
+            "FOV Limit Exceeded",
+            f"Anonymous FOV limit is {max_anon:.0f} arcmin; sign in for up to 60 arcmin.",
+            error_type="https://spherex.example/problems/fov-limit",
+            science_impact="Wider fields require authenticated worker quota.",
+        )
+
+
+def require_succeeded_job(
+    job: JobStatusResponse | None,
+    resource_id: UUID,
+    *,
+    label: str,
+    output_key: str,
+) -> JobStatusResponse:
+    """Ensure a background job exists (404), is not active (409), and succeeded (502)."""
+    if job is None:
+        raise APIProblemError(
+            status.HTTP_404_NOT_FOUND,
+            f"{label} Not Found",
+            f"No {label.lower()} found for {resource_id}.",
+        )
+    if job.status in {"queued", "running"}:
+        raise APIProblemError(
+            status.HTTP_409_CONFLICT,
+            f"{label} In Progress",
+            f"{label} job {job.id} is {job.status} ({int((job.progress or 0.0) * 100)}%).",
+        )
+    if job.status != "succeeded" or not job.outputs or output_key not in job.outputs:
+        detail = (
+            str(job.error.get("detail"))
+            if job.error and job.error.get("detail")
+            else f"{label} job failed."
+        )
+        raise APIProblemError(status.HTTP_502_BAD_GATEWAY, f"{label} Failed", detail)
+    return job

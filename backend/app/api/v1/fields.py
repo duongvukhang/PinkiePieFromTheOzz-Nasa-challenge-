@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.deps import (
     APIProblemError,
+    enforce_fov_quota,
     get_cache,
     get_gaia_provider,
     get_optional_user_id,
@@ -18,6 +19,7 @@ from app.api.deps import (
     get_storage,
     get_store,
     get_wise_provider,
+    require_succeeded_job,
 )
 from app.providers import Provider
 from app.schemas.common import DecDeg, JobStatus, ProblemDetail, RaDeg
@@ -33,7 +35,6 @@ from app.schemas.fields import (
 from app.schemas.objects import CatalogOverlayResponse
 from app.services.cache import CacheBackend
 from app.services.fields import (
-    ANONYMOUS_MAX_FOV_ARCMIN,
     get_catalog_overlay_service,
     list_examples_service,
     list_field_frames_service,
@@ -55,18 +56,6 @@ router = APIRouter(
         503: {"model": ProblemDetail},
     }
 )
-
-
-def _enforce_fov_quota(fov_arcmin: float, user_id: UUID | None) -> None:
-    if user_id is None and fov_arcmin > ANONYMOUS_MAX_FOV_ARCMIN:
-        raise APIProblemError(
-            status.HTTP_403_FORBIDDEN,
-            "FOV Limit Exceeded",
-            f"Anonymous FOV limit is {ANONYMOUS_MAX_FOV_ARCMIN:.0f} arcmin; "
-            "sign in for up to 60 arcmin.",
-            error_type="https://spherex.example/problems/fov-limit",
-            science_impact="Wider fields require authenticated worker quota.",
-        )
 
 
 @router.get("/resolve", tags=["fields"])
@@ -101,7 +90,7 @@ async def list_field_frames(
     user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
 ) -> FieldFramesResponse:
     """List available multi-epoch frames for an ICRS field (deg, FOV arcmin)."""
-    _enforce_fov_quota(fov, user_id)
+    enforce_fov_quota(fov, user_id)
     return list_field_frames_service(
         ra=ra,
         dec=dec,
@@ -124,7 +113,7 @@ async def create_cutouts(
     user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
 ) -> CutoutAcceptedResponse:
     """Enqueue asynchronous multi-epoch sky cutout generation."""
-    _enforce_fov_quota(payload.fov_arcmin, user_id)
+    enforce_fov_quota(payload.fov_arcmin, user_id)
     cutout_id = uuid4()
     norm_params = {
         "ra": payload.ra,
@@ -170,26 +159,10 @@ async def get_cutouts(
     store: Annotated[JobStore, Depends(get_store)],
 ) -> CutoutSetResponse:
     """Fetch cutout metadata and display/science/FITS frame URLs."""
-    job = store.get_cutout_job(cutout_id)
-    if job is None:
-        raise APIProblemError(
-            status.HTTP_404_NOT_FOUND,
-            "Cutout Set Not Found",
-            f"No cutout job found for {cutout_id}.",
-        )
-    if job.status in {"queued", "running"}:
-        raise APIProblemError(
-            status.HTTP_409_CONFLICT,
-            "Cutout Job In Progress",
-            f"Cutout job {job.id} is {job.status} ({int((job.progress or 0.0) * 100)}%).",
-        )
-    if job.status != "succeeded" or not job.outputs or "cutout_set" not in job.outputs:
-        detail = (
-            str(job.error.get("detail"))
-            if job.error and job.error.get("detail")
-            else "Cutout job failed."
-        )
-        raise APIProblemError(status.HTTP_502_BAD_GATEWAY, "Cutout Generation Failed", detail)
+    job = require_succeeded_job(
+        store.get_cutout_job(cutout_id), cutout_id, label="Cutout Set", output_key="cutout_set"
+    )
+    assert job.outputs is not None
     return CutoutSetResponse.model_validate(job.outputs["cutout_set"])
 
 
@@ -291,7 +264,7 @@ async def get_catalog_overlay(
 ) -> CatalogOverlayResponse:
     """Fetch reference catalog overlay propagated to target epoch (ICRS deg)."""
     # PHASE2: expand cat literal to 2mass, panstarrs, simbad, sso per ROADMAP §2
-    _enforce_fov_quota(fov, user_id)
+    enforce_fov_quota(fov, user_id)
     provider = gaia if cat == "gaia" else wise
     return get_catalog_overlay_service(
         cat=cat, ra=ra, dec=dec, fov=fov, epoch=epoch, provider=provider, cache=cache

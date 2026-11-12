@@ -12,8 +12,14 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 
-from app.api.deps import APIProblemError, get_optional_user_id, get_storage, get_store
-from app.schemas.common import JobStatus, JobStatusResponse, ProblemDetail
+from app.api.deps import (
+    APIProblemError,
+    get_optional_user_id,
+    get_storage,
+    get_store,
+    require_succeeded_job,
+)
+from app.schemas.common import JobStatus, ProblemDetail
 from app.schemas.fields import UploadCompatibilityReport, UploadResponse
 from app.services.fits_validator import get_upload_max_bytes
 from app.services.jobs import JobStore, compute_params_hash
@@ -120,30 +126,6 @@ def _check_gzip_bomb(raw: bytes, max_bytes: int) -> None:
         return
 
 
-def _require_succeeded_upload(
-    upload_id: UUID, store: JobStore, *, label: str = "Upload"
-) -> JobStatusResponse:
-    job = store.get_upload_job(upload_id)
-    if job is None:
-        raise APIProblemError(
-            status.HTTP_404_NOT_FOUND, f"{label} Not Found", f"No upload found for {upload_id}."
-        )
-    if job.status in {"queued", "running"}:
-        raise APIProblemError(
-            status.HTTP_409_CONFLICT,
-            f"{label} In Progress",
-            f"Upload job {job.id} is {job.status} ({int((job.progress or 0.0) * 100)}%).",
-        )
-    if job.status != "succeeded" or not job.outputs or "report" not in job.outputs:
-        detail = (
-            str(job.error.get("detail"))
-            if job.error and job.error.get("detail")
-            else f"{label} validation failed."
-        )
-        raise APIProblemError(status.HTTP_502_BAD_GATEWAY, f"{label} Failed", detail)
-    return job
-
-
 @router.post("/uploads", status_code=status.HTTP_202_ACCEPTED)
 async def upload_fits(
     file: Annotated[UploadFile, File()],
@@ -174,7 +156,12 @@ async def upload_fits(
             "Supply either reference_upload_id or reference_ra_deg/reference_dec_deg, not both.",
         )
     if reference_upload_id is not None:
-        ref_job = _require_succeeded_upload(reference_upload_id, store, label="Reference Upload")
+        ref_job = require_succeeded_job(
+            store.get_upload_job(reference_upload_id),
+            reference_upload_id,
+            label="Reference Upload",
+            output_key="report",
+        )
         outputs = ref_job.outputs or {}
         if not outputs.get("report", {}).get("valid") or not (
             outputs.get("fits_file_metadata") or {}
@@ -256,6 +243,8 @@ async def get_upload_report(
     store: Annotated[JobStore, Depends(get_store)],
 ) -> UploadCompatibilityReport:
     """Retrieve FITS validation and multi-epoch compatibility report."""
-    job = _require_succeeded_upload(upload_id, store)
+    job = require_succeeded_job(
+        store.get_upload_job(upload_id), upload_id, label="Upload", output_key="report"
+    )
     assert job.outputs is not None
     return UploadCompatibilityReport.model_validate(job.outputs["report"])

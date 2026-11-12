@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
     DataRelease,
+    Detection,
     FitsFile,
     ProcessingJob,
     Project,
@@ -30,10 +31,12 @@ from app.db.models import (
 from app.db.session import get_session_factory
 from app.schemas.common import JobStatus, JobStatusResponse
 from app.schemas.fields import DataReleaseRead
+from app.schemas.objects import DetectionRead
 
 TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 _CUTOUT_TASK = "app.workers.tasks_fast.build_cutouts"
 _UPLOAD_TASK = "app.workers.tasks_fast.validate_upload"
+_ANALYSIS_TASK = "app.workers.tasks_heavy.run_analysis"
 
 
 def compute_params_hash(task: str, params: Mapping[str, Any], release: str = "") -> bytes:
@@ -102,6 +105,18 @@ class JobStore(ABC):
         """Fetch upload validation job associated with `upload_id`."""
         return self.get_job_by_param(_UPLOAD_TASK, "upload_id", str(upload_id))
 
+    def get_analysis_job(self, analysis_id: UUID) -> JobStatusResponse | None:
+        """Fetch analysis job associated with `analysis_id`."""
+        return self.get_job_by_param(_ANALYSIS_TASK, "analysis_id", str(analysis_id))
+
+    @abstractmethod
+    def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
+        """Persist extracted source detections and return records with assigned IDs."""
+
+    @abstractmethod
+    def get_detections_by_ids(self, detection_ids: Sequence[int]) -> list[DetectionRead]:
+        """Fetch persisted detections matching `detection_ids` ordered by ID."""
+
     @abstractmethod
     def register_fits_file(
         self,
@@ -167,6 +182,8 @@ class InMemoryJobStore(JobStore):
         self._by_hash: dict[bytes, UUID] = {}
         self._by_param: dict[tuple[str, str, str], UUID] = {}
         self._fits_files: dict[UUID, dict[str, Any]] = {}
+        self._detections: dict[int, DetectionRead] = {}
+        self._next_det_id = 1
         self._provenance: list[dict[str, Any]] = []
         self._releases: dict[str, DataReleaseRead] = {}
 
@@ -212,7 +229,7 @@ class InMemoryJobStore(JobStore):
             }
             self._jobs[jid] = rec
             self._by_hash[params_hash] = jid
-            for key in ("cutout_id", "upload_id"):
+            for key in ("cutout_id", "upload_id", "analysis_id", "fits_file_id"):
                 if key in params:
                     self._by_param[(task, key, str(params[key]))] = jid
             self._cond.notify_all()
@@ -258,6 +275,21 @@ class InMemoryJobStore(JobStore):
         with self._lock:
             rec = self._fits_files.get(fits_file_id)
             return dict(rec) if rec is not None else None
+
+    def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
+        saved: list[DetectionRead] = []
+        with self._lock:
+            for item in detections:
+                det_id = self._next_det_id
+                self._next_det_id += 1
+                rec = DetectionRead.model_validate({**item, "id": det_id})
+                self._detections[det_id] = rec
+                saved.append(rec)
+        return saved
+
+    def get_detections_by_ids(self, detection_ids: Sequence[int]) -> list[DetectionRead]:
+        with self._lock:
+            return [self._detections[i] for i in detection_ids if i in self._detections]
 
     def update_job(
         self,
@@ -445,8 +477,8 @@ class SqlAlchemyJobStore(JobStore):
                 row = FitsFile(
                     id=fits_file_id,
                     origin=str(metadata.get("origin", "upload")),
-                    provider="upload",
-                    obs_id=str(fits_file_id),
+                    provider=str(metadata.get("provider", "upload")),
+                    obs_id=str(metadata.get("obs_id") or fits_file_id),
                     uploader_id=valid_user,
                     storage_path=storage_path,
                     sha256=bytes.fromhex(sha256_hex),
@@ -510,6 +542,27 @@ class SqlAlchemyJobStore(JobStore):
                 "header_summary": row.header_summary,
                 "validation": row.validation,
             }
+
+    def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
+        if not detections:
+            return []
+        with self._session_factory() as session:
+            rows = [Detection(**dict(item)) for item in detections]
+            session.add_all(rows)
+            session.commit()
+            for row in rows:
+                session.refresh(row)
+            return [DetectionRead.model_validate(row) for row in rows]
+
+    def get_detections_by_ids(self, detection_ids: Sequence[int]) -> list[DetectionRead]:
+        ids = [int(i) for i in detection_ids]
+        if not ids:
+            return []
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(Detection).where(Detection.id.in_(ids)).order_by(Detection.id)
+            ).all()
+            return [DetectionRead.model_validate(row) for row in rows]
 
     def update_job(
         self,
