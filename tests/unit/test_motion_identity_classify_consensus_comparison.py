@@ -328,7 +328,8 @@ def test_classify_asteroid_artifact_candidate_consensus_and_compare() -> None:
     assert set(PHYSICAL_CLASSES).issubset(cls_cand.probabilities.keys())
     assert pytest.approx(sum(cls_cand.probabilities[c] for c in PHYSICAL_CLASSES), abs=1e-6) == 1.0
     assert cls_cand.label == "candidate_new_mover"
-    assert "not confirmed" in cls_cand.notes_text.lower()
+    assert "unverified" in cls_cand.notes_text.lower()
+    assert "confirmed" not in cls_cand.notes_text.lower()
 
     # With catalog + frames -> star_pm + Consistent consensus across E1/E2/E3
     trs_cat = link_epochs([extract_sources(f.fits_bytes) for f in seq], catalog_sources=cat_entry)
@@ -569,3 +570,273 @@ def test_expand_multi_hdu_frames_multiple_2d_science_hdus() -> None:
     assert all(fr.shape == (ny, nx) and fr.epoch.exptime_s == 120.0 for fr in frames)
     mjds = [fr.epoch.mjd_tdb_mid for fr in frames]
     assert mjds[0] < mjds[1] < mjds[2]
+
+
+def test_consensus_e2_independent_pm_cov_maximal_clique_e4_and_conflict() -> None:
+    """Verify E2 catalog propagation/PM cov, maximal consistent subset, E4 agreement, Conflict."""
+    from sphx_core.identity import EpochDetection, TrackedSource, TrackState
+
+    ra0, dec0 = 160.0, 10.0
+    mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
+    dets: list[EpochDetection] = []
+    for k in range(4):
+        dt = k * 0.5
+        ra_k, dec_k = tangent_arcsec_to_sky(4.0 * dt, -2.0 * dt, ra0, dec0)
+        dets.append(
+            EpochDetection(
+                detection_id=f"d{k}",
+                epoch_index=k,
+                epoch_id=f"e{k}",
+                mjd_tdb=mjd0 + k * 182.625,
+                detector_id=1,
+                x_px=30.0,
+                y_px=30.0,
+                ra_deg=float(ra_k),
+                dec_deg=float(dec_k),
+                cov_sky_arcsec2=(0.0025, 0.0025, 0.0),
+                cov_px=(0.01, 0.01, 0.0),
+                sig_ra_arcsec=0.05,
+                sig_dec_arcsec=0.05,
+                flux=200.0,
+                flux_err=5.0,
+                flux_band_mjy={"B2": (200.0, 5.0)},
+                snr=40.0,
+                real_bogus=0.95,
+                flags=0,
+                band_id="B2",
+            )
+        )
+    st = TrackState(
+        object_id="obj_cons",
+        label="A",
+        ref_epoch_jyear=2025.5,
+        ra0_deg=ra0,
+        dec0_deg=dec0,
+        theta_5=(0.0, 0.0, 4.0, -2.0, 0.0),
+        cov_5x5=tuple(tuple(1e-4 if i == j else 0.0 for j in range(5)) for i in range(5)),
+        mag_bands={"B2": 14.2},
+        sigma_var_mag=0.02,
+        model_type="LINEAR_4P",
+        chi2_nu=1.0,
+        chi2_mu=1000.0,
+        delta_bic=500.0,
+        vim_r=0.0,
+        flags=0,
+    )
+    tr = TrackedSource(
+        object_id="obj_cons",
+        label="A",
+        public_id=None,
+        status="active",
+        detections=dets,
+        links=[],
+        state=st,
+        confidence=0.99,
+        gaia_id=123456,
+    )
+    cat = [
+        {
+            "catalog": "gaiadr3",
+            "source_id": "123456",
+            "gaia_id": 123456,
+            "ra_deg": ra0,
+            "dec_deg": dec0,
+            "ref_epoch_mjd": mjd0,
+            "pmra_mas_yr": 4000.0,
+            "pmdec_mas_yr": -2000.0,
+            "pmra_err_mas_yr": 25.0,
+            "pmdec_err_mas_yr": 35.0,
+            "mags": {"G": 14.0, "Ks": 10.0, "W1": 9.8, "W2": 9.6},
+        }
+    ]
+    # Conflicting E4 anchor fit (different PM vector at p < 0.01) excluded from consistent_vecs
+    ra_a1, dec_a1 = tangent_arcsec_to_sky(1.0 * 5.0, 1.0 * 5.0, ra0, dec0)
+    bad_anchors = [
+        {"mjd_tdb": mjd0, "ra_deg": ra0, "dec_deg": dec0, "sigma_arcsec": 0.05},
+        {
+            "mjd_tdb": mjd0 + 5.0 * 365.25,
+            "ra_deg": float(ra_a1),
+            "dec_deg": float(dec_a1),
+            "sigma_arcsec": 0.05,
+        },
+    ]
+    cons_bad = evaluate_mover_consensus(tr, anchors=bad_anchors, catalog_sources=cat)
+    assert cons_bad.e2 is not None and cons_bad.e4 is not None
+    assert cons_bad.e2.cov_mu[0][0] == pytest.approx(0.025**2)
+    assert cons_bad.e2.cov_mu[1][1] == pytest.approx(0.035**2)
+    assert cons_bad.e4_mover is True
+    assert any("vector disagreement" in d for d in cons_bad.disagreements)
+    # Maximal consistent subset {E2, E3} excludes conflicting E4 (~1.0, 1.0)
+    assert abs(cons_bad.consensus_pmra_arcsec_yr - 4.0) < 0.15
+    assert abs(cons_bad.consensus_pmdec_arcsec_yr - (-2.0)) < 0.15
+    assert cons_bad.verdict == "Conflict"
+
+    # Mixed active_mov (E4 non-mover vs E2, E3 movers) with no explanatory flag -> Conflict
+    stat_anchors = [
+        {"mjd_tdb": mjd0, "ra_deg": ra0, "dec_deg": dec0, "sigma_arcsec": 0.05},
+        {"mjd_tdb": mjd0 + 5.0 * 365.25, "ra_deg": ra0, "dec_deg": dec0, "sigma_arcsec": 0.05},
+    ]
+    cons_mix = evaluate_mover_consensus(tr, anchors=stat_anchors, catalog_sources=cat)
+    assert cons_mix.e4_mover is False and cons_mix.e2_mover and cons_mix.e3_mover
+    assert any("Mover/non-mover" in d for d in cons_mix.disagreements)
+    assert cons_mix.agreement_score < 1.0
+    assert cons_mix.verdict == "Conflict"
+    assert set(cons_mix.method_top_classes) >= {"E2", "E3", "E4"}
+    assert all(
+        c in PHYSICAL_CLASSES or c in ("mover", "static")
+        for c in cons_mix.method_top_classes.values()
+    )
+
+
+def test_classify_catwise_gate_mover_renorm_indices_disagreements_and_cap() -> None:
+    """Verify CatWISE gating, mover renorm, D.2 indices, method disagreements, and temp cap."""
+    from sphx_core.classify import MOVING_CLASSES, SEDPoint, _compute_log_likelihoods
+    from sphx_core.identity import EpochDetection, TrackedSource, TrackState
+
+    ra0, dec0 = 133.8, -7.24
+    mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
+    dets = []
+    for k in range(3):
+        dt = k * 0.5
+        ra_k, dec_k = tangent_arcsec_to_sky(-5.0 * dt, 0.5 * dt, ra0, dec0)
+        dets.append(
+            EpochDetection(
+                detection_id=f"w{k}",
+                epoch_index=k,
+                epoch_id=f"e{k}",
+                mjd_tdb=mjd0 + k * 182.625,
+                detector_id=5,
+                x_px=30.0,
+                y_px=30.0,
+                ra_deg=float(ra_k),
+                dec_deg=float(dec_k),
+                cov_sky_arcsec2=(0.0025, 0.0025, 0.0),
+                cov_px=(0.01, 0.01, 0.0),
+                sig_ra_arcsec=0.05,
+                sig_dec_arcsec=0.05,
+                flux=150.0,
+                flux_err=5.0,
+                flux_band_mjy={"B6": (150.0, 5.0)},
+                snr=30.0,
+                real_bogus=0.95,
+                flags=0,
+                band_id="B6",
+            )
+        )
+    st = TrackState(
+        object_id="obj_cw",
+        label="A",
+        ref_epoch_jyear=2025.5,
+        ra0_deg=ra0,
+        dec0_deg=dec0,
+        theta_5=(0.0, 0.0, -5.0, 0.5, 0.0),
+        cov_5x5=tuple(tuple(1e-4 if i == j else 0.0 for j in range(5)) for i in range(5)),
+        mag_bands={"B6": 14.5},
+        sigma_var_mag=0.02,
+        model_type="LINEAR_4P",
+        chi2_nu=1.0,
+        chi2_mu=1200.0,
+        delta_bic=600.0,
+        vim_r=0.0,
+        flags=0,
+    )
+    tr = TrackedSource(
+        object_id="obj_cw",
+        label="A",
+        public_id=None,
+        status="active",
+        detections=dets,
+        links=[],
+        state=st,
+        confidence=0.99,
+        gaia_id=None,
+    )
+    # 1) CatWISE match (no Gaia ID) at match_prob >= 0.9 must gate out candidate_new_mover
+    cat_cw = [
+        {
+            "catalog": "catwise2020",
+            "source_id": "CW0855",
+            "gaia_id": None,
+            "ra_deg": ra0,
+            "dec_deg": dec0,
+            "ref_epoch_mjd": mjd0,
+            "pmra_mas_yr": -5000.0,
+            "pmdec_mas_yr": 500.0,
+            "mags": {"W1": 16.5, "W2": 13.7},
+        }
+    ]
+    cls_cw = classify_source(tr, catalog_sources=cat_cw)
+    assert cls_cw.label != "candidate_new_mover"
+    assert cls_cw.probabilities["candidate_new_mover"] < 0.01
+
+    # 2) Clamped mover probability must rescale MOVING_CLASSES and renormalize PHYSICAL_CLASSES
+    tr_1ep = replace(tr, detections=dets[:1])
+    cls_1ep = classify_source(tr_1ep, catalog_sources=[])
+    assert pytest.approx(sum(cls_1ep.probabilities[c] for c in PHYSICAL_CLASSES), abs=1e-6) == 1.0
+    assert cls_1ep.probabilities["mover"] <= 0.05 + 1e-9
+    assert cls_1ep.probabilities["mover"] == pytest.approx(
+        sum(cls_1ep.probabilities[c] for c in MOVING_CLASSES), abs=1e-9
+    )
+    assert cls_1ep.label not in MOVING_CLASSES
+    assert cls_1ep.top_prob < 0.99
+
+    # 3) D.2 spectral indices: significant narrow-band CH4 trough triggers, noisy does not
+    feat_sig = {
+        "mfit": None,
+        "all_saturated": False,
+        "bad_art": False,
+        "n_epochs": 3,
+        "matches": [],
+        "gaia_id": None,
+        "sed_points": [
+            SEDPoint(3.32, 0.15, None, 10.0, 2.0, mjd0, 0),
+            SEDPoint(4.00, 0.20, None, 80.0, 4.0, mjd0, 0),
+            SEDPoint(4.65, 0.40, None, 90.0, 4.0, mjd0, 0),
+            SEDPoint(1.50, 0.40, None, 15.0, 2.0, mjd0, 0),
+        ],
+        "chi2_var_nu": 1.0,
+        "amp_mag": 0.0,
+        "period_days": None,
+        "monopole_favored": False,
+        "dipole_favored": False,
+        "max_diff_snr": 0.0,
+        "flags": 0,
+        "elong_med": 1.0,
+        "rb_med": 0.9,
+        "is_transient": False,
+    }
+    _, ev_sig, sub_sig = _compute_log_likelihoods(feat_sig, None, False)
+    assert sub_sig == "T" and any("CH4 index" in e for e in ev_sig)
+    assert any("4.5 um excess" in e for e in ev_sig)
+
+    feat_noisy = dict(feat_sig)
+    feat_noisy["sed_points"] = [
+        SEDPoint(3.32, 0.15, None, 10.0, 12.0, mjd0, 0),
+        SEDPoint(4.00, 0.20, None, 25.0, 15.0, mjd0, 0),
+    ]
+    _, ev_noisy, sub_noisy = _compute_log_likelihoods(feat_noisy, None, False)
+    assert sub_noisy is None and not any("CH4" in e for e in ev_noisy)
+
+    # 4) Cross-method disagreement detected between sed (BD) and motion (static)
+    dets_stat = [replace(d, ra_deg=ra0, dec_deg=dec0) for d in dets]
+    tr_conflict = replace(tr, detections=dets_stat)
+    cls_conf = classify_source(
+        tr_conflict,
+        catalog_sources=[
+            {
+                "catalog": "catwise2020",
+                "source_id": "CW_STAT",
+                "ra_deg": ra0,
+                "dec_deg": dec0,
+                "ref_epoch_mjd": mjd0,
+                "mags": {"W1": 16.5, "W2": 13.0},
+            }
+        ],
+    )
+    assert any("sed favors" in d and "motion favors" in d for d in cls_conf.disagreements)
+
+    # 5) Planet X candidate notes must never contain "confirmed"
+    cls_px = classify_source(tr, catalog_sources=[], is_planet_x_candidate=True)
+    assert cls_px.label == "candidate_planet_x"
+    assert "unverified" in cls_px.notes_text.lower()
+    assert "confirmed" not in cls_px.notes_text.lower()

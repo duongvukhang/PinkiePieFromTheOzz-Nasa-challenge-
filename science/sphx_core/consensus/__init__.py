@@ -12,11 +12,19 @@ from numpy.typing import NDArray
 from scipy.stats import chi2 as chi2_dist
 
 from sphx_core.calib import HARD_BAD_MASK, DetectionFlag
-from sphx_core.classify import classify_source
+from sphx_core.classify import MOVING_CLASSES, PHYSICAL_CLASSES, classify_source
 from sphx_core.difference import difference_frames
 from sphx_core.identity import TrackedSource, crossmatch_catalog
-from sphx_core.motion import MotionFitResult, as_frame_data, fit_motion
-from sphx_core.wcs import local_wcs_jacobian, sky_to_tangent_arcsec
+from sphx_core.motion import (
+    MotionFitResult,
+    MotionMeasurement,
+    _anchor_to_measurement,
+    as_frame_data,
+    fit_motion,
+    observer_barycentric_au,
+    parallax_factors,
+)
+from sphx_core.wcs import local_wcs_jacobian, sky_to_tangent_arcsec, tangent_arcsec_to_sky
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,9 @@ class ConsensusResult:
     agreement_score: float
     verdict: str
     notes: list[str] = field(default_factory=list)
+    e4_mover: bool = False
+    method_top_classes: dict[str, str] = field(default_factory=dict)
+    class_agreement_score: float = 1.0
 
 
 def _pair_consistency(a: EstimatorVector, b: EstimatorVector) -> tuple[float, float]:
@@ -93,13 +104,30 @@ def evaluate_mover_consensus(
         "E3", bool(mfit.is_mover), mfit.pmra_arcsec_yr, mfit.pmdec_arcsec_yr, _mu_cov2(mfit)
     )
 
-    # E2: Independent external catalog prediction vs SPHEREx observations
+    # E2: Independent external catalog prediction vs SPHEREx observations (§F.1)
+    clean_dets = [
+        d
+        for d in track.detections
+        if not (d.flags & int(HARD_BAD_MASK)) and d.ra_deg is not None and d.dec_deg is not None
+    ]
     matches = list(track.catalog_matches)
     if not matches:
+        ref_d = clean_dets[0] if clean_dets else None
+        ref_ra = (
+            float(ref_d.ra_deg)
+            if ref_d is not None and ref_d.ra_deg is not None
+            else mfit.ra_ref_deg
+        )
+        ref_dec = (
+            float(ref_d.dec_deg)
+            if ref_d is not None and ref_d.dec_deg is not None
+            else mfit.dec_ref_deg
+        )
+        ref_mjd = float(ref_d.mjd_tdb) if ref_d is not None else mfit.ref_epoch_mjd_tdb
         matches = crossmatch_catalog(
-            mfit.ra_ref_deg,
-            mfit.dec_ref_deg,
-            mfit.ref_epoch_mjd_tdb,
+            ref_ra,
+            ref_dec,
+            ref_mjd,
             max_radius_arcsec=3.0,
             catalog_sources=catalog_sources,
         )
@@ -107,38 +135,62 @@ def evaluate_mover_consensus(
     e2: EstimatorVector | None = None
     if cat is not None and cat.pmra_arcsec_yr is not None and cat.pmdec_arcsec_yr is not None:
         cat_mu = math.hypot(cat.pmra_arcsec_yr, cat.pmdec_arcsec_yr)
-        # Verify catalog trajectory agrees with observed positions while stationary null does not.
-        clean_dets = [
-            d
-            for d in track.detections
-            if not (d.flags & int(HARD_BAD_MASK)) and d.ra_deg is not None and d.dec_deg is not None
-        ]
+        cat_t0 = (
+            float(cat.ref_epoch_mjd)
+            if cat.ref_epoch_mjd is not None
+            else (float(clean_dets[0].mjd_tdb) if clean_dets else mfit.ref_epoch_mjd_tdb)
+        )
+        sig_pmra = max(
+            float(cat.pmra_err_arcsec_yr)
+            if cat.pmra_err_arcsec_yr is not None and cat.pmra_err_arcsec_yr > 0.0
+            else (0.02 if cat.gaia_id is not None else 0.15),
+            1e-4,
+        )
+        sig_pmdec = max(
+            float(cat.pmdec_err_arcsec_yr)
+            if cat.pmdec_err_arcsec_yr is not None and cat.pmdec_err_arcsec_yr > 0.0
+            else (0.02 if cat.gaia_id is not None else 0.15),
+            1e-4,
+        )
+        sig_pos0 = max(float(cat.ra_err_arcsec or 0.0), float(cat.dec_err_arcsec or 0.0))
+        plx_as = float(cat.parallax_mas or 0.0) * 1e-3
+        pa0, pd0 = (
+            parallax_factors(observer_barycentric_au(cat_t0), cat.ra_deg, cat.dec_deg)
+            if plx_as > 0.0
+            else (0.0, 0.0)
+        )
         null_chi2 = 0.0
         cat_resid_chi2 = 0.0
         for d in clean_dets:
             if d.ra_deg is None or d.dec_deg is None:
                 continue
-            dt_d = (d.mjd_tdb - mfit.ref_epoch_mjd_tdb) / 365.25
-            xi_o, eta_o = sky_to_tangent_arcsec(
-                d.ra_deg, d.dec_deg, mfit.ra_ref_deg, mfit.dec_ref_deg
-            )
-            sig = max(d.sig_ra_arcsec, d.sig_dec_arcsec, 0.05)
-            dx_c = float(xi_o) - cat.pmra_arcsec_yr * dt_d
-            dy_c = float(eta_o) - cat.pmdec_arcsec_yr * dt_d
-            cat_resid_chi2 += (dx_c**2 + dy_c**2) / (sig**2)
-            null_chi2 += (float(xi_o) ** 2 + float(eta_o) ** 2) / (sig**2)
+            dt_d = (d.mjd_tdb - cat_t0) / 365.25
+            dxi_p = cat.pmra_arcsec_yr * dt_d
+            deta_p = cat.pmdec_arcsec_yr * dt_d
+            if plx_as > 0.0:
+                pa_d, pd_d = parallax_factors(
+                    observer_barycentric_au(d.mjd_tdb), cat.ra_deg, cat.dec_deg
+                )
+                dxi_p += plx_as * (pa_d - pa0)
+                deta_p += plx_as * (pd_d - pd0)
+            ra_pred, dec_pred = tangent_arcsec_to_sky(dxi_p, deta_p, cat.ra_deg, cat.dec_deg)
+            dx_c, dy_c = sky_to_tangent_arcsec(d.ra_deg, d.dec_deg, float(ra_pred), float(dec_pred))
+            xi_null, eta_null = sky_to_tangent_arcsec(d.ra_deg, d.dec_deg, cat.ra_deg, cat.dec_deg)
+            sig_cat_d = math.hypot(sig_pos0, abs(dt_d) * max(sig_pmra, sig_pmdec))
+            sig = math.hypot(max(d.sig_ra_arcsec, d.sig_dec_arcsec, 0.05), sig_cat_d)
+            cat_resid_chi2 += (float(dx_c) ** 2 + float(dy_c) ** 2) / (sig**2)
+            null_chi2 += (float(xi_null) ** 2 + float(eta_null) ** 2) / (sig**2)
         e2_ok = (
             cat_mu > 0.05
             and (null_chi2 > 25.0)
             and (cat_resid_chi2 / max(len(clean_dets), 1) < 12.0)
         )
-        e2_sig = 0.02 if cat.gaia_id is not None else 0.15
         e2 = EstimatorVector(
             estimator_id="E2",
             is_mover=e2_ok,
             pmra_arcsec_yr=float(cat.pmra_arcsec_yr),
             pmdec_arcsec_yr=float(cat.pmdec_arcsec_yr),
-            cov_mu=((e2_sig**2, 0.0), (0.0, e2_sig**2)),
+            cov_mu=((sig_pmra**2, 0.0), (0.0, sig_pmdec**2)),
             notes=f"{cat.catalog}:{cat.source_id}",
         )
 
@@ -204,25 +256,48 @@ def evaluate_mover_consensus(
     # E4: Anchor-only PM fit (independent of SPHEREx images)
     e4: EstimatorVector | None = None
     if anchors and len(anchors) >= 2:
-        fit_a = fit_motion(anchors, fit_parallax=False)
+        anc_meas = [
+            a if isinstance(a, MotionMeasurement) else _anchor_to_measurement(a) for a in anchors
+        ]
+        fit_a = fit_motion(anc_meas, fit_parallax=False)
         e4 = EstimatorVector(
             "E4", fit_a.is_mover, fit_a.pmra_arcsec_yr, fit_a.pmdec_arcsec_yr, _mu_cov2(fit_a)
         )
 
-    # Pairwise vector chi2 consistency checks (p < 0.01 disagreement)
+    # Pairwise vector chi2 consistency checks (p < 0.01); keep maximal p >= 0.01 clique.
     est_list = [ev for ev in (e1, e2, e3, e4) if ev is not None and ev.is_mover]
     pw_chi2: dict[str, tuple[float, float]] = {}
     disagreements: list[str] = []
-    consistent_vecs: list[EstimatorVector] = []
+    pair_ok: dict[tuple[int, int], bool] = {}
     for i, ei in enumerate(est_list):
-        consistent_vecs.append(ei)
-        for ej in est_list[i + 1 :]:
+        for j in range(i + 1, len(est_list)):
+            ej = est_list[j]
             c2, p_val = _pair_consistency(ei, ej)
             pw_chi2[f"{ei.estimator_id}-{ej.estimator_id}"] = (c2, p_val)
+            pair_ok[(i, j)] = p_val >= 0.01
             if p_val < 0.01:
                 disagreements.append(
                     f"{ei.estimator_id} vs {ej.estimator_id} vector disagreement (p={p_val:.3e})"
                 )
+
+    best_idx: tuple[int, ...] = ()
+    best_key = (0, 0.0, 0.0)
+    for mask in range(1, 1 << len(est_list)):
+        idxs = tuple(i for i in range(len(est_list)) if mask & (1 << i))
+        if all(
+            pair_ok[(idxs[a], idxs[b])] for a in range(len(idxs)) for b in range(a + 1, len(idxs))
+        ):
+            s_chi2 = sum(
+                pw_chi2[f"{est_list[idxs[a]].estimator_id}-{est_list[idxs[b]].estimator_id}"][0]
+                for a in range(len(idxs))
+                for b in range(a + 1, len(idxs))
+            )
+            prec = sum(1.0 / max(float(np.trace(est_list[i].cov_mu)), 1e-12) for i in idxs)
+            key = (len(idxs), -s_chi2, prec)
+            if key > best_key:
+                best_key = key
+                best_idx = idxs
+    consistent_vecs = [est_list[i] for i in best_idx]
 
     # Inverse-covariance weighted consensus of consistent motion vectors
     if consistent_vecs:
@@ -252,18 +327,60 @@ def evaluate_mover_consensus(
         )
 
     cls = classify_source(track, catalog_sources=catalog_sources)
-    active_mov = [ev.is_mover for ev in (e1, e2, e3) if ev is not None]
-    n_agree = sum(int(v == (cls.probabilities.get("mover", 0.0) >= 0.5)) for v in active_mov)
-    agreement = n_agree / max(len(active_mov), 1)
+    active_ests = [ev for ev in (e1, e2, e3, e4) if ev is not None]
+    active_mov = [ev.is_mover for ev in active_ests]
+    if any(active_mov) and not all(active_mov):
+        mov_ids = ",".join(ev.estimator_id for ev in active_ests if ev.is_mover)
+        stat_ids = ",".join(ev.estimator_id for ev in active_ests if not ev.is_mover)
+        disagreements.append(
+            f"Mover/non-mover estimator disagreement ({mov_ids} mover vs {stat_ids} non-mover)"
+        )
+
+    # Multi-class agreement A = max_c #{m : c_hat_m = c} / M across active methods (§F.2)
+    non_moving = frozenset(PHYSICAL_CLASSES) - MOVING_CLASSES
+    method_supports: list[frozenset[str]] = []
+    method_tops: dict[str, str] = {}
+    for ev in active_ests:
+        supp = MOVING_CLASSES if ev.is_mover else non_moving
+        method_supports.append(supp)
+        method_tops[ev.estimator_id] = (
+            cls.label if cls.label in supp else ("mover" if ev.is_mover else "static")
+        )
+    cls_supports: list[frozenset[str]] = []
+    for m, vec in cls.method_contributions.items():
+        if not vec:
+            continue
+        v_max, v_min = max(vec.values()), min(vec.values())
+        if v_max - v_min <= 1e-6:
+            continue
+        tops = frozenset(c for c, v in vec.items() if v >= v_max - 1e-6)
+        cls_supports.append(tops)
+        method_supports.append(tops)
+        method_tops[m] = (
+            cls.label
+            if cls.label in tops
+            else max(PHYSICAL_CLASSES, key=lambda c: vec.get(c, -1e9))
+        )
+    agreement = (
+        max(sum(1 for s in method_supports if c in s) for c in PHYSICAL_CLASSES)
+        / len(method_supports)
+        if method_supports
+        else 1.0
+    )
+    class_agreement = (
+        max(sum(1 for s in cls_supports if c in s) for c in PHYSICAL_CLASSES) / len(cls_supports)
+        if cls_supports
+        else agreement
+    )
 
     if len(disagreements) == 0 and (all(active_mov) or not any(active_mov)):
         verdict = "Consistent"
-    elif len(disagreements) <= 1 and (
+    elif len(disagreements) == 1 and (
         track.flags & int(DetectionFlag.SATURATED | DetectionFlag.BLENDED)
     ):
         verdict = "Tension"
     else:
-        verdict = "Conflict" if disagreements else "Tension"
+        verdict = "Conflict"
 
     return ConsensusResult(
         e1_mover=bool(e1.is_mover) if e1 is not None else False,
@@ -284,6 +401,9 @@ def evaluate_mover_consensus(
         agreement_score=agreement,
         verdict=verdict,
         notes=notes,
+        e4_mover=bool(e4.is_mover) if e4 is not None else False,
+        method_top_classes=method_tops,
+        class_agreement_score=class_agreement,
     )
 
 

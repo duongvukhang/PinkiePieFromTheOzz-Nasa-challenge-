@@ -67,6 +67,11 @@ class CatalogMatch:
     parallax_mas: float | None = None
     mags: dict[str, float] = field(default_factory=dict)
     binary_separation_arcsec: float | None = None
+    ref_epoch_mjd: float | None = None
+    pmra_err_arcsec_yr: float | None = None
+    pmdec_err_arcsec_yr: float | None = None
+    ra_err_arcsec: float | None = None
+    dec_err_arcsec: float | None = None
 
 
 @dataclass(frozen=True)
@@ -530,6 +535,11 @@ def crossmatch_catalog(
                 parallax_mas=entry["parallax_mas"],
                 mags=dict(entry["mags"]),
                 binary_separation_arcsec=entry["binary_separation_arcsec"],
+                ref_epoch_mjd=float(mjd_tdb),
+                pmra_err_arcsec_yr=entry["pmra_err_mas_yr"] * 1e-3,
+                pmdec_err_arcsec_yr=entry["pmdec_err_mas_yr"] * 1e-3,
+                ra_err_arcsec=entry["ra_err_mas"] * 1e-3,
+                dec_err_arcsec=entry["dec_err_mas"] * 1e-3,
             )
         )
     matches.sort(key=lambda m: (-m.match_prob, m.sep_arcsec))

@@ -61,6 +61,8 @@ CLASS_WEIGHTS: dict[str, float] = {
     "morph": 0.85,
     "xmatch": 0.85,
 }
+_MAX_METHOD_SPAN = 6.0
+_SOFTMAX_TEMP = 1.3
 
 
 @dataclass(frozen=True)
@@ -185,6 +187,15 @@ def _build_sed(
     return points, (float(max(mjds) - min(mjds)) if len(mjds) >= 2 else 0.0)
 
 
+def _weighted_sed_mean(pts: Sequence[SEDPoint]) -> tuple[float, float, float]:
+    w = np.array([1.0 / (max(pt.flux_err, 1e-9) ** 2) for pt in pts], dtype=np.float64)
+    f = np.array([pt.flux for pt in pts], dtype=np.float64)
+    w_sum = float(np.sum(w))
+    f_mean = float(np.sum(w * f) / max(w_sum, 1e-12))
+    e_mean = 1.0 / math.sqrt(max(w_sum, 1e-12))
+    return f_mean, e_mean, f_mean / max(e_mean, 1e-9)
+
+
 def _band_flux_summary(
     points: Sequence[SEDPoint],
 ) -> tuple[dict[str, tuple[float, float, float]], bool, bool]:
@@ -193,21 +204,38 @@ def _band_flux_summary(
     for p in points:
         if p.band_id and not (p.flags & int(DetectionFlag.SATURATED)):
             by_b.setdefault(p.band_id, []).append(p)
-    out: dict[str, tuple[float, float, float]] = {}
-    for b, pts in by_b.items():
-        w = np.array([1.0 / (max(pt.flux_err, 1e-9) ** 2) for pt in pts], dtype=np.float64)
-        f = np.array([pt.flux for pt in pts], dtype=np.float64)
-        w_sum = float(np.sum(w))
-        f_mean = float(np.sum(w * f) / max(w_sum, 1e-12))
-        e_mean = 1.0 / math.sqrt(max(w_sum, 1e-12))
-        out[b] = (f_mean, e_mean, f_mean / max(e_mean, 1e-9))
-
+    out = {b: _weighted_sed_mean(pts) for b, pts in by_b.items()}
     sat_opt = any(
         p.band_id in ("B1", "B2", "B3") and (p.flags & int(DetectionFlag.SATURATED)) for p in points
     )
     det_opt = sat_opt or any(b in ("B1", "B2", "B3") and out[b][2] >= 4.0 for b in out)
     det_ir = any(b in ("B5", "B6") and out[b][2] >= 4.0 for b in out)
     return out, det_opt, det_ir
+
+
+def _sed_window_flux(
+    points: Sequence[SEDPoint], lam_lo: float, lam_hi: float
+) -> tuple[float, float, float] | None:
+    """Return inverse-variance weighted `(flux, err, snr)` in `[lam_lo, lam_hi]` um."""
+    pts = [
+        p
+        for p in points
+        if not (p.flags & int(DetectionFlag.SATURATED)) and lam_lo <= p.wavelength_um <= lam_hi
+    ]
+    return _weighted_sed_mean(pts) if pts else None
+
+
+def _flux_ratio_with_err(
+    num: tuple[float, float, float] | None, den: tuple[float, float, float] | None
+) -> tuple[float, float, float] | None:
+    """Return `(ratio, sigma_ratio, z_from_unity)` with propagated flux errors."""
+    if num is None or den is None or den[0] <= 0.0:
+        return None
+    f1, e1, _ = num
+    f2, e2, _ = den
+    r = f1 / max(f2, 1e-9)
+    sig_r = max(abs(r) * math.hypot(e1 / max(abs(f1), 1e-9), e2 / max(abs(f2), 1e-9)), 1e-9)
+    return r, sig_r, (r - 1.0) / sig_r
 
 
 def _assess_features_from_track(
@@ -598,9 +626,16 @@ def _compute_log_likelihoods(
         + [float(s.rate_arcsec_hr or 2.0) for s in streaks]
         + [float(t.rate_arcsec_hr) for t in tracklets]
     )
-
     all_sat = bool(feat["all_saturated"])
     bad_art = bool(feat["bad_art"])
+    is_sso_rate = (rate_hr >= 0.4) or has_streak or has_tracklet
+    sig_mover_pos = (
+        (chi2_mu > 25.0)
+        and (dbic_mot > 10.0)
+        and (not vim)
+        and (not all_sat)
+        and (not feat["monopole_favored"])
+    )
     n_ep = int(feat["n_epochs"])
     matches: list[CatalogMatch] = feat["matches"]
     gaia_id = feat["gaia_id"]
@@ -619,14 +654,47 @@ def _compute_log_likelihoods(
                     cat_pm = c_mu
                     cat_pm_snr = c_mu / 0.02
 
-    band_f, det_opt, det_ir = _band_flux_summary(feat["sed_points"])
+    sed_pts: Sequence[SEDPoint] = feat["sed_points"]
+    band_f, det_opt, det_ir = _band_flux_summary(sed_pts)
     w1_w2 = (mags["W1"] - mags["W2"]) if ("W1" in mags and "W2" in mags) else None
     g_ks = (mags["G"] - mags["Ks"]) if ("G" in mags and "Ks" in mags) else None
     ks_w2 = (mags["Ks"] - mags["W2"]) if ("Ks" in mags and "W2" in mags) else None
-    ch4_ratio = (
-        (band_f["B6"][0] / max(band_f["B4"][0], band_f["B4"][1], 1e-6))
-        if ("B6" in band_f and "B4" in band_f)
+
+    # §D.2 spectral indices from SEDPoint wavelengths with propagated sigma_ratio
+    f_ch4_trough = _sed_window_flux(sed_pts, 3.25, 3.40)
+    f_ch4_cont = _sed_window_flux(sed_pts, 3.90, 4.10)
+    ch4_idx = _flux_ratio_with_err(f_ch4_trough, f_ch4_cont)
+    f_co2_band = _sed_window_flux(sed_pts, 4.20, 4.35)
+    f_co2_cont = _sed_window_flux(sed_pts, 4.00, 4.15)
+    co2_idx = _flux_ratio_with_err(f_co2_band, f_co2_cont)
+    f_exc_num = _sed_window_flux(sed_pts, 4.40, 5.00)
+    f_exc_den = _sed_window_flux(sed_pts, 1.00, 2.40)
+    exc45_idx = _flux_ratio_with_err(f_exc_num, f_exc_den)
+
+    # Fallback broad-band B6/B4 methane ratio when narrow 3.25-3.40 / 3.9-4.1 channels are absent
+    ch4_broad = (
+        _flux_ratio_with_err(band_f["B6"], band_f["B4"])
+        if (ch4_idx is None and "B6" in band_f and "B4" in band_f)
         else None
+    )
+    has_sig_ch4 = (
+        ch4_idx is not None
+        and ch4_idx[0] <= 0.65
+        and ch4_idx[2] <= -3.0
+        and f_ch4_cont is not None
+        and f_ch4_cont[2] >= 4.0
+    ) or (
+        ch4_broad is not None
+        and ch4_broad[0] >= 2.2
+        and ch4_broad[2] >= 3.0
+        and band_f["B6"][2] >= 5.0
+    )
+    has_sig_exc45 = (
+        exc45_idx is not None
+        and exc45_idx[0] >= 2.2
+        and exc45_idx[2] >= 3.0
+        and f_exc_num is not None
+        and f_exc_num[2] >= 5.0
     )
     opt_drop = (
         any(b in band_f and band_f[b][2] < 3.0 for b in ("B1", "B2", "B3"))
@@ -654,15 +722,19 @@ def _compute_log_likelihoods(
         l_sed["star_static"] -= 4.0
         subtype = "Y"
         evidence.append("Optical/NIR dropout (<3 sigma in B1-B3; 4.5 um B5/B6 excess)")
-    elif (ch4_ratio is not None and ch4_ratio >= 2.2) or (
-        w1_w2 is not None and w1_w2 >= 0.8 and gaia_id is None
-    ):
+    elif has_sig_ch4 or (w1_w2 is not None and w1_w2 >= 0.8 and gaia_id is None):
         l_sed["brown_dwarf"] += 3.6
         l_sed["star_pm"] -= 2.2
         l_sed["star_static"] -= 2.5
         subtype = "T"
-        if ch4_ratio is not None and ch4_ratio >= 2.2:
-            evidence.append(f"CH4 3.3 um absorption trough (F_B6/F_B4 = {ch4_ratio:.2f})")
+        if ch4_idx is not None and ch4_idx[0] <= 0.65 and ch4_idx[2] <= -3.0:
+            evidence.append(
+                f"CH4 index F(3.25-3.40)/F(3.9-4.1) = {ch4_idx[0]:.2f}+/-{ch4_idx[1]:.2f}"
+            )
+        elif ch4_broad is not None and ch4_broad[0] >= 2.2 and ch4_broad[2] >= 3.0:
+            evidence.append(
+                f"CH4 3.3 um trough (F_B6/F_B4 = {ch4_broad[0]:.2f}+/-{ch4_broad[1]:.2f})"
+            )
         if w1_w2 is not None and w1_w2 >= 0.8:
             evidence.append(f"Infrared methane color W1-W2 = {w1_w2:.2f}")
     elif g_ks is not None and g_ks > 3.5 and (w1_w2 is None or w1_w2 < 0.8):
@@ -686,6 +758,20 @@ def _compute_log_likelihoods(
             l_sed["brown_dwarf"] -= 3.5
             evidence.append("Blue/Rayleigh-Jeans stellar SED")
 
+    if has_sig_exc45 and exc45_idx is not None and not opt_bright:
+        l_sed["brown_dwarf"] += 1.5
+        evidence.append(
+            f"4.5 um excess F(4.4-5.0)/F(1.0-2.4) = {exc45_idx[0]:.2f}+/-{exc45_idx[1]:.2f}"
+        )
+
+    if co2_idx is not None and f_co2_cont is not None and f_co2_cont[2] >= 4.0:
+        if co2_idx[0] >= 1.35 and co2_idx[2] >= 3.0 and is_sso_rate:
+            l_sed["comet"] += 2.0
+            evidence.append(f"CO2 4.26 um emission excess = {co2_idx[0]:.2f}+/-{co2_idx[1]:.2f}")
+        elif co2_idx[0] <= 0.75 and co2_idx[2] <= -3.0:
+            l_sed["brown_dwarf"] += 1.0
+            evidence.append(f"CO2 4.2-4.35 um absorption = {co2_idx[0]:.2f}+/-{co2_idx[1]:.2f}")
+
     if ks_w2 is not None and ks_w2 > 1.2 and (det_opt or "G" in mags):
         l_sed["variable_star"] += 2.2
         subtype = subtype or "YSO"
@@ -700,33 +786,29 @@ def _compute_log_likelihoods(
 
     # 2. Motion log-likelihood (§D.3)
     l_mot = {c: 0.0 for c in PHYSICAL_CLASSES}
-    is_sso_rate = (rate_hr >= 0.4) or has_streak or has_tracklet
-    sig_mover_pos = (
-        (chi2_mu > 25.0)
-        and (dbic_mot > 10.0)
-        and (not vim)
-        and (not all_sat)
-        and (not feat["monopole_favored"])
-    )
 
     if is_sso_rate:
         l_mot["asteroid"] += 5.5
         l_mot["comet"] += 4.5
         _add(
             l_mot,
-            ("star_pm", "star_static", "brown_dwarf", "galaxy", "quasar", "variable_star"),
+            tuple(c for c in PHYSICAL_CLASSES if c not in ("asteroid", "comet")),
             -4.0,
         )
         evidence.append(f'Solar-System angular rate ({rate_hr:.2f}"/hr)')
     elif sig_mover_pos and not bad_art:
+        is_bd_color = (w1_w2 >= 0.7) if w1_w2 is not None else (not opt_bright)
         _add(l_mot, ("star_pm", "brown_dwarf", "white_dwarf", "candidate_new_mover"), 4.5)
-        l_mot["brown_dwarf"] += 1.2 if (h_w2 is not None and h_w2 >= 15.0) else 0.0
-        l_mot["white_dwarf"] += 2.5 if (h_g is not None and h_g >= 15.0) else 0.0
+        l_mot["brown_dwarf"] += 1.2 if (h_w2 is not None and h_w2 >= 15.0 and is_bd_color) else 0.0
+        l_mot["white_dwarf"] += (
+            2.5 if (h_g is not None and h_g >= 15.0 and (g_ks is None or g_ks < 2.0)) else 0.0
+        )
         _add(l_mot, ("star_static", "galaxy", "quasar", "variable_star", "transient"), -5.0)
         l_mot["artifact"] -= 2.5
         evidence.append(f'Proper motion mu={mu:.3f}+/-{sig_mu:.3f}"/yr (chi2_mu={chi2_mu:.1f})')
     else:
-        _add(l_mot, ("star_static", "galaxy", "quasar", "variable_star"), 2.2)
+        if not bad_art and n_ep >= 2:
+            _add(l_mot, ("star_static", "galaxy", "quasar", "variable_star"), 2.2)
         _add(l_mot, tuple(MOVING_CLASSES), -5.0)
         if vim:
             l_mot["variable_star"] += 3.5
@@ -736,7 +818,7 @@ def _compute_log_likelihoods(
             _add(l_mot, ("variable_star", "star_static"), 1.5)
 
     if is_planet_x_candidate:
-        l_mot["candidate_planet_x"] += 10.0
+        l_mot["candidate_planet_x"] += 6.0
 
     # 3. Variability log-likelihood (§D.4)
     l_var = {c: 0.0 for c in PHYSICAL_CLASSES}
@@ -764,8 +846,12 @@ def _compute_log_likelihoods(
                 f"Flux variability (chi2_var_nu={feat['chi2_var_nu']:.1f}, "
                 f"dmag={feat['amp_mag']:.2f})"
             )
-    else:
-        l_var["star_static"] += 0.5
+    elif not bad_art and n_ep >= 2:
+        _add(
+            l_var,
+            ("star_static", "star_pm", "brown_dwarf", "white_dwarf", "galaxy", "quasar"),
+            0.4,
+        )
         l_var["variable_star"] -= 2.0
 
     # 4. Morphology log-likelihood (§B.7, §D.1)
@@ -778,8 +864,8 @@ def _compute_log_likelihoods(
         or (n_ep == 1 and not has_streak and not has_tracklet)
         or (flags & int(DetectionFlag.LOST))
     ):
-        l_morph["artifact"] += 6.5
-        _add(l_morph, tuple(MOVING_CLASSES), -4.0)
+        l_morph["artifact"] += 5.5
+        _add(l_morph, tuple(c for c in PHYSICAL_CLASSES if c != "artifact"), -1.5)
         evidence.append("Low quality / artifact morphology or single-epoch transient track")
     elif has_streak:
         l_morph["asteroid"] += 3.0
@@ -787,14 +873,23 @@ def _compute_log_likelihoods(
         l_morph["artifact"] -= 1.0
     elif ext_flag:
         l_morph["galaxy"] += 3.8 if not is_sso_rate else 0.0
-        l_morph["comet"] += 4.2 if is_sso_rate or (det_ir and ch4_ratio is None) else 1.2
+        l_morph["comet"] += 4.2 if is_sso_rate or (det_ir and not has_sig_ch4) else 1.2
         _add(l_morph, ("star_pm", "star_static", "brown_dwarf"), -3.0)
     else:
         l_morph["artifact"] -= 1.5
         l_morph["galaxy"] -= 2.0
+        l_morph["comet"] -= 2.0
 
     # 5. Cross-match log-likelihood (§D.5)
     l_xmatch = {c: 0.0 for c in PHYSICAL_CLASSES}
+    cat_match_hi = next((m for m in matches if m.match_prob >= 0.9), None)
+    has_bd_sed = (
+        opt_drop
+        or has_sig_ch4
+        or has_sig_exc45
+        or (w1_w2 is not None and w1_w2 >= 0.8)
+        or (h_w2 is not None and h_w2 >= 15.0)
+    )
     if gaia_id is not None:
         l_xmatch["star_pm"] += 2.5 if sig_mover_pos else -0.5
         l_xmatch["star_static"] += 2.2
@@ -804,23 +899,39 @@ def _compute_log_likelihoods(
         _add(l_xmatch, ("asteroid", "comet"), -5.0)
         l_xmatch["candidate_new_mover"] -= 8.0
         evidence.append(f"Gaia DR3 counterpart ({gaia_id}, catalog_pm_snr={cat_pm_snr:.1f})")
-    elif sig_mover_pos:
-        has_bd_sed = (
-            opt_drop
-            or (ch4_ratio is not None and ch4_ratio >= 2.2)
-            or (w1_w2 is not None and w1_w2 >= 0.8)
-            or (h_w2 is not None and h_w2 >= 15.0)
+    elif cat_match_hi is not None:
+        l_xmatch["candidate_new_mover"] -= 6.0
+        _add(l_xmatch, ("asteroid", "comet"), -4.0)
+        if has_bd_sed or (not opt_bright and (det_ir or "W2" in mags)):
+            l_xmatch["brown_dwarf"] += 2.5
+        elif sig_mover_pos:
+            l_xmatch["star_pm"] += 2.0
+        else:
+            l_xmatch["star_static"] += 1.5
+        evidence.append(
+            f"Catalog counterpart ({cat_match_hi.catalog}:{cat_match_hi.source_id}, "
+            "no Gaia DR3 counterpart)"
         )
+    elif sig_mover_pos:
         l_xmatch["candidate_new_mover"] += 3.2 if not has_bd_sed else 1.4
+        if is_planet_x_candidate:
+            l_xmatch["candidate_planet_x"] += 3.5
         l_xmatch["brown_dwarf"] += 2.4 if has_bd_sed else 0.5
         l_xmatch["star_pm"] -= 2.2
-        evidence.append("No Gaia DR3 counterpart")
+        evidence.append(
+            "No astrometric catalog counterpart (no Gaia DR3 / CatWISE / 2MASS match >= 0.9)"
+        )
 
     if subtype in ("Y", "T") and (gaia_id is None):
         evidence.append(f"Spectral subtype estimate: {subtype}-type brown dwarf")
 
+    def _cap_and_weight(m: str, vec: dict[str, float]) -> dict[str, float]:
+        span = max(vec.values()) - min(vec.values())
+        scale = min(1.0, _MAX_METHOD_SPAN / span) if span > 0.0 else 1.0
+        return {c: CLASS_WEIGHTS[m] * vec[c] * scale for c in PHYSICAL_CLASSES}
+
     contributions = {
-        m: {c: CLASS_WEIGHTS[m] * vec[c] for c in PHYSICAL_CLASSES}
+        m: _cap_and_weight(m, vec)
         for m, vec in (
             ("sed", l_sed),
             ("motion", l_mot),
@@ -829,7 +940,7 @@ def _compute_log_likelihoods(
             ("xmatch", l_xmatch),
         )
     }
-    if subtype is None and strong_var and not (opt_drop or ch4_ratio):
+    if subtype is None and strong_var and not (opt_drop or has_sig_ch4):
         subtype = "Variable"
     return contributions, evidence, subtype
 
@@ -862,6 +973,8 @@ def classify_source(
         raise TypeError(f"Unsupported input to classify_source: {type(source)!r}")
 
     priors = _galactic_priors(feat["ra_deg"], feat["dec_deg"])
+    if is_planet_x_candidate:
+        priors["candidate_planet_x"] = 0.0
     contrib, evidence, subtype = _compute_log_likelihoods(
         feat, single_fits_result, is_planet_x_candidate
     )
@@ -869,8 +982,10 @@ def classify_source(
     logp = {c: priors[c] + sum(contrib[m][c] for m in CLASS_WEIGHTS) for c in PHYSICAL_CLASSES}
     if not is_planet_x_candidate:
         logp["candidate_planet_x"] = -30.0
+    if feat["gaia_id"] is not None or any(m.match_prob >= 0.9 for m in feat["matches"]):
+        logp["candidate_new_mover"] = min(logp["candidate_new_mover"], -20.0)
     max_lp = max(logp.values())
-    exp_p = {c: math.exp(max(v - max_lp, -50.0)) for c, v in logp.items()}
+    exp_p = {c: math.exp(max((v - max_lp) / _SOFTMAX_TEMP, -50.0)) for c, v in logp.items()}
     z_norm = sum(exp_p.values())
     probs: dict[str, float] = {c: exp_p[c] / z_norm for c in PHYSICAL_CLASSES}
 
@@ -890,11 +1005,27 @@ def classify_source(
             or (mfit is not None and mfit.is_mover and feat["n_epochs"] >= 2)
         )
     )
-    if feat["n_epochs"] < 2 and not has_streak:
-        raw_mover = min(raw_mover, 0.05)
-    elif not unsat_mover:
-        raw_mover = min(raw_mover, 0.02)
-    probs["mover"] = float(min(1.0, max(0.0, raw_mover)))
+    mover_cap = (
+        0.05 if (feat["n_epochs"] < 2 and not has_streak) else (0.02 if not unsat_mover else 1.0)
+    )
+    if raw_mover > mover_cap:
+        static_classes = [c for c in PHYSICAL_CLASSES if c not in MOVING_CLASSES]
+        static_sum = sum(probs[c] for c in static_classes)
+        mov_scale = mover_cap / max(raw_mover, 1e-12)
+        for c in MOVING_CLASSES:
+            probs[c] *= mov_scale
+        if static_sum > 1e-15:
+            stat_scale = (1.0 - mover_cap) / static_sum
+            for c in static_classes:
+                probs[c] *= stat_scale
+        else:
+            fill = (1.0 - mover_cap) / max(len(static_classes), 1)
+            for c in static_classes:
+                probs[c] = fill
+        z_phys = sum(probs[c] for c in PHYSICAL_CLASSES)
+        for c in PHYSICAL_CLASSES:
+            probs[c] /= z_phys
+    probs["mover"] = float(min(1.0, max(0.0, sum(probs[c] for c in MOVING_CLASSES))))
 
     label = max(PHYSICAL_CLASSES, key=lambda c: probs[c])
     if label != "brown_dwarf" and label != "variable_star":
@@ -907,18 +1038,34 @@ def classify_source(
         notes.append("AMBIGUOUS_MATCH: one or more epochs linked below 0.90 confidence.")
     if label in ("candidate_new_mover", "candidate_planet_x"):
         notes.append(
-            "Candidate only; not confirmed — follow-up and MPC/external verification required."
+            "Candidate only (unverified) — follow-up and MPC/external verification required."
         )
     if feat["t_spread"] > 0.0:
         evidence.append(f"SED temporal spread = {feat['t_spread']:.1f} d")
 
-    # Cross-method disagreement detection (§K line 496)
+    # Cross-method disagreement detection across informative methods (§K line 496)
     disagreements: list[str] = []
-    method_tops = {m: max(PHYSICAL_CLASSES, key=lambda c: contrib[m][c]) for m in contrib}
-    if method_tops["var"] == "variable_star" and method_tops["motion"] in MOVING_CLASSES:
-        disagreements.append(
-            "var favors variable_star while motion favors mover (check VIM / blending)."
-        )
+    inf_tops: dict[str, frozenset[str]] = {}
+    method_tops: dict[str, str] = {}
+    for m, vec in contrib.items():
+        v_max, v_min = max(vec.values()), min(vec.values())
+        if v_max - v_min <= 1e-6:
+            continue
+        tops = frozenset(c for c, v in vec.items() if v >= v_max - 1e-6)
+        inf_tops[m] = tops
+        method_tops[m] = label if label in tops else max(PHYSICAL_CLASSES, key=lambda c: vec[c])
+    inf_names = list(inf_tops)
+    for i, m1 in enumerate(inf_names):
+        for m2 in inf_names[i + 1 :]:
+            t1, t2 = inf_tops[m1], inf_tops[m2]
+            if t1 & t2:
+                continue
+            marg1 = max(contrib[m1].values()) - max(contrib[m1][c] for c in t2)
+            marg2 = max(contrib[m2].values()) - max(contrib[m2][c] for c in t1)
+            if marg1 >= 1.5 and marg2 >= 1.5:
+                disagreements.append(
+                    f"{m1} favors {method_tops[m1]} while {m2} favors {method_tops[m2]}."
+                )
     if feat["all_saturated"]:
         disagreements.append(
             "All channels saturated: flux variability unreliable; relies on external catalog PM."
