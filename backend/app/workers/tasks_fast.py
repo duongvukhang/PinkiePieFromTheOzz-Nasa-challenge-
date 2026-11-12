@@ -1,0 +1,211 @@
+"""Fast-queue Celery tasks for cutout fetching, WebP/float32 rendering, and provenance."""
+
+from __future__ import annotations
+
+import io
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID, uuid5
+
+import astropy.units as u
+import numpy as np
+from astropy.coordinates import SkyCoord
+from astropy.io import fits
+from astropy.time import Time
+from PIL import Image
+
+from app.providers.base import Provider, StoredFrame, default_registry
+from app.schemas.fields import CutoutFrame, CutoutSetResponse, FieldSummary
+from app.services.fields import group_frames_into_epochs, parse_bands_query, parse_utc_query
+from app.services.jobs import JobStore, compute_params_hash, get_job_store
+from app.services.storage import StorageBackend, get_storage_backend
+from app.workers.celery_app import celery_app
+from sphx_core.calib import load_frame
+from sphx_core.wcs import healpix9_nested
+
+_FRAME_UUID_NS = UUID("2e75b5fe-3a8a-4e4e-9f7e-2e5bc8d54a01")
+
+
+def _extract_2d_image(fits_bytes: bytes) -> np.ndarray:
+    """Extract primary 2D science array via `sphx_core.calib.load_frame` with FITS fallback."""
+    try:
+        return np.asarray(load_frame(fits_bytes).image, dtype=np.float32)
+    except Exception:
+        with fits.open(io.BytesIO(fits_bytes), memmap=False) as hdul:
+            for hdu in hdul:
+                if getattr(hdu, "data", None) is not None and hdu.data.ndim >= 2:
+                    arr = np.asarray(hdu.data, dtype=np.float32)
+                    return arr[0] if arr.ndim > 2 else arr
+    raise ValueError("FITS payload contains no 2D image array")
+
+
+def render_cutout_products(
+    fits_bytes: bytes,
+    storage: StorageBackend,
+    prefix: str,
+) -> dict[str, Any]:
+    """Render 8-bit asinh-stretched WebP display tile and little-endian float32 science tile."""
+    arr = _extract_2d_image(fits_bytes)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        vmin, vmax = 0.0, 1.0
+        norm = np.zeros_like(arr, dtype=np.float32)
+    else:
+        vmin, vmax = (float(x) for x in np.percentile(finite, [1.0, 99.5]))
+        span = max(vmax - vmin, 1e-12)
+        scaled = np.clip((np.nan_to_num(arr, nan=vmin) - vmin) / span, 0.0, 1.0)
+        norm = np.arcsinh(10.0 * scaled) / np.arcsinh(10.0)
+
+    u8 = np.clip(np.round(norm * 255.0), 0, 255).astype(np.uint8)
+    webp_buf = io.BytesIO()
+    Image.fromarray(u8, mode="L").save(webp_buf, format="WEBP", quality=90)
+    disp_obj = storage.put_bytes(
+        f"{prefix}/display.webp", webp_buf.getvalue(), content_type="image/webp"
+    )
+    sci_obj = storage.put_bytes(
+        f"{prefix}/science.bin",
+        np.asarray(arr, dtype="<f4").tobytes(),
+        content_type="application/octet-stream",
+    )
+    return {
+        "display_key": disp_obj.key,
+        "science_key": sci_obj.key,
+        "stretch": {
+            "mode": "asinh",
+            "percentile": [1.0, 99.5],
+            "vmin": vmin,
+            "vmax": vmax,
+            "shape": list(arr.shape),
+        },
+    }
+
+
+def _build_cutout_frame(
+    cutout_id: UUID,
+    epoch_label: str,
+    stored: StoredFrame,
+    rendered: dict[str, Any],
+) -> CutoutFrame:
+    ref = stored.ref
+    frame_id = uuid5(_FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}")
+    utc_mid = Time(ref.mjd_tdb, format="mjd", scale="tdb").utc.to_datetime(timezone=UTC)
+    flagged = float(stored.flags_summary.get("flagged_fraction", 0.0))
+    return CutoutFrame(
+        frame_id=frame_id,
+        epoch=epoch_label,
+        mjd_tdb_mid=ref.mjd_tdb,
+        utc_mid=utc_mid,
+        array_id=ref.array_id,
+        band_label=ref.band_id,
+        display_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_id}/display.webp",
+        science_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_id}/science.bin",
+        fits_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_id}/frame.fits",
+        wcs_header=stored.wcs_header or "",
+        stretch=rendered["stretch"],
+        flagged_fraction=min(1.0, max(0.0, flagged)),
+    )
+
+
+def execute_build_cutouts(
+    job_id: UUID,
+    params: dict[str, Any],
+    *,
+    store: JobStore,
+    storage: StorageBackend,
+    provider: Provider | None = None,
+) -> dict[str, Any]:
+    """Fetch cutouts for a field, render display/science tiles, and persist job outputs."""
+    store.update_job(job_id, status="running", progress=0.05, started_at=datetime.now(UTC))
+    try:
+        cutout_id = UUID(str(params["cutout_id"]))
+        ra = float(params["ra"])
+        dec = float(params["dec"])
+        fov = float(params["fov_arcmin"])
+        release = str(params.get("release", "latest"))
+        bands = parse_bands_query(params.get("bands"))
+        t0 = parse_utc_query(params.get("from_utc"))
+        t1 = parse_utc_query(params.get("to_utc"))
+
+        prov = provider or default_registry.get("spherex_irsa")
+        center = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
+        hpx = healpix9_nested(ra, dec)
+        frames = prov.search_frames(
+            center, (fov / 2.0) * u.arcmin, t0=t0, t1=t1, bands=bands, release=release
+        )
+        store.update_job(job_id, progress=0.20)
+
+        epoch_groups = group_frames_into_epochs(frames)
+        flat = [(ep, ref) for ep, grp in epoch_groups for ref in grp]
+        params_hex = compute_params_hash("build_cutouts", params, release).hex()[:16]
+
+        out_frames: list[CutoutFrame] = []
+        artifact_keys: dict[str, dict[str, str]] = {}
+        total = max(len(flat), 1)
+        for idx, (ep, ref) in enumerate(flat):
+            stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
+            fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
+            frame_uuid = uuid5(
+                _FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}"
+            )
+            rendered = render_cutout_products(
+                fits_bytes,
+                storage,
+                f"products/{hpx}/{params_hex}/{frame_uuid}",
+            )
+            cframe = _build_cutout_frame(cutout_id, ep, stored, rendered)
+            out_frames.append(cframe)
+            artifact_keys[str(cframe.frame_id)] = {
+                "display": str(rendered["display_key"]),
+                "science": str(rendered["science_key"]),
+                "fits": stored.storage_path,
+            }
+            store.update_job(job_id, progress=0.20 + 0.75 * ((idx + 1) / total))
+
+        warnings: list[str] = []
+        if not out_frames:
+            warnings.append("No cutouts available for the requested sky coordinates and filters.")
+
+        payload = CutoutSetResponse(
+            cutout_id=cutout_id,
+            field=FieldSummary(ra=ra, dec=dec, fov_arcmin=fov, healpix9=hpx),
+            release=frames[0].release if frames else release,
+            frames=out_frames,
+            warnings=warnings,
+        ).model_dump(mode="json")
+
+        store.record_provenance(
+            processing_job_id=job_id,
+            entity_table="processing_jobs",
+            entity_id=str(job_id),
+            inputs=[{"obs_id": ref.obs_id, "release": ref.release} for _, ref in flat],
+            release_ids=sorted({ref.release for _, ref in flat}) or None,
+            params=params,
+        )
+        outputs = {"cutout_set": payload, "artifacts": artifact_keys}
+        store.update_job(
+            job_id,
+            status="succeeded",
+            progress=1.0,
+            outputs=outputs,
+            finished_at=datetime.now(UTC),
+        )
+        return outputs
+    except Exception as exc:
+        store.update_job(
+            job_id,
+            status="failed",
+            error={"type": type(exc).__name__, "detail": str(exc)},
+            finished_at=datetime.now(UTC),
+        )
+        raise
+
+
+@celery_app.task(name="app.workers.tasks_fast.build_cutouts", queue="fast")  # type: ignore[untyped-decorator]
+def build_cutouts(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Celery task wrapper building sky cutouts with persisted progress updates."""
+    return execute_build_cutouts(
+        UUID(job_id),
+        params,
+        store=get_job_store(),
+        storage=get_storage_backend(),
+    )

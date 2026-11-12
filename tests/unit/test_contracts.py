@@ -104,8 +104,24 @@ def test_openapi_schema_and_health() -> None:
     assert res.json()["status"] == "ok"
 
 
+IMPLEMENTED_OPS: set[tuple[str, str]] = {
+    ("GET", "/api/v1/resolve"),
+    ("GET", "/api/v1/fields/frames"),
+    ("POST", "/api/v1/cutouts"),
+    ("GET", "/api/v1/cutouts/{cutout_id}"),
+    ("GET", "/api/v1/cutouts/{cutout_id}/frames/{frame_id}/display.webp"),
+    ("GET", "/api/v1/cutouts/{cutout_id}/frames/{frame_id}/science.bin"),
+    ("GET", "/api/v1/cutouts/{cutout_id}/frames/{frame_id}/frame.fits"),
+    ("GET", "/api/v1/catalogs/overlay"),
+    ("GET", "/api/v1/releases"),
+    ("GET", "/api/v1/examples"),
+    ("GET", "/api/v1/jobs/{job_id}"),
+    ("GET", "/api/v1/jobs/{job_id}/events"),
+}
+
+
 def test_stub_endpoints_return_501() -> None:
-    """Exercise every MVP endpoint stub and assert 501 RFC 9457 problem+json."""
+    """Exercise every unimplemented MVP endpoint stub and assert 501 RFC 9457 problem+json."""
     client = TestClient(app)
     cases: list[tuple[str, str, dict[str, Any]]] = [
         (
@@ -119,15 +135,8 @@ def test_stub_endpoints_return_501() -> None:
         ("POST", "/api/v1/auth/tokens", {"json": {"name": "cli", "scopes": ["read"]}}),
         ("GET", "/api/v1/auth/tokens", {}),
         ("DELETE", f"/api/v1/auth/tokens/{_UID}", {}),
-        ("GET", "/api/v1/resolve?name=WISE+0855", {}),
-        ("GET", "/api/v1/fields/frames?ra=133.795&dec=-7.245&fov=10", {}),
-        ("POST", "/api/v1/cutouts", {"json": {"ra": 133.795, "dec": -7.245}}),
-        ("GET", f"/api/v1/cutouts/{_UID}", {}),
         ("POST", "/api/v1/uploads", {"files": {"file": ("test.fits", b"SIMPLE", "image/fits")}}),
         ("GET", f"/api/v1/uploads/{_UID}/report", {}),
-        ("GET", "/api/v1/catalogs/overlay?cat=gaia&ra=133.795&dec=-7.245", {}),
-        ("GET", "/api/v1/releases", {}),
-        ("GET", "/api/v1/examples", {}),
         ("POST", "/api/v1/analyses", {"json": {"ra": 133.795, "dec": -7.245}}),
         ("GET", f"/api/v1/analyses/{_UID}/sources", {}),
         ("GET", f"/api/v1/analyses/{_UID}/suggestions", {}),
@@ -170,8 +179,6 @@ def test_stub_endpoints_return_501() -> None:
         ("POST", f"/api/v1/projects/{_UID}/share", {}),
         ("DELETE", f"/api/v1/projects/{_UID}/share", {}),
         ("POST", f"/api/v1/projects/{_UID}/exports", {"json": {"format": "csv"}}),
-        ("GET", f"/api/v1/jobs/{_UID}", {}),
-        ("GET", f"/api/v1/jobs/{_UID}/events", {}),
         ("GET", "/api/v1/oembed?url=https://example.org/v?ra=1", {}),
         ("GET", "/api/v1/render.gif?ra=133.795&dec=-7.245", {}),
         ("GET", "/embed?ra=133.795&dec=-7.245", {}),
@@ -189,4 +196,5 @@ def test_stub_endpoints_return_501() -> None:
         if path != "/health"
         for method in ops
     }
-    assert len(cases) == len(spec_ops)
+    assert len(cases) + len(IMPLEMENTED_OPS) == len(spec_ops)
+    assert IMPLEMENTED_OPS.issubset(spec_ops)

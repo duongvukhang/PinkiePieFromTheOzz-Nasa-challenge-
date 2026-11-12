@@ -25,6 +25,8 @@ module = [
     "pyvo.*",
     "boto3",
     "botocore.*",
+    "celery",
+    "celery.*",
     "photutils.*",
     "reproject",
     "scipy.*",

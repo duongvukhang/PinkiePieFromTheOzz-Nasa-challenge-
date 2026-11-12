@@ -1,10 +1,23 @@
 """Backend service helpers."""
 
+from app.services.cache import (
+    CacheBackend,
+    MemoryCacheBackend,
+    RedisCacheBackend,
+    get_cache_backend,
+)
 from app.services.fits_validator import (
     DEFAULT_UPLOAD_MAX_BYTES,
     FitsUploadValidationResult,
     validate_fits_set,
     validate_fits_upload,
+)
+from app.services.jobs import (
+    InMemoryJobStore,
+    JobStore,
+    SqlAlchemyJobStore,
+    compute_params_hash,
+    get_job_store,
 )
 from app.services.storage import (
     ChecksumMismatchError,
@@ -18,15 +31,24 @@ from app.services.storage import (
 )
 
 __all__ = [
+    "CacheBackend",
     "ChecksumMismatchError",
     "DEFAULT_UPLOAD_MAX_BYTES",
     "FitsUploadValidationResult",
+    "InMemoryJobStore",
+    "JobStore",
     "LocalStorageBackend",
+    "MemoryCacheBackend",
+    "RedisCacheBackend",
     "S3StorageBackend",
+    "SqlAlchemyJobStore",
     "StorageBackend",
     "StorageError",
     "StorageObject",
+    "compute_params_hash",
     "compute_sha256",
+    "get_cache_backend",
+    "get_job_store",
     "get_storage_backend",
     "validate_fits_set",
     "validate_fits_upload",
