@@ -79,11 +79,13 @@ test.describe("SkyTrace Editorial Redesign Smoke Suite", () => {
     );
     await page.screenshot({ path: `${SHOT_DIR}/home_cards.png` });
 
-    // Coordinate search routes to /v
+    // Coordinate search routes to /v (stub API so preview server does not 404)
+    await page.route("**/api/v1/**", (r) => r.fulfill({ json: {} }));
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.getByLabel(/Target name or ICRS coordinates/i).fill("133.795, -7.245");
     await page.getByRole("button", { name: /Inspect sky/i }).click();
     await expect(page).toHaveURL(/\/v\?ra=133\.795&dec=-7\.245/);
+    await page.unroute("**/api/v1/**");
 
     // 2. About Us page & carousel
     await page.goto("/about");

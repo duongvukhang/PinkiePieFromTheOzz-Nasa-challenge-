@@ -1,10 +1,15 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Link, Route, Routes, useLocation } from "react-router-dom";
 import { AboutPage } from "../pages/AboutPage";
 import { AuthPage } from "../pages/AuthPage";
 import { Home } from "../pages/Home";
 import { LogoutPage } from "../pages/LogoutPage";
 import { AppShell } from "./layout/AppShell";
+
+const ViewerPage = lazy(() =>
+  import("../pages/ViewerPage").then((m) => ({ default: m.ViewerPage })),
+);
+const EmbedPage = lazy(() => import("../pages/EmbedPage").then((m) => ({ default: m.EmbedPage })));
 
 function StubPage({ kicker, title, body }: { kicker: string; title: string; body: string }) {
   return (
@@ -58,12 +63,6 @@ function DocumentTitleSync() {
 
 const STUB_ROUTES = [
   {
-    path: "/v",
-    kicker: "Observatory Workspace",
-    title: "WebGL2 & Aladin Lite Viewer (Next Task)",
-    body: "The full-bleed dark scientific viewer (/v) connects next to the already-verified SPHEREx backend endpoints and astrometric science core.",
-  },
-  {
     path: "/methodology",
     kicker: "Methodology",
     title: "Astrometric Calibration & Uncertainty",
@@ -83,24 +82,48 @@ const STUB_ROUTES = [
   },
 ] as const;
 
+function ShellRoutes() {
+  return (
+    <AppShell>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/about" element={<AboutPage />} />
+        <Route path="/company" element={<AboutPage />} />
+        <Route path="/login" element={<AuthPage defaultMode="login" />} />
+        <Route path="/signin" element={<AuthPage defaultMode="signin" />} />
+        <Route path="/signup" element={<AuthPage defaultMode="signin" />} />
+        <Route path="/logout" element={<LogoutPage />} />
+        <Route
+          path="/v"
+          element={
+            <Suspense fallback={<div className="viewer-stage">Loading observatory…</div>}>
+              <ViewerPage />
+            </Suspense>
+          }
+        />
+        {STUB_ROUTES.map(({ path, ...props }) => (
+          <Route key={path} path={path} element={<StubPage {...props} />} />
+        ))}
+      </Routes>
+    </AppShell>
+  );
+}
+
 export function AppRoutes() {
   return (
     <BrowserRouter>
       <DocumentTitleSync />
-      <AppShell>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/company" element={<AboutPage />} />
-          <Route path="/login" element={<AuthPage defaultMode="login" />} />
-          <Route path="/signin" element={<AuthPage defaultMode="signin" />} />
-          <Route path="/signup" element={<AuthPage defaultMode="signin" />} />
-          <Route path="/logout" element={<LogoutPage />} />
-          {STUB_ROUTES.map(({ path, ...props }) => (
-            <Route key={path} path={path} element={<StubPage {...props} />} />
-          ))}
-        </Routes>
-      </AppShell>
+      <Routes>
+        <Route
+          path="/embed"
+          element={
+            <Suspense fallback={<div className="viewer-stage">Loading embed…</div>}>
+              <EmbedPage />
+            </Suspense>
+          }
+        />
+        <Route path="*" element={<ShellRoutes />} />
+      </Routes>
     </BrowserRouter>
   );
 }
