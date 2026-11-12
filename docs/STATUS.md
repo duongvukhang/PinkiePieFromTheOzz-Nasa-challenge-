@@ -1,9 +1,10 @@
-## Current phase: 1 (WCS, calibration, extraction, registration, differencing implemented)
-## Last session: Gemini 3.8 Flash High | 2026-11-11 | Implement registration, detection, differencing
-Done: Implemented `sphx_core.wcs` tangent/Jacobian helpers, `sphx_core.calib` (FITS loader, ZODI/LVF/2D background/noise, scatter flag, flux-conserving reprojection + `F_corr`, band co-add), `sphx_core.extraction` (saturated-first PSF photometry, matched-filter SNR, SEP/CR vetting, sky covariances, deterministic real-bogus), `sphx_core.registration` (Gaia DR3 filter/epoch+topocentric parallax, adaptive shift/similarity/affine/TAN-SIP deg-3 + MAD clip + pixel-phase LUT), `sphx_core.difference` (ZOGY subtraction, empirical FAR threshold, WLS monopole/dipole BIC), plus 5 unit tests.
-Files touched: `pyproject.toml`, `science/sphx_core/{wcs,calib,extraction,registration,difference}/__init__.py`, `tests/unit/test_calib_registration_extraction_difference.py`, `docs/STATUS.md`
-Verified by: `.venv/bin/pytest tests/unit/ tests/science/test_astrometric_qa_and_registration.py` (31 passed in 16.54s); `.venv/bin/pytest tests/science/` (2 passed, 11 failed at missing `identity`/`motion`/`classify`/`orbits`/`planetx`); `.venv/bin/mypy backend/app science/sphx_core` (50 files clean); `.venv/bin/ruff format --check` & `ruff check` (clean)   Lines before -> after: `wcs` 312 -> 384, `calib` 768 -> 752 (shrink), `extraction` 595 -> 572 (shrink), `registration` 587 (new), `difference` 823 (new)
-## Next task: Implement remaining `sphx_core` modules (`identity`, `motion`, `classify`, `consensus`, `comparison`, `orbits`, `planetx`) — Gemini 3.8 Flash High
+## Current phase: 1 (Identity matching, motion fitting, classification, consensus, streak/tracklet, A-vs-B comparison implemented and verified)
+## Last session: Gemini 3.8 Flash (High) | 2026-11-12 | Resolve injection-recovery test escalation (Argon #1)
+Done: Applied Argon item #1 to `tests/science/test_injection_recovery_and_false_positives.py` (skipped center grid slot `k=4` in `_make_static_anchors` keeping 8 perimeter anchors `0..7`, and propagated fitted `(ra_ref_deg, dec_ref_deg)` from `ref_epoch_mjd_tdb` to `mjd0` with `pmra_arcsec_yr`/`pmdec_arcsec_yr` before matching). `science/sphx_core` untouched.
+Files touched: `tests/science/test_injection_recovery_and_false_positives.py`, `docs/STATUS.md`
+Verified by: `.venv/bin/pytest tests/science/test_injection_recovery_and_false_positives.py -v --tb=short` (3 passed in 142.30s); `.venv/bin/pytest tests/science tests/unit -v --tb=short` (44 passed, 2 expected fails in `test_sso_and_planetx.py` for unimplemented `sphx_core.orbits`/`planetx` in 196.03s); `.venv/bin/ruff check` & `ruff format --check` on modified test file (clean).
+Lines before -> after: `tests/science/test_injection_recovery_and_false_positives.py` `173 -> 178` (+5 net).
+## Next task: Implement `sphx_core.orbits` & `sphx_core.planetx` (§E, §I) — Gemini 3.8 Flash High
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).
 - Run `make setup` / `pip install -e ./backend` on a machine with setuptools/network so `sphx.providers` entry-point metadata includes all providers.

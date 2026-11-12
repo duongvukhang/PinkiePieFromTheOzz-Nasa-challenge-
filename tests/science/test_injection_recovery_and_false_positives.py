@@ -14,14 +14,14 @@ def _make_static_anchors(ra0: float, dec0: float, mjd0: float, n: int = 8) -> li
     return [
         InjectedSource(
             source_id=f"anchor_{i}",
-            ra_ref_deg=ra0 + (0.015 * ((i % 3) - 1)),
-            dec_ref_deg=dec0 + (0.015 * ((i // 3) - 1)),
+            ra_ref_deg=ra0 + (0.015 * ((k % 3) - 1)),
+            dec_ref_deg=dec0 + (0.015 * ((k // 3) - 1)),
             ref_epoch_mjd=mjd0,
             base_flux=350.0,
             kind="static",
             gaia_id=1000 + i,
         )
-        for i in range(n)
+        for i, k in enumerate([j for j in range(n + 1) if j != 4][:n])
     ]
 
 
@@ -39,6 +39,7 @@ def test_injection_recovery_recall_and_motion_fit_error() -> None:
 
     rng = np.random.default_rng(202501)
     ra0, dec0 = 150.0, 20.0
+    cos_dec0 = math.cos(math.radians(dec0))
     mjd0 = Time("2025-07-01T00:00:00", scale="tdb").mjd
     epochs = [mjd0 + 182.625 * k for k in range(4)]
     psf_norm = 2.0 * math.sqrt(math.pi) * 0.85 * 1.0
@@ -74,8 +75,12 @@ def test_injection_recovery_recall_and_motion_fit_error() -> None:
             f
             for f in fits
             if f.is_mover
-            and math.hypot(f.ra_ref_deg - mover.ra_ref_deg, f.dec_ref_deg - mover.dec_ref_deg)
-            * 3600.0
+            and math.hypot(
+                (f.ra_ref_deg - mover.ra_ref_deg) * cos_dec0 * 3600.0
+                - f.pmra_arcsec_yr * (f.ref_epoch_mjd_tdb - mjd0) / 365.25,
+                (f.dec_ref_deg - mover.dec_ref_deg) * 3600.0
+                - f.pmdec_arcsec_yr * (f.ref_epoch_mjd_tdb - mjd0) / 365.25,
+            )
             < 5.0
         ]
         if snr >= 10.0 and mu >= 0.75:
