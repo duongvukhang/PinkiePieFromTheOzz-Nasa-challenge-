@@ -5,10 +5,10 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Sequence
-from typing import Any, NoReturn, TypeVar
+from typing import Annotated, Any, NoReturn, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -25,6 +25,15 @@ from app.providers import (
     default_registry,
 )
 from app.schemas.common import JobStatusResponse, ProblemDetail
+from app.services.auth import (
+    SESSION_COOKIE_NAME,
+    SESSION_PREFIX,
+    TOKEN_PREFIX,
+    AuthContext,
+    has_write_scope,
+    hash_token,
+    verify_session_token,
+)
 from app.services.cache import CacheBackend, get_cache_backend
 from app.services.jobs import JobStore, get_job_store
 from app.services.storage import StorageBackend, get_storage_backend
@@ -261,13 +270,83 @@ def get_mpc_provider() -> MpcProvider:
     return default_registry.get("mpc")  # type: ignore[return-value]
 
 
-def get_optional_user_id(request: Request) -> UUID | None:
-    """Return authenticated user UUID if credentials are supplied, else None (anonymous)."""
-    # PHASE2: wire full session/Bearer token lookup when projects/auth endpoints are implemented
+def _extract_bearer(request: Request) -> str | None:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer ") and len(auth) > 7:
+        return auth[7:].strip()
+    return None
+
+
+def get_auth_context(
+    request: Request,
+    store: Annotated[JobStore, Depends(get_store)],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+) -> AuthContext | None:
+    """Resolve authenticated user and scopes from Bearer token or session cookie."""
+    token = _extract_bearer(request) or request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        return None
+    if token.startswith(SESSION_PREFIX):
+        verified = verify_session_token(token)
+        if verified is None:
+            return None
+        uid, sid, exp = verified
+        if cache.get_json(f"revoked_sess:{sid}") is not None:
+            return None
+        user = store.get_user(uid)
+        if user is None:
+            return None
+        return AuthContext(
+            user=user,
+            scopes=frozenset({"read", "write"}),
+            session_id=sid,
+            session_exp=exp,
+        )
+    if token.startswith(TOKEN_PREFIX):
+        authed = store.authenticate_api_token(hash_token(token))
+        if authed is None:
+            return None
+        user, scopes, token_id = authed
+        return AuthContext(user=user, scopes=frozenset(scopes), token_id=token_id)
+    return None
+
+
+def require_auth(ctx: Annotated[AuthContext | None, Depends(get_auth_context)]) -> AuthContext:
+    """Require a valid authenticated session or API token (401 RFC 9457 otherwise)."""
+    if ctx is None:
+        raise APIProblemError(
+            status.HTTP_401_UNAUTHORIZED,
+            "Authentication Required",
+            "Valid session cookie or Bearer token is required.",
+            error_type="https://spherex.example/problems/unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return ctx
+
+
+def require_write(ctx: Annotated[AuthContext, Depends(require_auth)]) -> AuthContext:
+    """Require an authenticated caller with write scope (403 RFC 9457 otherwise)."""
+    if not has_write_scope(ctx.scopes):
+        raise APIProblemError(
+            status.HTTP_403_FORBIDDEN,
+            "Insufficient Token Scope",
+            "Token lacks write scope for this operation.",
+            error_type="https://spherex.example/problems/insufficient-scope",
+        )
+    return ctx
+
+
+def get_optional_user_id(
+    request: Request,
+    ctx: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> UUID | None:
+    """Return authenticated user UUID if credentials are supplied, else None (anonymous)."""
+    if ctx is not None:
+        return ctx.user.id
+    tok = _extract_bearer(request)
+    if tok and not tok.startswith((SESSION_PREFIX, TOKEN_PREFIX)):
         try:
-            return UUID(auth[7:].strip())
+            return UUID(tok)
         except ValueError:
             return None
     return None

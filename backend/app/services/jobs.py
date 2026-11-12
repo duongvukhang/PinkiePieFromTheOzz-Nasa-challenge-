@@ -34,6 +34,11 @@ from app.schemas.common import JobStatus, JobStatusResponse
 from app.schemas.fields import DataReleaseRead
 from app.schemas.objects import DetectionRead, SpectrumResponse, TrackedObjectSummary
 from app.services.object_store import InMemoryObjectMixin, SqlAlchemyObjectMixin
+from app.services.workspace_store import (
+    InMemoryWorkspaceMixin,
+    SqlAlchemyWorkspaceMixin,
+    WorkspaceStore,
+)
 
 TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 _CUTOUT_TASK = "app.workers.tasks_fast.build_cutouts"
@@ -71,7 +76,7 @@ def get_lib_versions() -> dict[str, str]:
     return out
 
 
-class JobStore(ABC):
+class JobStore(WorkspaceStore, ABC):
     """Abstract persistence and progress notification store for background jobs."""
 
     @abstractmethod
@@ -280,7 +285,7 @@ class JobStore(ABC):
         """Persist computed forced-PSF SED."""
 
 
-class InMemoryJobStore(InMemoryObjectMixin, JobStore):
+class InMemoryJobStore(InMemoryWorkspaceMixin, InMemoryObjectMixin, JobStore):
     """Thread-safe in-memory job store with Condition-backed SSE progress streaming."""
 
     def __init__(self) -> None:
@@ -296,6 +301,7 @@ class InMemoryJobStore(InMemoryObjectMixin, JobStore):
         self._releases: dict[str, DataReleaseRead] = {}
         self._comparisons: dict[UUID, dict[str, Any]] = {}
         self._init_object_store()
+        self._init_workspace_store()
 
     @staticmethod
     def _to_schema(rec: dict[str, Any]) -> JobStatusResponse:
@@ -548,7 +554,7 @@ class InMemoryJobStore(InMemoryObjectMixin, JobStore):
             return dict(rec) if rec is not None else None
 
 
-class SqlAlchemyJobStore(SqlAlchemyObjectMixin, JobStore):
+class SqlAlchemyJobStore(SqlAlchemyWorkspaceMixin, SqlAlchemyObjectMixin, JobStore):
     """PostgreSQL-backed job and provenance store using SQLAlchemy 2.0 sessions."""
 
     def __init__(self, session_factory: sessionmaker[Session] | None = None) -> None:

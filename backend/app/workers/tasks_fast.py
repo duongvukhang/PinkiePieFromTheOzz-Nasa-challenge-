@@ -27,6 +27,7 @@ from sphx_core.wcs import healpix9_nested
 _FRAME_UUID_NS = UUID("2e75b5fe-3a8a-4e4e-9f7e-2e5bc8d54a01")
 CUTOUT_TASK_NAME = "app.workers.tasks_fast.build_cutouts"
 UPLOAD_TASK_NAME = "app.workers.tasks_fast.validate_upload"
+EXPORT_TASK_NAME = "app.workers.tasks_fast.export_project"
 
 
 def _extract_2d_image(fits_bytes: bytes) -> np.ndarray:
@@ -318,6 +319,84 @@ def execute_validate_upload(
 def validate_upload(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
     """Celery task wrapper validating an uploaded FITS file."""
     return execute_validate_upload(
+        UUID(job_id),
+        params,
+        store=get_job_store(),
+        storage=get_storage_backend(),
+    )
+
+
+def execute_export_project(
+    job_id: UUID,
+    params: dict[str, Any],
+    *,
+    store: JobStore,
+    storage: StorageBackend,
+) -> dict[str, Any]:
+    """Render project export artifact (CSV/JSON/FITS/PNG/GIF/ADES) to object storage."""
+    from app.services.exports import build_project_export
+
+    store.update_job(job_id, status="running", progress=0.1, started_at=datetime.now(UTC))
+    try:
+        project_id = UUID(str(params["project_id"]))
+        fmt = str(params["format"])
+        obj_ids = [UUID(str(o)) for o in params["object_ids"]] if params.get("object_ids") else None
+        proj = store.get_project(project_id)
+        if proj is None:
+            raise KeyError(f"Project not found: {project_id}")
+        data, ext, ctype = build_project_export(
+            project_id=project_id,
+            fmt=fmt,
+            object_ids=obj_ids,
+            store=store,
+            storage=storage,
+        )
+        store.update_job(job_id, progress=0.8)
+        ver = int(proj.get("current_version", 1))
+        stored = storage.put_bytes(
+            f"exports/{project_id}/{ver}/{job_id}.{ext}", data, content_type=ctype
+        )
+        filename = f"project-{project_id}-v{ver}.{ext}"
+        outputs = {
+            "export_id": str(job_id),
+            "project_id": str(project_id),
+            "format": fmt,
+            "storage_key": stored.key,
+            "filename": filename,
+            "content_type": ctype,
+            "size_bytes": stored.size_bytes,
+            "sha256": stored.sha256,
+            "download_url": f"/api/v1/projects/{project_id}/exports/{job_id}",
+        }
+        store.record_provenance(
+            processing_job_id=job_id,
+            entity_table="projects",
+            entity_id=str(project_id),
+            inputs=[{"project_id": str(project_id), "version": ver, "format": fmt}],
+            params=params,
+        )
+        store.update_job(
+            job_id,
+            status="succeeded",
+            progress=1.0,
+            outputs=outputs,
+            finished_at=datetime.now(UTC),
+        )
+        return outputs
+    except Exception as exc:
+        store.update_job(
+            job_id,
+            status="failed",
+            error={"type": type(exc).__name__, "detail": str(exc)},
+            finished_at=datetime.now(UTC),
+        )
+        raise
+
+
+@celery_app.task(name=EXPORT_TASK_NAME, queue="fast")  # type: ignore[untyped-decorator]
+def export_project(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Celery task wrapper exporting project workspace artifacts."""
+    return execute_export_project(
         UUID(job_id),
         params,
         store=get_job_store(),
