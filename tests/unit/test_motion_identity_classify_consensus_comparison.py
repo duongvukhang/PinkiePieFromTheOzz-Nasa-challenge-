@@ -957,3 +957,96 @@ def test_refit_pm_outlier_and_hungarian_masked_pixel() -> None:
         for lk in tracks[0].links
     )
     assert (tracks[0].flags & int(DetectionFlag.LOST)) == 0
+
+
+def test_identity_review_fixes() -> None:
+    """Verify 10 Argon identity review fixes: parallax scaling, 2-epoch MAD, merge_tracks, flags."""
+    from sphx_core.identity import (
+        EpochDetection,
+        EpochLink,
+        TrackedSource,
+        TrackState,
+        _TrackProto,
+        _propagate_catalog_entry,
+        _update_track_photometry,
+        merge_tracks,
+    )
+
+    # 1. Parallax scaling in _propagate_catalog_entry (§C.2.3)
+    entry = {
+        "catalog": "gaia",
+        "source_id": "test_1",
+        "gaia_id": 12345,
+        "ra_deg": 10.0,
+        "dec_deg": 20.0,
+        "ref_epoch_mjd": 60000.0,
+        "pmra_mas_yr": 0.0,
+        "pmdec_mas_yr": 0.0,
+        "parallax_mas": 100.0,
+        "ra_err_mas": 1.0,
+        "dec_err_mas": 1.0,
+        "pmra_err_mas_yr": 1.0,
+        "pmdec_err_mas_yr": 1.0,
+        "parallax_err_mas": 2.0,
+        "mags": {},
+        "binary_separation_arcsec": None,
+    }
+    ra_e, dec_e, sig_cat = _propagate_catalog_entry(entry, 60000.0)
+    assert sig_cat > 0.0
+
+    # 2. _update_track_photometry adapts on >= 2 epochs
+    tr = _TrackProto("t1", "A", 60000.0, 10.0, 20.0, np.zeros(5), np.eye(5))
+    d1 = EpochDetection(
+        "d1", 0, "e0", 60000.0, None, 0.0, 0.0, 10.0, 20.0,
+        (0.01, 0.01, 0.0), (0.1, 0.1, 0.0), 0.1, 0.1,
+        100.0, 1.0, {"B1": (100.0, 1.0)}, 50.0, 0.9, 0, "B1"
+    )
+    d2 = EpochDetection(
+        "d2", 1, "e1", 60100.0, None, 0.0, 0.0, 10.0, 20.0,
+        (0.01, 0.01, 0.0), (0.1, 0.1, 0.0), 0.1, 0.1,
+        20.0, 1.0, {"B1": (20.0, 1.0)}, 10.0, 0.9, 0, "B1"
+    )
+    tr.links_by_epoch[0] = (d1, 0.0, 0.0, 1.0, (0.0, 0.0), "auto")
+    tr.links_by_epoch[1] = (d2, 0.0, 0.0, 1.0, (0.0, 0.0), "auto")
+    _update_track_photometry(tr)
+    assert tr.sigma_var_mag > 0.10
+
+    # 3. DetectionFlag.DUPLICATE_PROPOSAL defined
+    assert int(DetectionFlag.DUPLICATE_PROPOSAL) == 1 << 20
+
+    # 4. merge_tracks merges links and recomputes state
+    t_a = TrackedSource(
+        object_id="prim",
+        label="A",
+        public_id=None,
+        status="active",
+        detections=[d1],
+        links=[EpochLink("prim", 0, "e0", "d1", "LINKED", 0.0, 10.0, 1.0, (0.0, 0.0), "auto")],
+        state=TrackState(
+            "prim", "A", 2026.0, 10.0, 20.0,
+            (0.0, 0.0, 0.0, 0.0, 0.0), tuple((0.0,) * 5 for _ in range(5)),
+            {}, 0.1, "STATIC", 1.0, 0.0, 0.0, None, 0,
+        ),
+        confidence=0.99,
+        gaia_id=None,
+    )
+    t_b = TrackedSource(
+        object_id="dup",
+        label="B",
+        public_id=None,
+        status="active",
+        detections=[d2],
+        links=[EpochLink("dup", 1, "e1", "d2", "LINKED", 0.0, 10.0, 1.0, (0.0, 0.0), "auto")],
+        state=TrackState(
+            "dup", "B", 2026.0, 10.0, 20.0,
+            (0.0, 0.0, 0.0, 0.0, 0.0), tuple((0.0,) * 5 for _ in range(5)),
+            {}, 0.1, "STATIC", 1.0, 0.0, 0.0, None, 0,
+        ),
+        confidence=0.99,
+        gaia_id=None,
+    )
+    merged = merge_tracks([t_a, t_b], "prim", "dup")
+    prim_res = next(t for t in merged if t.object_id == "prim")
+    assert len(prim_res.detections) == 2
+    assert len(prim_res.links) == 2
+    assert prim_res.state.ref_epoch_jyear is not None

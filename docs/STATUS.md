@@ -1,8 +1,8 @@
-## Current phase: 1 (Resilience & Science Core Shrink Pass)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-13 | Shrink Pass (Flash, AGENTS.md §2)
-Done: Shrunk services, providers, and viewer components (DRY frame/epoch options, parameterized split panes, simplified stamp arrays, cleaned reference aliases and target mapping, deduplicated query predicates).
-Files touched: `backend/app/services/fields.py`, `backend/app/providers/simbad.py`, `frontend/src/viewer/compare/CompareView.tsx`, `frontend/src/viewer/planetx/PlanetXWizard.tsx`, `frontend/src/viewer/panels/InspectorTabs.tsx`, `frontend/src/viewer/overlays/WcsSvgOverlay.tsx`, `frontend/src/viewer/state/useViewerData.ts`, `docs/STATUS.md`
-Verified by: `pytest tests/unit` (65/65 passed), `npm --prefix frontend run typecheck && test` (5/5 passed)   Lines before -> after: 2362 -> 2213 (-149 lines across shrunk files)
+## Current phase: 1 (Cross-Epoch Identity Review & Hardening)
+## Last session: Gemini 3.8 Flash (High) | 2026-11-13 | T4.3: Cross-Epoch Identity Review Fixes (SCIENCE.md §G)
+Done: Applied all 10 Argon identity review findings: parallax factors scaling on catalog uncertainty (§C.2.3), 180" annulus clutter density KDTree lookup (§G.1), 2-epoch MAD adaptation, multi-band invariant color index cost (§G.1), catalog covariance diagonal initialization (§G.1), non-detect links & 3-sigma UPPER_LIMIT forced measurements separation (§G.2), DUPLICATE_PROPOSAL bitmask flag (1<<20) and track linking, merge_tracks link union & state refit, PSFPhotometry covariance extraction & chi2_nu scaling (§C.1), and keyword arguments for MotionMeasurement.
+Files touched: `science/sphx_core/identity/__init__.py`, `science/sphx_core/calib/__init__.py`, `backend/app/db/flags.py`, `tests/unit/test_motion_identity_classify_consensus_comparison.py`, `docs/STATUS.md`
+Verified by: `pytest tests/science/test_motion_and_mandatory_targets.py` (5/5 passed), `pytest tests/unit` (66/66 passed), `npm --prefix frontend run typecheck && test` (5/5 passed)   Lines before -> after: 2266 -> 2415
 ## Next task: T6 / Integration — Project workspace (notes, findings, FITS files) + live backend E2E verification
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).

@@ -21,6 +21,7 @@ from astropy.wcs import WCS
 from numpy.typing import NDArray
 from photutils.psf import CircularGaussianPRF, PSFPhotometry
 from scipy.optimize import least_squares, linear_sum_assignment
+from scipy.spatial import KDTree
 from scipy.special import ndtr
 
 from sphx_core.calib import (
@@ -72,6 +73,7 @@ class CatalogMatch:
     pmdec_err_arcsec_yr: float | None = None
     ra_err_arcsec: float | None = None
     dec_err_arcsec: float | None = None
+    parallax_err_mas: float | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,7 @@ class EpochDetection:
     catalog_id: str | None = None
     stat_cov_sky_arcsec2: tuple[float, float, float] | None = None
     source_index: int = -1
+    local_density: float | None = None
 
     @property
     def x_det(self) -> float:
@@ -480,7 +483,8 @@ def _propagate_catalog_entry(
     sig0 = max(float(entry["ra_err_mas"]), float(entry["dec_err_mas"])) * 1e-3
     sig_mu = max(float(entry["pmra_err_mas_yr"]), float(entry["pmdec_err_mas_yr"])) * 1e-3
     sig_plx = float(entry["parallax_err_mas"]) * 1e-3
-    sig_cat = max(1e-3, math.sqrt(sig0**2 + (dt_yr * sig_mu) ** 2 + sig_plx**2))
+    pa, pd = parallax_factors(observer_barycentric_au(mjd_tdb), ra_e, dec_e)
+    sig_cat = max(1e-3, math.sqrt(sig0**2 + (dt_yr * sig_mu) ** 2 + (sig_plx**2) * (pa**2 + pd**2)))
     return ra_e % 360.0, dec_e, sig_cat
 
 
@@ -540,6 +544,7 @@ def crossmatch_catalog(
                 pmdec_err_arcsec_yr=entry["pmdec_err_mas_yr"] * 1e-3,
                 ra_err_arcsec=entry["ra_err_mas"] * 1e-3,
                 dec_err_arcsec=entry["dec_err_mas"] * 1e-3,
+                parallax_err_mas=entry["parallax_err_mas"],
             )
         )
     matches.sort(key=lambda m: (-m.match_prob, m.sep_arcsec))
@@ -661,8 +666,29 @@ def _to_epoch_views(epochs: Sequence[Any], frames: Sequence[Any] | None = None) 
         band = ext.band_id or band_group_for_wavelength(ext.wavelength_um)
         bary = observer_barycentric_au(ext.epoch_mjd_tdb)
         area_as2 = max(nx * ny * (ext.pixscale_arcsec**2), 1.0)
-        n_clean = sum(1 for d in ext.detections if not (d.flags & HARD_BAD_MASK))
-        rho = max(1e-5, min(0.05, n_clean / area_as2))
+        clean_mask = [not (d.flags & HARD_BAD_MASK) for d in ext.detections]
+        n_clean = sum(clean_mask)
+        frame_rho = max(1e-5, min(0.05, n_clean / area_as2))
+
+        # Local clutter density within 180" annulus (§G.1 step 6; fallback to frame_rho on cutouts < 180")
+        local_densities = [frame_rho] * len(ext.detections)
+        min_dim_as = min(nx, ny) * ext.pixscale_arcsec
+        annulus_area_as2 = math.pi * (180.0**2 - max(ext.psf_fwhm_px * ext.pixscale_arcsec, 10.0)**2)
+        if min_dim_as >= 180.0 and n_clean > 1:
+            clean_indices = [i for i, c in enumerate(clean_mask) if c]
+            clean_xy = np.array(
+                [[ext.detections[i].x_px, ext.detections[i].y_px] for i in clean_indices],
+                dtype=np.float64,
+            )
+            r_outer_px = 180.0 / max(ext.pixscale_arcsec, 1e-3)
+            r_inner_px = max(ext.psf_fwhm_px, 10.0 / max(ext.pixscale_arcsec, 1e-3))
+            tree = KDTree(clean_xy)
+            outer_matches = tree.query_ball_point(clean_xy, r_outer_px)
+            inner_matches = tree.query_ball_point(clean_xy, r_inner_px)
+            for c_i, orig_i in enumerate(clean_indices):
+                n_annulus = max(0, len(outer_matches[c_i]) - len(inner_matches[c_i]))
+                local_densities[orig_i] = max(1e-5, min(0.05, n_annulus / annulus_area_as2))
+
         ra_c, dec_c = (
             float(v) for v in ext.wcs.pixel_to_world_values((nx - 1) / 2.0, (ny - 1) / 2.0)
         )
@@ -703,6 +729,7 @@ def _to_epoch_views(epochs: Sequence[Any], frames: Sequence[Any] | None = None) 
                     psf_chi2_nu=d.psf_chi2_nu,
                     stat_cov_sky_arcsec2=(vx_s, vy_s, cxy_s),
                     source_index=s_i,
+                    local_density=local_densities[s_i],
                 )
             )
         views.append(
@@ -718,7 +745,7 @@ def _to_epoch_views(epochs: Sequence[Any], frames: Sequence[Any] | None = None) 
                 pixscale_arcsec=ext.pixscale_arcsec,
                 fwhm_arcsec=ext.psf_fwhm_px * ext.pixscale_arcsec,
                 detections=dets,
-                local_density=rho,
+                local_density=frame_rho,
                 bary_au=bary,
                 frame=fr,
                 pointing_ra_deg=ra_c % 360.0,
@@ -821,6 +848,8 @@ class _TrackProto:
     vim_r: float | None = None
     flags: int = 0
     notes: list[str] = field(default_factory=list)
+    duplicate_of: str | None = None
+    forced_measurements: list[EpochDetection] = field(default_factory=list)
 
 
 def _flux_to_mag(flux: float) -> float:
@@ -841,7 +870,7 @@ def _update_track_photometry(track: _TrackProto) -> None:
             track.flux_by_band.setdefault(b, []).append(det.flux)
             mags_all.setdefault(b, []).append(_flux_to_mag(det.flux))
     track.mag_by_band = {b: float(np.median(vals)) for b, vals in mags_all.items()}
-    mads = [float(mad_std(vals)) for vals in mags_all.values() if len(vals) >= 3]
+    mads = [float(mad_std(vals)) for vals in mags_all.values() if len(vals) >= 2]
     track.sigma_var_mag = min(2.5, max([0.10, *mads]))
     track.is_red_cool = bool(dets) and all(d.band_id in _IR_RED_BANDS for d in dets)
 
@@ -923,19 +952,43 @@ def _pair_cost(
     if d2 > _GATE_CHI2:
         return _BIG_COST, d2, (float(dx[0]), float(dx[1]))
 
-    # Photometric cost ONLY within matching band group and unsaturated detections (§G.1 step 6).
+    # Photometric cost: highest-S/N band b* + multi-band color indices invariant to grey flux (§G.1 step 6).
     c_phot = 0.0
-    b = det.band_id or "ALL"
-    if (
-        b in track.mag_by_band
-        and det.flux is not None
-        and det.flux > 0.0
-        and not (det.flags & int(DetectionFlag.SATURATED))
-    ):
-        m_j = _flux_to_mag(det.flux)
-        sig_m = (1.0857 * det.flux_err / max(det.flux, 1e-6)) if det.flux_err else 0.1
-        denom = sig_m**2 + track.sigma_var_mag**2
-        c_phot = 0.5 * ((m_j - track.mag_by_band[b]) ** 2) / max(denom, 1e-4)
+    if not (det.flags & int(DetectionFlag.SATURATED)):
+        cand_bands = {
+            b: (f, fe if fe is not None else 0.1 * f)
+            for b, (f, fe) in (det.flux_band_mjy or {}).items()
+            if b in track.mag_by_band and f is not None and f > 0.0
+        }
+        if (
+            not cand_bands
+            and det.flux
+            and det.flux > 0.0
+            and (b_def := det.band_id or "ALL") in track.mag_by_band
+        ):
+            cand_bands[b_def] = (
+                det.flux,
+                det.flux_err if det.flux_err is not None else 0.1 * det.flux,
+            )
+
+        if cand_bands:
+            b_star = max(
+                cand_bands.keys(), key=lambda k: cand_bands[k][0] / max(cand_bands[k][1], 1e-9)
+            )
+            f_star, fe_star = cand_bands[b_star]
+            m_star = _flux_to_mag(f_star)
+            sig_m_star = 1.0857 * fe_star / max(f_star, 1e-6)
+            c_phot = 0.5 * ((m_star - track.mag_by_band[b_star]) ** 2) / max(
+                sig_m_star**2 + track.sigma_var_mag**2, 1e-4
+            )
+            for b_k, (f_k, fe_k) in cand_bands.items():
+                if b_k == b_star:
+                    continue
+                m_k = _flux_to_mag(f_k)
+                sig_m_k = 1.0857 * fe_k / max(f_k, 1e-6)
+                sig_col2 = sig_m_k**2 + sig_m_star**2
+                delta_col = (m_k - m_star) - (track.mag_by_band[b_k] - track.mag_by_band[b_star])
+                c_phot += 0.5 * (delta_col**2) / (sig_col2 + 0.15**2)
 
     # Morphology consistency penalty (stars vs extended/streak artifacts).
     c_morph = 0.0
@@ -957,10 +1010,11 @@ def _pair_cost(
     if track.catalog_id is not None and det.catalog_id is not None:
         c_id = -math.log(20.0) if track.catalog_id == det.catalog_id else math.log(100.0)
 
+    rho_eff = det.local_density if det.local_density is not None else view.local_density
     cost = (
         0.5 * d2
         + 0.5 * float(logdet)
-        + math.log(max(view.local_density, 1e-6))
+        + math.log(max(rho_eff, 1e-6))
         + c_phot
         + c_morph
         + c_id
@@ -999,10 +1053,35 @@ def _seed_tracks(
             dtype=np.float64,
         )
         cov5 = np.zeros((5, 5), dtype=np.float64)
-        cov5[:2, :2] = c0
-        cov5[2, 2] = sig_mu**2
-        cov5[3, 3] = sig_mu**2
-        cov5[4, 4] = (0.05 if cat_match is None else 0.01) ** 2
+        if cat_match is not None:
+            cov5[0, 0] = (
+                cat_match.ra_err_arcsec
+                if cat_match.ra_err_arcsec is not None
+                else math.sqrt(max(d0.cov_sky_arcsec2[0], 1e-4))
+            ) ** 2
+            cov5[1, 1] = (
+                cat_match.dec_err_arcsec
+                if cat_match.dec_err_arcsec is not None
+                else math.sqrt(max(d0.cov_sky_arcsec2[1], 1e-4))
+            ) ** 2
+            cov5[0, 1] = cov5[1, 0] = d0.cov_sky_arcsec2[2]
+            cov5[2, 2] = (
+                cat_match.pmra_err_arcsec_yr**2
+                if cat_match.pmra_err_arcsec_yr is not None
+                else sig_mu**2
+            )
+            cov5[3, 3] = (
+                cat_match.pmdec_err_arcsec_yr**2
+                if cat_match.pmdec_err_arcsec_yr is not None
+                else sig_mu**2
+            )
+            cov5[4, 4] = (
+                ((cat_match.parallax_err_mas or 1.0) * 1e-3) ** 2
+                if cat_match.parallax_err_mas is not None
+                else 0.01**2
+            )
+        else:
+            cov5[:2, :2], cov5[2, 2], cov5[3, 3], cov5[4, 4] = c0, sig_mu**2, sig_mu**2, 0.05**2
         plx_as = (cat_match.parallax_mas or 0.0) * 1e-3 if cat_match else 0.0
         pa_0, pd_0 = parallax_factors(v0.bary_au, d0.ra_deg, d0.dec_deg) if plx_as else (0.0, 0.0)
         th5 = np.array(
@@ -1479,23 +1558,50 @@ def link_epochs(
                                 resid,
                                 "auto",
                             )
+                        elif snr_f < 2.5:
+                            x_p, y_p = (
+                                float(val) for val in v.wcs.world_to_pixel_values(ra_p, dec_p)
+                            )
+                            sig_f = max(0.3, v.fwhm_arcsec / 2.355)
+                            det_ul = _make_forced_det(
+                                f"e{v.epoch_index}_ul_{tr.object_id}",
+                                v.epoch_index,
+                                v.epoch_id,
+                                v.mjd_tdb,
+                                v.array_id,
+                                x_p,
+                                y_p,
+                                ra_p,
+                                dec_p,
+                                sig_f,
+                                3.0 * fe,
+                                fe,
+                                snr_f,
+                                flg_f,
+                                v.band_id,
+                                confidence=conf,
+                                is_upper_limit=True,
+                                status="UPPER_LIMIT",
+                            )
+                            tr.forced_measurements.append(det_ul)
                     det_excl = next(
                         (did for e, did in tr.excluded_dets if e == v.epoch_index), None
                     )
                     if status_nd == "UPPER_LIMIT" and det_excl is not None:
                         status_nd = "PM_OUTLIER"
-                    tr.non_detect_links[v.epoch_index] = EpochLink(
-                        tr.object_id,
-                        v.epoch_index,
-                        v.epoch_id,
-                        det_excl if status_nd == "PM_OUTLIER" else None,
-                        status_nd,
-                        cost_v,
-                        dc_2nd,
-                        conf,
-                        resid,
-                        "user" if v.epoch_index in tr.user_locks else "auto",
-                    )
+                    if status_nd != "LOW_SNR_FORCED":
+                        tr.non_detect_links[v.epoch_index] = EpochLink(
+                            tr.object_id,
+                            v.epoch_index,
+                            v.epoch_id,
+                            det_excl if status_nd == "PM_OUTLIER" else None,
+                            status_nd,
+                            cost_v,
+                            dc_2nd,
+                            conf,
+                            resid,
+                            "user" if v.epoch_index in tr.user_locks else "auto",
+                        )
 
         # Pick up any clean unclaimed detections not linked by existing tracks
         for v in ordered:
@@ -1531,7 +1637,7 @@ def link_epochs(
     # Deduplicate tracks sharing >= 80% of epoch detection IDs (§G.2) and drop empty tracks.
     kept_protos: list[_TrackProto] = []
     tracks_sorted = sorted(tracks, key=lambda t: (-len(t.links_by_epoch), t.chi2_nu))
-    sig_sets: list[set[tuple[int, str]]] = []
+    sig_sets: list[tuple[_TrackProto, set[tuple[int, str]]]] = []
     for tr in tracks_sorted:
         if not tr.links_by_epoch:
             continue
@@ -1543,14 +1649,22 @@ def link_epochs(
         if not cur_set:
             continue
         is_dup = False
-        for s_prev in sig_sets:
+        dup_target: _TrackProto | None = None
+        for prev_tr, s_prev in sig_sets:
             overlap = len(cur_set & s_prev)
             if overlap >= 0.8 * min(len(cur_set), len(s_prev)) and overlap > 0:
                 is_dup = True
+                dup_target = prev_tr
                 break
-        if is_dup:
+        if is_dup and dup_target is not None:
+            dup_target.flags |= int(DetectionFlag.DUPLICATE_PROPOSAL)
+            dup_target.notes.append(
+                f"DUPLICATE_PROPOSAL: {tr.object_id} proposed with >=80% overlap"
+            )
+            tr.duplicate_of = dup_target.object_id
+            tr.flags |= int(DetectionFlag.DUPLICATE_PROPOSAL)
             continue
-        sig_sets.append(cur_set)
+        sig_sets.append((tr, cur_set))
         kept_protos.append(tr)
 
     # Assign final deterministic catalog matches, unresolved binary checks, public_id, LOST status.
@@ -1674,6 +1788,8 @@ def link_epochs(
                 catalog_matches=matches,
                 flags=all_flags,
                 notes=notes,
+                duplicate_of=tr.duplicate_of,
+                forced_measurements=tr.forced_measurements,
                 user_locked_pairs={
                     ei: lock for ei, lock in tr.user_locks.items() if ei in view_by_idx
                 },
@@ -1802,18 +1918,31 @@ def merge_tracks(
         d.epoch_index: d for d in prim.detections
     }
     merged_dets = [seen_ep[k] for k in sorted(seen_ep)]
+    seen_links = {l.epoch_index: l for l in dup.links} | {
+        l.epoch_index: l for l in prim.links
+    }
+    merged_links = [seen_links[k] for k in sorted(seen_links)]
     m_flag = int(DetectionFlag.MERGED)
     out: list[TrackedSource] = []
     for t in tracks:
         if t.object_id == primary_id:
-            out.append(
-                replace(
-                    t,
-                    detections=merged_dets,
-                    flags=t.flags | m_flag,
-                    notes=[*t.notes, f"Merged detections from {duplicate_id}."],
-                )
+            merged_track = replace(
+                t,
+                detections=merged_dets,
+                links=merged_links,
+                flags=t.flags | m_flag,
+                notes=[*t.notes, f"Merged detections from {duplicate_id}."],
             )
+            if len(merged_dets) >= 2:
+                merged_track.state = _state_from_mfit(
+                    merged_track.object_id,
+                    merged_track.label,
+                    fit_motion(merged_track),
+                    merged_track.state.mag_bands,
+                    sigma_var_mag=merged_track.state.sigma_var_mag,
+                    flags=merged_track.flags,
+                )
+            out.append(merged_track)
         elif t.object_id == duplicate_id:
             out.append(
                 replace(
@@ -1947,8 +2076,27 @@ def _simultaneous_deblend_track(
             chi2_nu = (
                 float(res_t["reduced_chi2"][0]) if np.isfinite(res_t["reduced_chi2"][0]) else 1.0
             )
-            sig_p = max(0.05, fr.psf_sigma_px / max(flux_m / flux_err, 1.0))
-            cov_xy, det_flag = np.eye(2) * (sig_p**2), 0
+            fit_infos = getattr(phot, "fit_info", None) or getattr(phot, "fit_results", None)
+            cov_xy = None
+            if (
+                fit_infos
+                and hasattr(fit_infos[0], "get")
+                and (pcov := fit_infos[0].get("param_cov")) is not None
+            ):
+                cov_xy = np.asarray(pcov[1:3, 1:3], dtype=np.float64) * max(1.0, chi2_nu)
+            if cov_xy is None:
+                xe = (
+                    float(res_t["x_err"][0])
+                    if "x_err" in res_t.colnames and np.isfinite(res_t["x_err"][0])
+                    else max(0.05, fr.psf_sigma_px / max(flux_m / flux_err, 1.0))
+                )
+                ye = (
+                    float(res_t["y_err"][0])
+                    if "y_err" in res_t.colnames and np.isfinite(res_t["y_err"][0])
+                    else max(0.05, fr.psf_sigma_px / max(flux_m / flux_err, 1.0))
+                )
+                cov_xy = np.diag([xe**2, ye**2]) * max(1.0, chi2_nu)
+            det_flag = 0
 
         snr_m = flux_m / max(flux_err, 1e-9)
         if flux_m <= 0.0 or not math.isfinite(snr_m):
@@ -2088,15 +2236,16 @@ def run_target_pipeline(
                 mfit_d = fit_motion(
                     [
                         MotionMeasurement(
-                            d.mjd_tdb,
-                            float(d.ra_deg),
-                            float(d.dec_deg),
-                            d.cov_sky_arcsec2,
-                            d.flux,
-                            d.flux_err,
-                            d.flags,
-                            d.band_id,
-                            d.epoch_index,
+                            mjd_tdb=d.mjd_tdb,
+                            ra_deg=float(d.ra_deg),
+                            dec_deg=float(d.dec_deg),
+                            cov_sky_arcsec2=d.cov_sky_arcsec2,
+                            stat_cov_sky_arcsec2=d.stat_cov_sky_arcsec2,
+                            flux=d.flux,
+                            flux_err=d.flux_err,
+                            flags=d.flags,
+                            band_id=d.band_id,
+                            epoch_index=d.epoch_index,
                         )
                         for d in dets_deb
                         if d.ra_deg is not None and d.dec_deg is not None

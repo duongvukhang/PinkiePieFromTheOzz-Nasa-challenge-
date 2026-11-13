@@ -56,6 +56,7 @@ class DetectionFlag(IntFlag):
     LOST = 1 << 17
     MERGED = 1 << 18
     USER_OVERRIDE = 1 << 19
+    DUPLICATE_PROPOSAL = 1 << 20
 
 
 HARD_BAD_MASK: int = int(
