@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,7 +18,9 @@ from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
 from astropy.wcs.utils import fit_wcs_from_points
+from erfa.core import ErfaWarning
 from numpy.typing import NDArray
+from scipy.interpolate import RectBivariateSpline
 from scipy.optimize import linear_sum_assignment
 
 from sphx_core.calib import HARD_BAD_MASK, DetectionFlag, FrameData, load_frame
@@ -156,37 +159,42 @@ def propagate_gaia_catalog(
             and abs(mjd_tdb_mid - ref_mjd) > 1e-4
             and (pmra_mas != 0.0 or pmdec_mas != 0.0 or plx_mas > 0.0)
         ):
-            dist = (1000.0 / plx_mas) * u.pc if plx_mas > 0.0 else 1e6 * u.pc
-            sc = SkyCoord(
-                ra=ra_val * u.deg,
-                dec=dec_val * u.deg,
-                distance=dist,
-                pm_ra_cosdec=pmra_mas * (u.mas / u.yr),
-                pm_dec=pmdec_mas * (u.mas / u.yr),
-                obstime=Time(ref_mjd, format="mjd", scale="tdb"),
-                frame="icrs",
-            ).apply_space_motion(new_obstime=t_obs)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ErfaWarning)
+                sc = SkyCoord(
+                    ra=ra_val * u.deg,
+                    dec=dec_val * u.deg,
+                    pm_ra_cosdec=pmra_mas * (u.mas / u.yr),
+                    pm_dec=pmdec_mas * (u.mas / u.yr),
+                    obstime=Time(ref_mjd, format="mjd", scale="tdb"),
+                    frame="icrs",
+                ).apply_space_motion(new_obstime=t_obs)
             ra_e, dec_e = float(sc.ra.deg) % 360.0, float(sc.dec.deg)
-            if plx_mas > 0.0:
-                ra_rad, dec_rad = math.radians(ra_e), math.radians(dec_e)
-                east = np.array([-math.sin(ra_rad), math.cos(ra_rad), 0.0])
-                north = np.array(
-                    [
-                        -math.sin(dec_rad) * math.cos(ra_rad),
-                        -math.sin(dec_rad) * math.sin(ra_rad),
-                        math.cos(dec_rad),
-                    ]
-                )
-                plx_rad = (plx_mas * 1e-3) / ARCSEC_PER_RAD
-                ra_e = (
-                    ra_e
-                    - math.degrees(
-                        plx_rad * float(np.dot(bary, east)) / max(math.cos(dec_rad), 1e-8)
-                    )
-                ) % 360.0
-                dec_e = dec_e - math.degrees(plx_rad * float(np.dot(bary, north)))
         else:
             ra_e, dec_e = ra_val % 360.0, dec_val
+
+        ra_rad, dec_rad = math.radians(ra_e), math.radians(dec_e)
+        east = np.array([-math.sin(ra_rad), math.cos(ra_rad), 0.0])
+        north = np.array(
+            [
+                -math.sin(dec_rad) * math.cos(ra_rad),
+                -math.sin(dec_rad) * math.sin(ra_rad),
+                math.cos(dec_rad),
+            ]
+        )
+        b_dot_e = float(np.dot(bary, east))
+        b_dot_n = float(np.dot(bary, north))
+        p_factor_sq = b_dot_e**2 + b_dot_n**2
+
+        if plx_mas > 0.0:
+            plx_rad = (plx_mas * 1e-3) / ARCSEC_PER_RAD
+            ra_e = (
+                ra_e
+                - math.degrees(
+                    plx_rad * b_dot_e / max(math.cos(dec_rad), 1e-8)
+                )
+            ) % 360.0
+            dec_e = dec_e - math.degrees(plx_rad * b_dot_n)
 
         dt_yr = abs((mjd_tdb_mid - ref_mjd) / 365.25) if ref_mjd is not None else 0.0
         sig0 = (
@@ -198,7 +206,7 @@ def propagate_gaia_catalog(
             * 1e-3
         )
         sig_plx = (_opt_float(row, ("parallax_error",)) or 0.05) * 1e-3
-        sig_cat = math.sqrt(sig0**2 + (dt_yr * sig_mu) ** 2 + sig_plx**2)
+        sig_cat = math.sqrt(sig0**2 + (dt_yr * sig_mu) ** 2 + (sig_plx**2) * p_factor_sq)
         out.append(
             ReferenceStar(
                 source_id=src_id,
@@ -306,20 +314,20 @@ def _apply_pixel_phase(
     dx_px: NDArray[np.float64],
     dy_px: NDArray[np.float64],
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    phi_x = x_px - np.floor(x_px + 0.5)
-    phi_y = y_px - np.floor(y_px + 0.5)
+    phi_x, phi_y = x_px - np.floor(x_px + 0.5), y_px - np.floor(y_px + 0.5)
+    centers = np.linspace(-0.4, 0.4, 5)
     edges = np.linspace(-0.5, 0.5, 6)
-    ix = np.clip(np.digitize(phi_x, edges) - 1, 0, 4)
-    iy = np.clip(np.digitize(phi_y, edges) - 1, 0, 4)
-    lut_x = np.zeros((5, 5), dtype=np.float64)
-    lut_y = np.zeros((5, 5), dtype=np.float64)
-    for by in range(5):
-        for bx in range(5):
+    ix, iy = np.clip(np.digitize(phi_x, edges) - 1, 0, 4), np.clip(np.digitize(phi_y, edges) - 1, 0, 4)
+    lut_x, lut_y = np.zeros((5, 5), dtype=np.float64), np.zeros((5, 5), dtype=np.float64)
+    for bx in range(5):
+        for by in range(5):
             sel = (ix == bx) & (iy == by)
             if np.sum(sel) >= 2:
-                lut_x[by, bx] = float(np.median(dx_px[sel]))
-                lut_y[by, bx] = float(np.median(dy_px[sel]))
-    return x_px - lut_x[iy, ix], y_px - lut_y[iy, ix]
+                lut_x[bx, by] = float(np.median(dx_px[sel]))
+                lut_y[bx, by] = float(np.median(dy_px[sel]))
+    spl_x = RectBivariateSpline(centers, centers, lut_x, kx=3, ky=3)
+    spl_y = RectBivariateSpline(centers, centers, lut_y, kx=3, ky=3)
+    return x_px - spl_x.ev(phi_x, phi_y), y_px - spl_y.ev(phi_x, phi_y)
 
 
 def _fit_tangent_transform(
@@ -389,6 +397,37 @@ def _fit_tangent_transform(
     return w, chi2
 
 
+def _fit_adaptive_wcs(
+    wcs_base: WCS,
+    x_px: NDArray[np.float64],
+    y_px: NDArray[np.float64],
+    ra_ref: NDArray[np.float64],
+    dec_ref: NDArray[np.float64],
+    inv_var: NDArray[np.float64],
+) -> tuple[WCS, str]:
+    n = len(x_px)
+    if n >= 80:
+        sky = SkyCoord(ra=ra_ref * u.deg, dec=dec_ref * u.deg, frame="icrs")
+        proj_pt = SkyCoord(
+            ra=float(wcs_base.wcs.crval[0]) * u.deg,
+            dec=float(wcs_base.wcs.crval[1]) * u.deg,
+            frame="icrs",
+        )
+        w_sip = fit_wcs_from_points((x_px, y_px), sky, proj_point=proj_pt, sip_degree=3)
+        w_out, _ = _fit_tangent_transform(w_sip, x_px, y_px, ra_ref, dec_ref, inv_var, "shift_2param")
+        return w_out, "tan_sip_deg3"
+    if n >= 15:
+        w_out, _ = _fit_tangent_transform(wcs_base, x_px, y_px, ra_ref, dec_ref, inv_var, "affine_6param")
+        return w_out, "affine_6param"
+    w2, chi2_2 = _fit_tangent_transform(wcs_base, x_px, y_px, ra_ref, dec_ref, inv_var, "shift_2param")
+    w4, chi2_4 = _fit_tangent_transform(wcs_base, x_px, y_px, ra_ref, dec_ref, inv_var, "similarity_4param")
+    bic_2 = chi2_2 + 2.0 * math.log(2 * n)
+    bic_4 = chi2_4 + 4.0 * math.log(2 * n)
+    if bic_4 < bic_2 - 6.0:
+        return w4, "similarity_4param"
+    return w2, "shift_2param"
+
+
 def _unrefined_result(
     frame: FrameData, warns: list[str], msg: str, *, n_ref: int = 0, n_matched: int = 0
 ) -> RegistrationResult:
@@ -434,9 +473,19 @@ def register_exposure(
     if reference_catalog is None or len(reference_catalog) == 0:
         return _unrefined_result(frame, warns, "WCS_UNREFINED: empty reference catalog.")
 
+    bary_pos = getattr(
+        frame.epoch,
+        "barycentric_earth_au",
+        getattr(
+            frame.epoch,
+            "barycentric_pos_au",
+            getattr(frame, "barycentric_pos_au", getattr(frame, "barycentric_earth_au", None)),
+        ),
+    )
     propagated = propagate_gaia_catalog(
         reference_catalog,
         frame.epoch.mjd_tdb_mid,
+        barycentric_earth_au=bary_pos,
         max_ruwe=max_ruwe,
         g_mag_range=g_mag_range,
     )
@@ -447,7 +496,10 @@ def register_exposure(
 
     ext = extract_sources(frame, min_snr=5.0)
     reject_bits = HARD_BAD_MASK | int(
-        DetectionFlag.SATURATED | DetectionFlag.STREAK | DetectionFlag.EXTENDED
+        DetectionFlag.SATURATED
+        | DetectionFlag.STREAK
+        | DetectionFlag.EXTENDED
+        | DetectionFlag.LOW_SNR
     )
     clean_dets = [d for d in ext.detections if not (d.flags & reject_bits)]
 
@@ -483,15 +535,14 @@ def register_exposure(
     )
     inv_var = 1.0 / (sig_pos**2)
 
-    # 3-iteration 3-sigma MAD outlier clipping via shift+rotation alignment first.
+    # 3-iteration 3-sigma MAD outlier clipping around adaptive plate solution.
     keep = np.ones(n_matched, dtype=bool)
     w_work = frame.wcs.deepcopy()
     for _ in range(3):
         if int(np.sum(keep)) < 5:
             break
-        mode_pre = "similarity_4param" if int(np.sum(keep)) >= 5 else "shift_2param"
-        w_tmp, _ = _fit_tangent_transform(
-            w_work, x_arr[keep], y_arr[keep], ra_arr[keep], dec_arr[keep], inv_var[keep], mode_pre
+        w_tmp, _ = _fit_adaptive_wcs(
+            w_work, x_arr[keep], y_arr[keep], ra_arr[keep], dec_arr[keep], inv_var[keep]
         )
         ra_p, dec_p = w_tmp.pixel_to_world_values(x_arr, y_arr)
         sep_all = (
@@ -517,22 +568,7 @@ def register_exposure(
         )
         phase_applied = True
 
-    if nk >= 80:
-        model_used = "tan_sip_deg3"
-        sky_k = SkyCoord(ra=rak * u.deg, dec=deck * u.deg, frame="icrs")
-        wcs_out = fit_wcs_from_points((xk, yk), sky_k, proj_point="center", sip_degree=3)
-    elif nk >= 15:
-        model_used = "affine_6param"
-        wcs_out, _ = _fit_tangent_transform(frame.wcs, xk, yk, rak, deck, ivk, model_used)
-    else:
-        w2, chi2_2 = _fit_tangent_transform(frame.wcs, xk, yk, rak, deck, ivk, "shift_2param")
-        w4, chi2_4 = _fit_tangent_transform(frame.wcs, xk, yk, rak, deck, ivk, "similarity_4param")
-        bic_2 = chi2_2 + 2.0 * math.log(2 * nk)
-        bic_4 = chi2_4 + 4.0 * math.log(2 * nk)
-        if bic_4 < bic_2 - 6.0:
-            wcs_out, model_used = w4, "similarity_4param"
-        else:
-            wcs_out, model_used = w2, "shift_2param"
+    wcs_out, model_used = _fit_adaptive_wcs(frame.wcs, xk, yk, rak, deck, ivk)
 
     ra_f, dec_f = wcs_out.pixel_to_world_values(xk, yk)
     ra_c0, dec_c0 = float(wcs_out.wcs.crval[0]), float(wcs_out.wcs.crval[1])
