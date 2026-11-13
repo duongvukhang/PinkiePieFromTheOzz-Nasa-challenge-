@@ -4,6 +4,7 @@ import type { DataReleaseRead, ExampleTargetSummary } from "../../api/client";
 import { formatSexagesimal, toGalacticAndEcliptic } from "../aladin/wcs";
 import { useViewStore, type ViewerMode } from "../state/viewStore";
 import { ArchiveSearchModal } from "./ArchiveSearchModal";
+import { UploadFitsModal } from "./UploadFitsModal";
 
 interface ViewerToolbarProps {
   examples: ExampleTargetSummary[];
@@ -33,6 +34,7 @@ export function ViewerToolbar({
   const navigate = useNavigate();
   const { target, ra, dec, fov, from, to, release, mode, setView } = useViewStore();
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
   const skyMeta = ra !== undefined && dec !== undefined ? toGalacticAndEcliptic(ra, dec) : null;
   const maxFov = authenticated ? 60 : 15;
@@ -52,6 +54,15 @@ export function ViewerToolbar({
           title="Search NASA astronomical archives (SPHEREx, WISE, 2MASS, SkyView)"
         >
           🔍 Search NASA Archives
+        </button>
+
+        <button
+          type="button"
+          className="viewer-btn"
+          onClick={() => setIsUploadModalOpen(true)}
+          title="Upload custom FITS file for WCS inspection and comparison"
+        >
+          📁 Upload FITS
         </button>
 
         <div className="viewer-field-badge" title="Current sky field coordinates and target">
@@ -225,6 +236,25 @@ export function ViewerToolbar({
           if (newTo) qs.set("to", newTo);
           if (newBands && newBands !== "all") qs.set("bands", newBands);
           if (newSource && newSource !== "spherex_irsa") qs.set("source", newSource);
+          navigate(`/v?${qs.toString()}`);
+        }}
+      />
+
+      <UploadFitsModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onLoadedField={({ ra: newRa, dec: newDec, fov: newFov }) => {
+          setView({
+            ra: newRa,
+            dec: newDec,
+            fov: newFov ? Math.min(maxFov, Math.max(1, Math.round(newFov))) : fov,
+            target: "",
+            frame: 0,
+          });
+          const qs = new URLSearchParams();
+          qs.set("ra", newRa.toFixed(5));
+          qs.set("dec", newDec.toFixed(5));
+          if (newFov) qs.set("fov", String(Math.min(maxFov, Math.max(1, Math.round(newFov)))));
           navigate(`/v?${qs.toString()}`);
         }}
       />

@@ -119,6 +119,8 @@ def validate_fits_upload(
         overlap_pct=compat.overlap_pct,
         pixscale_arcsec=inspection.wcs.pixscale_arcsec if inspection.wcs else None,
         rotation_deg=inspection.wcs.rotation_deg if inspection.wcs else None,
+        ra_center_deg=inspection.wcs.ra_center_deg if inspection.wcs else None,
+        dec_center_deg=inspection.wcs.dec_center_deg if inspection.wcs else None,
         band_label=inspection.band_label,
         mjd_tdb_mid=inspection.epoch.mjd_tdb_mid if inspection.epoch else None,
         reprojection_needed=compat.reprojection_needed,

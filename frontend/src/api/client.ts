@@ -20,6 +20,11 @@ export type CompareResultResponse = Schema<"CompareResultResponse">;
 export type EpochMeasurementRead = Schema<"EpochMeasurementRead">;
 export type MotionFitRead = Schema<"MotionFitRead">;
 export type ClassificationSummary = Schema<"ClassificationSummary">;
+export type UploadResponse = Schema<"UploadResponse">;
+export type UploadCompatibilityReport = Schema<"UploadCompatibilityReport"> & {
+  ra_center_deg?: number | null;
+  dec_center_deg?: number | null;
+};
 
 export type ArchiveLoadRequest = Schema<"ArchiveLoadRequest">;
 export type ArchiveSourceId = NonNullable<ArchiveLoadRequest["source"]>;
@@ -189,4 +194,22 @@ export const api = {
       "/api/v1/archive/load",
       body,
     ),
+  uploadFits: async (file: File, userEpoch?: string, refRa?: number, refDec?: number) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (userEpoch) form.append("user_epoch", userEpoch);
+    if (refRa !== undefined) form.append("reference_ra_deg", String(refRa));
+    if (refDec !== undefined) form.append("reference_dec_deg", String(refDec));
+    const res = await fetch(`${API_BASE}/api/v1/uploads`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "FITS Upload failed", err.title);
+    }
+    return (await res.json()) as UploadResponse;
+  },
+  getUploadReport: (uploadId: string) =>
+    apiJson<UploadCompatibilityReport>(`/api/v1/uploads/${uploadId}/report`),
 };

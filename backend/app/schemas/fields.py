@@ -114,6 +114,8 @@ class UploadCompatibilityReport(BaseModel):
     overlap_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     pixscale_arcsec: float | None = None
     rotation_deg: float | None = None
+    ra_center_deg: float | None = None
+    dec_center_deg: float | None = None
     band_label: str | None = None
     mjd_tdb_mid: float | None = None
     reprojection_needed: bool
