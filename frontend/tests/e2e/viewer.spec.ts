@@ -299,7 +299,29 @@ async function mockWise0855Api(page: Page) {
               mjd_tdb: 60850.41,
               ra: WISE_RA,
               dec: WISE_DEC,
+              sig_ra_mas: 45,
+              sig_dec_mas: 40,
               flags: 2,
+            },
+            {
+              epoch: "S2",
+              source: "detection",
+              mjd_tdb: 61031.77,
+              ra: WISE_RA - 0.003,
+              dec: WISE_DEC + 0.001,
+              sig_ra_mas: 55,
+              sig_dec_mas: 50,
+              flags: 0,
+            },
+            {
+              epoch: "S3",
+              source: "detection",
+              mjd_tdb: 61215.1,
+              ra: WISE_RA - 0.006,
+              dec: WISE_DEC + 0.002,
+              sig_ra_mas: 65,
+              sig_dec_mas: 60,
+              flags: 128,
             },
           ],
           motion_fit: {
@@ -316,9 +338,56 @@ async function mockWise0855Api(page: Page) {
             top_class: "brown_dwarf",
             top_prob: 0.83,
             probabilities: { brown_dwarf: 0.83 },
-            evidence: ["mu = 8.1 arcsec/yr"],
+            evidence: ["mu = 8.1 arcsec/yr", "W1 - W2 > 2.5"],
           },
           caveats: ["Low optical flux; blended near faint neighbor at S2"],
+        },
+      });
+    }
+    if (path.includes("/associations") && req.method() === "PATCH") {
+      return route.fulfill({
+        json: {
+          object_id: "00000000-0000-0000-0000-000000088801",
+          epoch: "S2",
+          action: "accepted",
+          assigned_detection_id: 88802,
+          override_by: "current_user",
+          updated_at: "2026-11-13T10:00:00Z",
+        },
+      });
+    }
+    if (path.includes("/associations")) {
+      return route.fulfill({
+        json: {
+          object_id: "00000000-0000-0000-0000-000000088801",
+          associations: [
+            {
+              id: 101,
+              observation_id: "00000000-0000-0000-0000-000000000001",
+              detection_id: 88801,
+              pred_ra: WISE_RA,
+              pred_dec: WISE_DEC,
+              confidence: 0.98,
+              rank: 1,
+              is_chosen: true,
+              decided_by: "auto",
+              reason: "Global gate within 0.05 arcsec",
+              flags: 0,
+            },
+            {
+              id: 102,
+              observation_id: "00000000-0000-0000-0000-000000000002",
+              detection_id: 88802,
+              pred_ra: WISE_RA - 0.003,
+              pred_dec: WISE_DEC + 0.001,
+              confidence: 0.92,
+              rank: 1,
+              is_chosen: true,
+              decided_by: "auto",
+              reason: "Linear motion extrapolation match",
+              flags: 0,
+            },
+          ],
         },
       });
     }
@@ -381,7 +450,9 @@ test.describe("SkyTrace Viewer /v & /embed (WISE 0855 mocked API)", () => {
     // 4. Feature C: Switch Inspector Tabs (Metadata & Flags + Object & Sources)
     await page.getByRole("tab", { name: "Metadata & Flags" }).click();
     await expect(page.locator(".meta-panel")).toContainText("60850.41");
-    await expect(page.locator(".flag-row.is-active")).toContainText("BLENDED");
+    await expect(
+      page.locator(".flag-row.is-active").filter({ hasText: "BLENDED" }),
+    ).toBeVisible();
     await page.screenshot({ path: `${SHOT_DIR}/viewer_wise0855_flags.png` });
 
     await page.getByRole("tab", { name: "Object & Sources" }).click();
@@ -414,6 +485,128 @@ test.describe("SkyTrace Viewer /v & /embed (WISE 0855 mocked API)", () => {
     );
     expect(overflow).toBeLessThanOrEqual(0);
     await page.screenshot({ path: `${SHOT_DIR}/viewer_mobile.png` });
+    expect(errors).toEqual([]);
+  });
+
+  test("Task 5c: Features A, B, C (Selection, Tracked IDs, Trajectory overlay, Associations)", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockWise0855Api(page);
+
+    // Load viewer with obj=88801 and track=A:133.79513,-7.24515
+    const binDone = page.waitForResponse((r) => r.url().includes("/science.bin") && r.ok());
+    await page.goto(
+      "/v?target=WISE%200855&track=A:133.79513,-7.24515&obj=88801&inspectorTab=object",
+    );
+    await binDone;
+    await expect(page.locator("canvas.viewer-gl-canvas")).toBeVisible();
+
+    // Ensure Object & Sources tab is active
+    await page.getByRole("tab", { name: "Object & Sources" }).click();
+
+    // Feature B: Tracked objects list with persistent ID A
+    await expect(page.locator(".tracked-objects-bar")).toBeVisible();
+    await expect(page.locator(".tracked-object-pill")).toContainText("A");
+
+    // Feature C: Trajectory overlay with polyline, error ellipses and PM vector
+    await expect(page.locator("polyline.trajectory-polyline")).toBeVisible();
+    await expect(page.locator("ellipse.error-ellipse")).toHaveCount(3);
+    await expect(page.locator(".pm-arrow")).toBeVisible();
+
+    // Feature C: Motion fit + Unconfirmed hypothesis caveat
+    await expect(page.locator(".object-dossier")).toContainText("8120.0");
+    await expect(page.locator(".unconfirmed-banner")).toContainText("unconfirmed hypotheses");
+
+    // Feature B: Association hypothesis inspector with Accept/Reject buttons
+    await expect(page.locator(".associations-section")).toBeVisible();
+    const acceptBtn = page.getByRole("button", { name: /Accept match for epoch S2/i });
+    await expect(acceptBtn).toBeVisible();
+
+    // Click Accept -> calls PATCH /api/v1/objects/88801/associations/S2
+    const patchDone = page.waitForResponse(
+      (r) => r.url().includes("/associations/S2") && r.request().method() === "PATCH",
+    );
+    await acceptBtn.click();
+    await patchDone;
+
+    // Feature A: Box-Select Object toggle activates pointer events on SVG
+    const boxSelectBtn = page.getByRole("button", { name: "Box-Select Object" });
+    await boxSelectBtn.click();
+    await expect(boxSelectBtn).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".box-select-active")).toBeVisible();
+
+    await page.screenshot({ path: `${SHOT_DIR}/viewer_trajectory_overlay.png` });
+    expect(errors).toEqual([]);
+  });
+
+  test("Task 5c: Feature D (Compare view A-vs-B with header diff table & source change filtering)", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockWise0855Api(page);
+
+    const binDone = page.waitForResponse((r) => r.url().includes("/science.bin") && r.ok());
+    await page.goto("/v?target=WISE%200855&mode=compare&op=diff&a=f1&b=f2");
+    await binDone;
+
+    // CompareView rendered
+    await expect(page.locator(".compare-view")).toBeVisible();
+    await expect(page.locator(".compare-toolbar")).toBeVisible();
+
+    // Responsive Header Diff Table (SCIENCE.md §J.3)
+    await expect(page.locator(".compare-header-table")).toBeVisible();
+    await expect(page.locator(".compare-header-table")).toContainText("DATE-OBS");
+    await expect(page.locator(".compare-header-table .diff-pill").first()).toBeVisible();
+
+    // Source Change Classification Filter (SCIENCE.md §J.5)
+    await expect(page.locator(".compare-sources-panel")).toBeVisible();
+    const varFilter = page.getByRole("button", { name: "Variable (5σ)" });
+    await varFilter.click();
+    await expect(varFilter).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".compare-sources-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".compare-sources-table")).toContainText("src-90102");
+
+    await page.screenshot({ path: `${SHOT_DIR}/viewer_compare_view.png` });
+    expect(errors).toEqual([]);
+  });
+
+  test("Task 5c: Feature E (Planet X wizard UI with rate/distance grid & candidate gallery)", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockWise0855Api(page);
+
+    await page.goto("/v?target=WISE%200855&mode=planetx");
+    await expect(page.locator(".planetx-wizard")).toBeVisible();
+
+    // Mandatory Unconfirmed Hypothesis Banner (SCIENCE.md §I.3 & AGENTS.md §7)
+    await expect(page.locator(".planetx-mandatory-banner")).toContainText(
+      "CANDIDATES ARE UNCONFIRMED HYPOTHESES",
+    );
+
+    // Step 2: Rate & Distance Grid
+    await page.getByRole("tab", { name: "2. Rate & Distance Grid" }).click();
+    await expect(page.locator(".wizard-panel")).toContainText(/Parallactic [Jj]ump/);
+
+    // Step 3: Shift-and-Stack Execution
+    await page.getByRole("tab", { name: "3. Digital Tracking Stack" }).click();
+    const launchBtn = page.getByRole("button", { name: /Run Digital Tracking Stack/i });
+    await launchBtn.click();
+
+    // Step 4: Candidate Gallery automatically opened on completion
+    await expect(page.locator(".candidate-card").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator(".candidate-card")).toHaveCount(1);
+    await expect(page.locator(".candidate-card").first()).toContainText("PX-CAND-01");
+    await expect(page.locator(".candidate-card").first()).toContainText("Unconfirmed Hypothesis");
+
+    await page.screenshot({ path: `${SHOT_DIR}/viewer_planetx_wizard.png` });
     expect(errors).toEqual([]);
   });
 });

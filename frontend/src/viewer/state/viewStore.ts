@@ -31,11 +31,13 @@ export interface ViewState {
   hips: boolean;
   swipe: number;
   inspectorTab: InspectorTab;
+  selectBoxMode: boolean;
 }
 
 const MODES = new Set<ViewerMode>(["blink", "compare", "planetx"]);
 const OPS = new Set<ImageOp>(["none", "sum", "diff", "ratio", "swipe"]);
 const STRETCHES = new Set<StretchMode>(["asinh", "linear", "log", "sqrt"]);
+const INSPECTOR_TABS = new Set<InspectorTab>(["spectrum", "flags", "object"]);
 
 function hmsToDeg(token: string, isHours: boolean): number | undefined {
   const clean = token
@@ -114,6 +116,10 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     overlay,
     track,
     obj: q.get("obj") ?? undefined,
+    inspectorTab: (() => {
+      const t = (q.get("inspectorTab") || q.get("tab")) as InspectorTab;
+      return t && INSPECTOR_TABS.has(t) ? t : undefined;
+    })(),
   };
 }
 
@@ -139,6 +145,7 @@ export function toViewQuery(s: ViewState): string {
   if (s.overlay.length) q.set("overlay", s.overlay.join(","));
   if (s.track.length) q.set("track", s.track.join(";"));
   if (s.obj) q.set("obj", s.obj);
+  if (s.inspectorTab && s.inspectorTab !== "spectrum") q.set("inspectorTab", s.inspectorTab);
   const str = q.toString();
   return str ? `?${str}` : "";
 }
@@ -162,13 +169,16 @@ const DEFAULT_STATE: ViewState = {
   hips: false,
   swipe: 0.5,
   inspectorTab: "spectrum",
+  selectBoxMode: false,
 };
 
 interface ViewStore extends ViewState {
   syncFromSearch: (search: string, authenticated: boolean) => void;
   setView: (patch: Partial<ViewState>, syncUrl?: boolean) => void;
   toggleOverlay: (cat: CatalogName) => void;
+  toggleSelectBox: () => void;
   addTrack: (label: string, ra: number, dec: number) => void;
+  removeTrack: (label: string) => void;
 }
 
 function syncReplaceUrl(next: ViewState) {
@@ -205,12 +215,23 @@ export const useViewStore = create<ViewStore>((set) => ({
       syncReplaceUrl(next);
       return next;
     }),
+  toggleSelectBox: () => set((prev) => ({ selectBoxMode: !prev.selectBoxMode })),
   addTrack: (label, ra, dec) =>
     set((prev) => {
       const entry = `${label}:${ra.toFixed(5)},${dec.toFixed(5)}`;
       const next = {
         ...prev,
         track: [...prev.track.filter((t) => !t.startsWith(`${label}:`)), entry],
+      };
+      syncReplaceUrl(next);
+      return next;
+    }),
+  removeTrack: (label) =>
+    set((prev) => {
+      const next = {
+        ...prev,
+        track: prev.track.filter((t) => !t.startsWith(`${label}:`)),
+        obj: prev.obj === label ? undefined : prev.obj,
       };
       syncReplaceUrl(next);
       return next;

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, fetchScienceFrame, type CutoutFrame } from "../../api/client";
+import { api, fetchScienceFrame, type CutoutFrame, type SuggestionItem } from "../../api/client";
 import { useAuthStore } from "../../app/authStore";
 import { parseFitsWcs } from "../aladin/wcs";
 import { useViewStore } from "./viewStore";
@@ -24,6 +24,11 @@ export function useViewerData(search: string, skipSecondary = false) {
     b,
     overlay,
     obj,
+    track,
+    selectBoxMode,
+    toggleSelectBox,
+    addTrack,
+    removeTrack,
     syncFromSearch,
     setView,
   } = view;
@@ -162,6 +167,12 @@ export function useViewerData(search: string, skipSecondary = false) {
     enabled: !skipSecondary && Boolean(activeObjId),
   });
 
+  const associationsQ = useQuery({
+    queryKey: ["associations", activeObjId],
+    queryFn: () => api.getObjectAssociations(activeObjId!),
+    enabled: !skipSecondary && Boolean(activeObjId),
+  });
+
   const spectrumQ = useQuery({
     queryKey: ["spectrum", activeObjId, frameA?.epoch],
     queryFn: () => api.getObjectSpectrum(activeObjId!, frameA?.epoch),
@@ -190,6 +201,57 @@ export function useViewerData(search: string, skipSecondary = false) {
     bufAQ.data?.height ?? 128,
   );
 
+  const overrideAssociation = async (
+    epoch: string,
+    action: "accept" | "reject" | "reassign",
+    detectionId?: number | null,
+    reason = "User manual association override",
+  ) => {
+    if (!activeObjId) return;
+    await api.overrideObjectAssociation(activeObjId, epoch, {
+      action,
+      detection_id: detectionId,
+      reason,
+    });
+    associationsQ.refetch();
+    objectQ.refetch();
+  };
+
+  const nextLabel = (existing: string[]): string => {
+    const set = new Set(existing.map((t) => t.split(":")[0]));
+    for (const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+      if (!set.has(ch)) return ch;
+    }
+    return `O${set.size + 1}`;
+  };
+
+  const onTrackSuggestion = (s: SuggestionItem) => {
+    const lbl = nextLabel(track);
+    addTrack(lbl, s.ra, s.dec);
+    setView({ obj: String(s.detection_id), inspectorTab: "object" });
+  };
+
+  const onBoxSelect = (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
+    const inBox = (analysisQ.data?.detections ?? []).filter(
+      (d) => d.ra >= box.raMin && d.ra <= box.raMax && d.dec >= box.decMin && d.dec <= box.decMax,
+    );
+    if (inBox.length > 0) {
+      let cur = track;
+      inBox.forEach((d) => {
+        const lbl = nextLabel(cur);
+        cur = [...cur, `${lbl}:${d.ra.toFixed(5)},${d.dec.toFixed(5)}`];
+        addTrack(lbl, d.ra, d.dec);
+      });
+      const first = inBox[0];
+      if (first) setView({ obj: String(first.id), inspectorTab: "object" });
+    } else {
+      const midRa = 0.5 * (box.raMin + box.raMax);
+      const midDec = 0.5 * (box.decMin + box.decMax);
+      addTrack(nextLabel(track), midRa, midDec);
+      setView({ inspectorTab: "object" });
+    }
+  };
+
   return {
     activeRa: activeRa ?? 133.79513,
     activeDec: activeDec ?? -7.24515,
@@ -207,6 +269,14 @@ export function useViewerData(search: string, skipSecondary = false) {
     detections: analysisQ.data?.detections ?? [],
     suggestions: analysisQ.data?.suggestions ?? [],
     objectDetail: objectQ.data,
+    associations: associationsQ.data?.associations ?? [],
+    overrideAssociation,
+    onTrackSuggestion,
+    onBoxSelect,
+    track,
+    removeTrack,
+    selectBoxMode,
+    toggleSelectBox,
     spectrum: spectrumQ.data,
     resolving: resolveQ.isFetching,
     resolveError: resolveQ.error instanceof Error ? resolveQ.error.message : undefined,

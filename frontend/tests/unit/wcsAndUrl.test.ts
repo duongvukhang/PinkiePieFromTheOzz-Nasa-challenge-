@@ -70,6 +70,7 @@ describe("viewer WCS & URL state", () => {
       hips: false,
       swipe: 0.5,
       inspectorTab: "spectrum",
+      selectBoxMode: false,
     });
     expect(qs).toContain("bands=arr6");
     expect(qs).toContain("op=diff");

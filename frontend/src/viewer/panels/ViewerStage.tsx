@@ -4,6 +4,7 @@ import type {
   DetectionRead,
   ScienceBuffer,
   SuggestionItem,
+  TrackedObjectDetailResponse,
 } from "../../api/client";
 import { AladinBase } from "../aladin/AladinBase";
 import type { WcsParams } from "../aladin/wcs";
@@ -24,6 +25,8 @@ interface ViewerStageProps {
   detections: DetectionRead[];
   suggestions: SuggestionItem[];
   selectBoxMode: boolean;
+  objectDetail?: TrackedObjectDetailResponse;
+  onBoxSelect?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onVisibilityPause: (paused: boolean) => void;
 }
 
@@ -40,6 +43,8 @@ export function ViewerStage({
   detections,
   suggestions,
   selectBoxMode,
+  objectDetail,
+  onBoxSelect,
   onVisibilityPause,
 }: ViewerStageProps) {
   const { op, stretch, colormap, swipe, hips, track, addTrack, setView } = useViewStore();
@@ -71,6 +76,8 @@ export function ViewerStage({
           suggestions={suggestions}
           tracks={track}
           selectBoxMode={selectBoxMode}
+          objectDetail={objectDetail}
+          onSelectBox={onBoxSelect}
           onSelectCoord={(sRa, sDec) => {
             const nextLabel = String.fromCharCode(65 + (track.length % 26));
             addTrack(nextLabel, sRa, sDec);

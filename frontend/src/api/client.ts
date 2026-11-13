@@ -10,6 +10,16 @@ export type SuggestionItem = Schema<"SuggestionItem">;
 export type DetectionRead = Schema<"DetectionRead">;
 export type TrackedObjectDetailResponse = Schema<"TrackedObjectDetailResponse">;
 export type SpectrumResponse = Schema<"SpectrumResponse">;
+export type ObjectAssociationsResponse = Schema<"ObjectAssociationsResponse">;
+export type AssociationHypothesis = Schema<"AssociationHypothesis">;
+export type AssociationOverrideRequest = Schema<"AssociationOverrideRequest">;
+export type AssociationOverrideResponse = Schema<"AssociationOverrideResponse">;
+export type CompareRequest = Schema<"CompareRequest">;
+export type CompareAcceptedResponse = Schema<"CompareAcceptedResponse">;
+export type CompareResultResponse = Schema<"CompareResultResponse">;
+export type EpochMeasurementRead = Schema<"EpochMeasurementRead">;
+export type MotionFitRead = Schema<"MotionFitRead">;
+export type ClassificationSummary = Schema<"ClassificationSummary">;
 
 export interface ScienceBuffer {
   data: Float32Array;
@@ -128,6 +138,21 @@ export const api = {
     apiJson<Schema<"SuggestionsResponse">>(`/api/v1/analyses/${analysisId}/suggestions`),
   getObjectDetail: (objectId: string) =>
     apiJson<TrackedObjectDetailResponse>(`/api/v1/objects/${objectId}`),
+  getObjectAssociations: (objectId: string) =>
+    apiJson<ObjectAssociationsResponse>(`/api/v1/objects/${objectId}/associations`),
+  overrideObjectAssociation: (
+    objectId: string,
+    epoch: string,
+    body: AssociationOverrideRequest,
+  ) =>
+    apiJson<AssociationOverrideResponse>(`/api/v1/objects/${objectId}/associations/${epoch}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  createComparison: (body: CompareRequest) =>
+    postJson<CompareAcceptedResponse>("/api/v1/compare", body),
+  getComparison: (compareId: string) =>
+    apiJson<CompareResultResponse>(`/api/v1/compare/${compareId}`),
   getObjectSpectrum: (objectId: string, epoch?: string) =>
     apiJson<SpectrumResponse>(buildUrl(`/api/v1/objects/${objectId}/spectrum`, { epoch })),
 };
