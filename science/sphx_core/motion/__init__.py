@@ -410,7 +410,7 @@ def _wls_solve(
     res = y_vec - a_mat @ theta
     chi2 = sum(
         float(res[2 * i : 2 * i + 2] @ wi @ res[2 * i : 2 * i + 2]) for i, wi in enumerate(w_blocks)
-    )
+    ) + (float(theta @ ridge @ theta) if ridge is not None else 0.0)
     return theta, cov_theta, chi2, cond
 
 
@@ -424,8 +424,9 @@ def _leave_one_out_r(
     for i, ci in enumerate(cov_blocks):
         ai, ei = a_mat[2 * i : 2 * i + 2], res[2 * i : 2 * i + 2]
         v_e = ci - ai @ cov_theta @ ai.T
-        if np.min(np.linalg.eigvalsh(v_e)) <= 1e-9:
-            v_e = 0.5 * ci
+        evals, evecs = np.linalg.eigh(v_e)
+        if np.min(evals) <= 1e-9:
+            v_e = evecs @ np.diag(np.maximum(evals, 1e-4 * np.diag(ci))) @ evecs.T
         rs.append(math.sqrt(max(0.0, float(ei @ np.linalg.pinv(v_e) @ ei))))
     return rs
 
@@ -609,10 +610,18 @@ def fit_motion(
             ridge[4, 4] = 0.25  # weak zero-mean prior sigma=2.0 arcsec (§C.4)
             th5_t, cov5_t, c5_t, cond5 = _wls_solve(a5, y, ws, ridge=ridge)
             if cond5 < 1e6 and cov5_t[4, 4] > 0.0:
-                if (float(th5_t[4]) / max(math.sqrt(float(cov5_t[4, 4])), 1e-9)) < -2.0:
+                pinned = (float(th5_t[4]) / max(math.sqrt(float(cov5_t[4, 4])), 1e-9)) < -2.0
+                if pinned:
                     notes.append("Parallax active-set pinned to 0 mas (free fit < -2 sigma).")
+                    th5 = np.append(th4 if th4 is not None else th5_t[:4], 0.0)
+                    cov5 = np.zeros((5, 5), dtype=np.float64)
+                    if cov4 is not None:
+                        cov5[:4, :4] = cov4
+                    cov5[4, 4] = cov5_t[4, 4]
+                    c5 = c4 if th4 is not None else c5_t
                 else:
-                    th5, cov5, c5, bic5 = th5_t, cov5_t, c5_t, c5_t + 5.0 * math.log(2 * n_obs)
+                    th5, cov5, c5 = th5_t, cov5_t, c5_t
+                bic5 = c5 + 5.0 * math.log(2 * n_obs)
 
         return dict(
             t0_mjd=t0_mjd,
@@ -675,10 +684,8 @@ def fit_motion(
         cov_mu4 = fit["cov4"][2:4, 2:4]
         mu_vec4 = fit["th4"][2:4]
         chi2_mu4 = float(mu_vec4 @ np.linalg.pinv(cov_mu4) @ mu_vec4)
-        if (fit["bic4"] < fit["bic2"] - 10.0 and chi2_mu4 > 25.0) or fit["dt_span"] > 1e-4:
-            # Store fitted PM from LINEAR_4P if multi-epoch; model_type marks STATIC if low SNR.
-            if fit["bic4"] < fit["bic2"] - 6.0 or chi2_mu4 > 9.0:
-                chosen = "LINEAR_4P"
+        if fit["bic4"] < fit["bic2"] - 6.0 or chi2_mu4 > 9.0:
+            chosen = "LINEAR_4P"
             th_use, cov_use, c_use, bic_use = fit["th4"], fit["cov4"], fit["c4"], fit["bic4"]
             k_use = 4
 
@@ -723,7 +730,10 @@ def fit_motion(
     vim_flagged, vim_r, vim_p = _check_vim(active_meas, fit["xi"], fit["eta"], fit["dt"])
     flags_out = 0
     if vim_flagged:
+        flags_out |= int(DetectionFlag.VIM_CANDIDATE)
         notes.append(f"VIM_CANDIDATE: centroid wobble correlated with flux (r={vim_r:.3f}).")
+    if dropped:
+        flags_out |= int(DetectionFlag.PM_OUTLIER)
 
     delta_bic = float(fit["bic2"] - bic_use)
     dof = max(2 * len(active) - k_use, 1)
@@ -898,8 +908,16 @@ def measure_variability_period(
         w = 1.0 / (e_arr**2)
         f_bar = float(np.sum(w * f_arr) / np.sum(w))
         resid_s = math.sqrt(len(f_arr) / max(len(f_arr) - 1, 1)) * (f_arr - f_bar) / e_arr
-        prod = resid_s[:-1] * resid_s[1:]
-        stetson = float(np.mean(np.sign(prod) * np.sqrt(np.abs(prod))))
+        pair_mask = np.array(
+            [
+                (t_arr[i + 1] - t_arr[i] <= 1.0) and (pts[i][3] != pts[i + 1][3])
+                for i in range(len(pts) - 1)
+            ],
+            dtype=bool,
+        )
+        if np.any(pair_mask):
+            prod = (resid_s[:-1] * resid_s[1:])[pair_mask]
+            stetson = float(np.mean(np.sign(prod) * np.sqrt(np.abs(prod))))
 
     return PeriodogramResult(
         1.0 / f_best,
@@ -1047,10 +1065,11 @@ def detect_streaks(
             [math.cos(ang_f), math.sin(ang_f)], dtype=np.float64
         )
         v_norm = float(np.hypot(*v_sky))
-        len_arcsec = len_f * v_norm if v_norm > 0 else len_f * pixscale
+        scale = v_norm if v_norm > 0 else pixscale
+        len_arcsec = len_f * scale
         exptime = frame.epoch.exptime_s
         rate = (len_arcsec / exptime) * 3600.0 if exptime and exptime > 0.0 else None
-        sig_rate = ((sig_l * pixscale) / exptime) * 3600.0 if exptime and exptime > 0.0 else None
+        sig_rate = ((sig_l * scale) / exptime) * 3600.0 if exptime and exptime > 0.0 else None
         out.append(
             StreakDetection(
                 x_mid,
@@ -1243,7 +1262,9 @@ def check_single_fits_motion(
                     matched.append((last_idx, last_ext.epoch_mjd_tdb, d1))
                     if len(matched) >= 3:
                         mm = [
-                            MotionMeasurement(tm, dm.ra_deg, dm.dec_deg, dm.cov_sky_arcsec2)
+                            MotionMeasurement(
+                                tm, dm.ra_deg, dm.dec_deg, dm.cov_sky_arcsec2, flags=dm.flags
+                            )
                             for _, tm, dm in matched
                         ]
                         mfit = fit_motion(mm, fit_parallax=False)

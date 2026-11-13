@@ -385,6 +385,9 @@ CREATE TABLE audit_log (
 | 17 | LOST | no detection in gate (upper limit) |
 | 18 | MERGED | merged with another tracked object at this epoch |
 | 19 | USER_OVERRIDE | user corrected match |
+| 20 | DUPLICATE_PROPOSAL | proposed duplicate trajectory track candidate |
+| 21 | PM_OUTLIER | dropped astrometric/proper-motion outlier epoch |
+| 22 | VIM_CANDIDATE | variability-induced motion photocentre wobble candidate |
 
 SPHEREx-native FLAGS bits are mapped to these via the release profile YAML [verify native bit definitions].
 

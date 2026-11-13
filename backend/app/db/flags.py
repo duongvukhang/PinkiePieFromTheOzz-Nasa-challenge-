@@ -23,3 +23,5 @@ class DetectionFlag(IntFlag):
     MERGED = 1 << 18
     USER_OVERRIDE = 1 << 19
     DUPLICATE_PROPOSAL = 1 << 20
+    PM_OUTLIER = 1 << 21
+    VIM_CANDIDATE = 1 << 22

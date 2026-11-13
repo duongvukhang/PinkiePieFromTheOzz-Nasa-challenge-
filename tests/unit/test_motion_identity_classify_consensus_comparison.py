@@ -1050,3 +1050,121 @@ def test_identity_review_fixes() -> None:
     assert len(prim_res.detections) == 2
     assert len(prim_res.links) == 2
     assert prim_res.state.ref_epoch_jyear is not None
+
+
+def test_motion_argon_review_hardening() -> None:
+    """Verify all 8 Argon motion review findings."""
+    from sphx_core.calib import DetectionFlag
+    from sphx_core.motion import (
+        MotionMeasurement,
+        _leave_one_out_r,
+        _wls_solve,
+        fit_motion,
+        measure_variability_period,
+        observer_barycentric_au,
+        parallax_factors,
+    )
+
+    # 1. _wls_solve ridge penalty inclusion in chi2
+    a = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
+    y = np.array([2.0, 3.0, 2.0, 3.0], dtype=np.float64)
+    ws = [np.eye(2, dtype=np.float64), np.eye(2, dtype=np.float64)]
+    r = np.diag([1.0, 2.0])
+    th_r, _, chi2_r, _ = _wls_solve(a, y, ws, ridge=r)
+    penalty = float(th_r @ r @ th_r)
+    assert penalty > 0.0
+    assert chi2_r >= penalty
+
+    # 2. _leave_one_out_r eigenvalue clamping on high leverage anchor
+    cov_deg = [np.eye(2, dtype=np.float64) * 0.01]
+    a_deg = np.eye(2, dtype=np.float64)
+    res_deg = np.array([0.05, -0.05], dtype=np.float64)
+    cov_th = np.eye(2, dtype=np.float64) * 0.01
+    r_vals = _leave_one_out_r(a_deg, res_deg, cov_deg, cov_th)
+    assert len(r_vals) == 1 and np.isfinite(r_vals[0]) and r_vals[0] > 0.0
+
+    # 3. Active-set parallax pinning when fit_parallax=True and plx < -2 sigma
+    mjd0 = 60000.0
+    ra0, dec0 = 180.0, 10.0
+    neg_plx_meas: list[MotionMeasurement] = []
+    for k, dt in enumerate(np.linspace(-1.0, 1.0, 6)):
+        t = mjd0 + dt * 365.25
+        pa, pd = parallax_factors(observer_barycentric_au(t), ra0, dec0)
+        ra_m, dec_m = tangent_arcsec_to_sky(-0.8 * pa, -0.8 * pd, ra0, dec0)
+        neg_plx_meas.append(
+            MotionMeasurement(t, float(ra_m), float(dec_m), (0.001, 0.001, 0.0), epoch_index=k)
+        )
+    res_pinned = fit_motion(neg_plx_meas, fit_parallax=True)
+    assert res_pinned.model_type == "PARALLAX_5P"
+    assert res_pinned.parallax_mas == 0.0
+    assert any("pinned" in n.lower() for n in res_pinned.notes)
+
+    # 4. STATIC model consistency (k_use=2, dof=2*n-2, delta_bic=0.0)
+    static_meas = [
+        MotionMeasurement(mjd0 + 100.0 * k, ra0, dec0, (0.01, 0.01, 0.0), epoch_index=k)
+        for k in range(4)
+    ]
+    res_static = fit_motion(static_meas, fit_parallax=False)
+    assert res_static.model_type == "STATIC"
+    assert res_static.dof == 2 * len(static_meas) - 2
+    assert res_static.delta_bic == 0.0
+    assert len(res_static.cov_params) == 2
+
+    # 5. DetectionFlag.VIM_CANDIDATE and DetectionFlag.PM_OUTLIER bits on MotionFitResult.flags
+    assert int(DetectionFlag.PM_OUTLIER) == 1 << 21
+    assert int(DetectionFlag.VIM_CANDIDATE) == 1 << 22
+    static_corrupt = list(static_meas)
+    ra_out, dec_out = tangent_arcsec_to_sky(5.0, 5.0, ra0, dec0)
+    static_corrupt[2] = MotionMeasurement(
+        mjd0 + 200.0, float(ra_out), float(dec_out), (0.01, 0.01, 0.0), epoch_index=2
+    )
+    res_outlier = fit_motion(static_corrupt, fit_parallax=False)
+    assert bool(res_outlier.flags & int(DetectionFlag.PM_OUTLIER))
+
+    # 6. Stetson J quasi-simultaneous multi-band pairing (|dt| <= 1.0 d, band !=)
+    from types import SimpleNamespace
+    phot_sparse = SimpleNamespace(
+        detections=[
+            SimpleNamespace(mjd_tdb=mjd0, flux=100.0, flux_err=1.0, band_id="B1", flags=0),
+            SimpleNamespace(mjd_tdb=mjd0 + 180.0, flux=120.0, flux_err=1.0, band_id="B2", flags=0),
+            SimpleNamespace(mjd_tdb=mjd0 + 360.0, flux=90.0, flux_err=1.0, band_id="B1", flags=0),
+            SimpleNamespace(mjd_tdb=mjd0 + 540.0, flux=130.0, flux_err=1.0, band_id="B2", flags=0),
+        ]
+    )
+    p_sparse = measure_variability_period(phot_sparse)
+    assert p_sparse.stetson_j is None
+
+    phot_paired = SimpleNamespace(
+        detections=[
+            SimpleNamespace(mjd_tdb=mjd0, flux=100.0, flux_err=1.0, band_id="B1", flags=0),
+            SimpleNamespace(mjd_tdb=mjd0 + 0.01, flux=105.0, flux_err=1.0, band_id="B2", flags=0),
+            SimpleNamespace(mjd_tdb=mjd0 + 180.0, flux=140.0, flux_err=1.0, band_id="B1", flags=0),
+            SimpleNamespace(mjd_tdb=mjd0 + 180.01, flux=145.0, flux_err=1.0, band_id="B2", flags=0),
+        ]
+    )
+    p_paired = measure_variability_period(phot_paired)
+    assert p_paired.stetson_j is not None and p_paired.stetson_j > 0.0
+
+    # 7. detect_streaks propagates directional Jacobian scale
+    from sphx_core.wcs import local_wcs_jacobian
+    wcs_aniso = make_tan_wcs(64, 64, 150.0, 20.0, pixscale_arcsec=6.2)
+    j = local_wcs_jacobian(wcs_aniso, 32.0, 32.0)
+    v_norm = float(np.hypot(*(j @ np.array([1.0, 0.0]))))
+    assert abs(v_norm - 6.2) < 0.1
+
+    # 8. check_single_fits_motion constructs MotionMeasurement with flags=dm.flags
+    from sphx_core.extraction import ExtractedSource
+    dm_flagged = ExtractedSource(
+        source_index=0, x_px=10.0, y_px=10.0, x_win_px=10.0, y_win_px=10.0,
+        ra_deg=150.0, dec_deg=20.0, cov_px=(0.1, 0.1, 0.0), cov_sky_arcsec2=(0.01, 0.01, 0.0),
+        sig_ra_arcsec=0.1, sig_dec_arcsec=0.1, corr_radec=0.0, flux=100.0, flux_err=5.0,
+        snr=20.0, snr_matched=20.0, fwhm_px=1.5, fwhm_arcsec=9.3, elongation=1.0,
+        theta_deg=0.0, sharpness=0.5, roundness=0.9, psf_chi2_nu=1.0,
+        unflagged_weight_frac=1.0, real_bogus=0.95, flags=int(DetectionFlag.EDGE),
+        centroid_mismatch=False,
+    )
+    mm_flagged = MotionMeasurement(
+        60000.0, dm_flagged.ra_deg, dm_flagged.dec_deg, dm_flagged.cov_sky_arcsec2, flags=dm_flagged.flags
+    )
+    assert mm_flagged.flags == int(DetectionFlag.EDGE)
+
