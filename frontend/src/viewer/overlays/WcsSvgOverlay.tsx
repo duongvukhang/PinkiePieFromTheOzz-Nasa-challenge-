@@ -33,10 +33,20 @@ interface WcsSvgOverlayProps {
   tracks: string[];
   selectBoxMode: boolean;
   objectDetail?: TrackedObjectDetailResponse;
+  selectedTarget?: {
+    label: string;
+    ra: number;
+    dec: number;
+    snr?: number | null;
+    isTrack?: boolean;
+  } | null;
+  currentEpoch?: string;
+  showGrid?: boolean;
   onSelectCoord: (ra: number, dec: number) => void;
   onSelectBox?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onSelectDetection?: (detection: DetectionRead) => void;
   onSelectTrack?: (trackLabel: string) => void;
+  onSelectEpoch?: (epoch: string) => void;
 }
 
 export function WcsSvgOverlay({
@@ -48,10 +58,14 @@ export function WcsSvgOverlay({
   tracks,
   selectBoxMode,
   objectDetail,
+  selectedTarget,
+  currentEpoch,
+  showGrid = true,
   onSelectCoord,
   onSelectBox,
   onSelectDetection,
   onSelectTrack,
+  onSelectEpoch,
 }: WcsSvgOverlayProps) {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurr, setDragCurr] = useState<{ x: number; y: number } | null>(null);
@@ -129,6 +143,32 @@ export function WcsSvgOverlay({
         })()
       : null;
 
+  // Precision target reticle pixel position
+  const selectedPos = selectedTarget
+    ? skyToPixel(selectedTarget.ra, selectedTarget.dec, wcs)
+    : null;
+
+  // Dropout / non-detection predicted position in current epoch
+  const dropoutPrediction = (() => {
+    if (!objectDetail || measurements.length === 0 || !currentEpoch) return null;
+    const hasCurrent = measurements.some(
+      (m) => m.epoch === currentEpoch && m.ra != null && m.dec != null,
+    );
+    if (hasCurrent) return null;
+    const sorted = [...measurements].sort((a, b) => a.mjd_tdb - b.mjd_tdb);
+    const mLast = sorted[sorted.length - 1]!;
+    let predRa = mLast.ra!;
+    let predDec = mLast.dec!;
+    if (motion?.pm_total_masyr && motion.pa_deg != null && motion.ref_epoch_mjd_tdb) {
+      const dtYears = (mLast.mjd_tdb - motion.ref_epoch_mjd_tdb) / 365.25;
+      const rad = (motion.pa_deg * Math.PI) / 180;
+      predRa += (motion.pm_total_masyr * Math.sin(rad) * dtYears) / 3.6e6;
+      predDec += (motion.pm_total_masyr * Math.cos(rad) * dtYears) / 3.6e6;
+    }
+    const pos = skyToPixel(predRa, predDec, wcs);
+    return { ...pos, label: objectDetail.label || "TARGET" };
+  })();
+
   return (
     <>
       <svg
@@ -183,6 +223,58 @@ export function WcsSvgOverlay({
           setDragCurr(null);
         }}
       >
+        <defs>
+          <marker
+            id="trajArrow"
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto"
+          >
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--oi-orange)" />
+          </marker>
+          <marker
+            id="predArrow"
+            viewBox="0 0 10 10"
+            refX="6"
+            refY="5"
+            markerWidth="4"
+            markerHeight="4"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#f59e0b" />
+          </marker>
+        </defs>
+
+        {/* 1. Subtle Celestial Coordinate Grid (Stellarium aesthetic) */}
+        {showGrid && (
+          <g className="viewer-grid-overlay" opacity="0.32" pointerEvents="none">
+            {[0.2, 0.4, 0.6, 0.8].map((f) => (
+              <g key={f}>
+                <line
+                  x1={wcs.naxis1 * f}
+                  y1={0}
+                  x2={wcs.naxis1 * f}
+                  y2={wcs.naxis2}
+                  stroke="rgba(34, 211, 238, 0.4)"
+                  strokeWidth={0.8 * pxScale}
+                  strokeDasharray={`${3 * pxScale},${3 * pxScale}`}
+                />
+                <line
+                  x1={0}
+                  y1={wcs.naxis2 * f}
+                  x2={wcs.naxis1}
+                  y2={wcs.naxis2 * f}
+                  stroke="rgba(34, 211, 238, 0.4)"
+                  strokeWidth={0.8 * pxScale}
+                  strokeDasharray={`${3 * pxScale},${3 * pxScale}`}
+                />
+              </g>
+            ))}
+          </g>
+        )}
         {gaiaSources.map((s) => {
           const p = skyToPixel(s.ra, s.dec, wcs);
           const r = 2.6 * pxScale;
@@ -249,16 +341,88 @@ export function WcsSvgOverlay({
           );
         })}
 
-        {/* Trajectory polyline across epochs with error ellipses (Feature C) */}
-        {trajPoints.length >= 2 && (
-          <polyline
-            className="trajectory-polyline"
-            points={trajPoints.map((p) => `${p.x},${p.y}`).join(" ")}
-            fill="none"
-            stroke="var(--oi-orange)"
-            strokeWidth={1.4 * pxScale}
-          />
-        )}
+        {/* 2. Directional Trajectory Vectors with Arrowheads and Glow (Feature C) */}
+        {trajPoints.length >= 2 &&
+          trajPoints.map((pt, idx) => {
+            if (idx === 0) return null;
+            const prev = trajPoints[idx - 1]!;
+            return (
+              <g key={`traj-seg-${idx}`} className="pointer-events-none">
+                {/* Atmospheric glow beneath active trajectory */}
+                <line
+                  x1={prev.x}
+                  y1={prev.y}
+                  x2={pt.x}
+                  y2={pt.y}
+                  stroke="var(--oi-orange)"
+                  strokeWidth={3.5 * pxScale}
+                  strokeOpacity={0.25}
+                />
+                {/* Directional trajectory vector line with arrowhead */}
+                <line
+                  x1={prev.x}
+                  y1={prev.y}
+                  x2={pt.x}
+                  y2={pt.y}
+                  stroke="var(--oi-orange)"
+                  strokeWidth={1.4 * pxScale}
+                  strokeOpacity={0.9}
+                  markerEnd="url(#trajArrow)"
+                />
+              </g>
+            );
+          })}
+
+        {/* 3. Clickable Waypoint Badges along Trajectory (E1, E2, E3...) */}
+        {trajPoints.map((pt, idx) => {
+          const isCurrent = pt.epoch === currentEpoch;
+          return (
+            <g
+              key={`traj-wpt-${idx}`}
+              transform={`translate(${pt.x},${pt.y})`}
+              style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (pt.epoch) onSelectEpoch?.(pt.epoch);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  if (pt.epoch) onSelectEpoch?.(pt.epoch);
+                }
+              }}
+              aria-label={`Jump to Epoch ${pt.epoch ?? idx + 1}`}
+            >
+              <circle
+                r={(isCurrent ? 6 : 4) * pxScale}
+                fill="rgba(245, 158, 11, 0.15)"
+                stroke="var(--oi-orange)"
+                strokeWidth={0.9 * pxScale}
+                strokeDasharray={`${2 * pxScale},${2 * pxScale}`}
+              />
+              <circle
+                r={(isCurrent ? 3 : 2) * pxScale}
+                fill={isCurrent ? "#ffffff" : "var(--oi-orange)"}
+                stroke="var(--oi-orange)"
+                strokeWidth={0.8 * pxScale}
+              />
+              <text
+                x={6 * pxScale}
+                y={-4 * pxScale}
+                fill={isCurrent ? "#ffffff" : "var(--oi-orange)"}
+                fontSize={5 * pxScale}
+                fontFamily="IBM Plex Mono, monospace"
+                fontWeight="bold"
+                className="select-none pointer-events-none"
+                style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95)" }}
+              >
+                E{idx + 1}
+              </text>
+            </g>
+          );
+        })}
 
         {trajPoints.map((p, i) => {
           const isUncertain = (p.flags ?? 0) > 0;
@@ -301,6 +465,121 @@ export function WcsSvgOverlay({
               strokeWidth={1.5 * pxScale}
             />
             <circle cx={pmVector.x2} cy={pmVector.y2} r={2 * pxScale} fill="var(--oi-sky)" />
+          </g>
+        )}
+
+        {/* 4. Precision Telescope Reticle & Corner Brackets on Selected Object */}
+        {selectedPos && (
+          <g className="selected-target-reticle" style={{ pointerEvents: "none" }}>
+            {/* Pulsing outer dashed ring */}
+            <circle
+              cx={selectedPos.x}
+              cy={selectedPos.y}
+              r={14 * pxScale}
+              fill="none"
+              stroke="var(--oi-sky)"
+              strokeWidth={1.2 * pxScale}
+              strokeDasharray={`${3.5 * pxScale},${2.5 * pxScale}`}
+            />
+            {/* 4 crosshair lines extending outward */}
+            <line
+              x1={selectedPos.x - 18 * pxScale}
+              y1={selectedPos.y}
+              x2={selectedPos.x - 7 * pxScale}
+              y2={selectedPos.y}
+              stroke="var(--oi-sky)"
+              strokeWidth={1.2 * pxScale}
+            />
+            <line
+              x1={selectedPos.x + 7 * pxScale}
+              y1={selectedPos.y}
+              x2={selectedPos.x + 18 * pxScale}
+              y2={selectedPos.y}
+              stroke="var(--oi-sky)"
+              strokeWidth={1.2 * pxScale}
+            />
+            <line
+              x1={selectedPos.x}
+              y1={selectedPos.y - 18 * pxScale}
+              x2={selectedPos.x}
+              y2={selectedPos.y - 7 * pxScale}
+              stroke="var(--oi-sky)"
+              strokeWidth={1.2 * pxScale}
+            />
+            <line
+              x1={selectedPos.x}
+              y1={selectedPos.y + 7 * pxScale}
+              x2={selectedPos.x}
+              y2={selectedPos.y + 18 * pxScale}
+              stroke="var(--oi-sky)"
+              strokeWidth={1.2 * pxScale}
+            />
+            {/* Corner brackets */}
+            <path
+              d={`M ${selectedPos.x - 10 * pxScale} ${selectedPos.y - 6 * pxScale} L ${selectedPos.x - 10 * pxScale} ${selectedPos.y - 10 * pxScale} L ${selectedPos.x - 6 * pxScale} ${selectedPos.y - 10 * pxScale}
+                  M ${selectedPos.x + 6 * pxScale} ${selectedPos.y - 10 * pxScale} L ${selectedPos.x + 10 * pxScale} ${selectedPos.y - 10 * pxScale} L ${selectedPos.x + 10 * pxScale} ${selectedPos.y - 6 * pxScale}
+                  M ${selectedPos.x - 10 * pxScale} ${selectedPos.y + 6 * pxScale} L ${selectedPos.x - 10 * pxScale} ${selectedPos.y + 10 * pxScale} L ${selectedPos.x - 6 * pxScale} ${selectedPos.y + 10 * pxScale}
+                  M ${selectedPos.x + 6 * pxScale} ${selectedPos.y + 10 * pxScale} L ${selectedPos.x + 10 * pxScale} ${selectedPos.y + 10 * pxScale} L ${selectedPos.x + 10 * pxScale} ${selectedPos.y + 6 * pxScale}`}
+              fill="none"
+              stroke="var(--oi-sky)"
+              strokeWidth={1.2 * pxScale}
+            />
+            <circle cx={selectedPos.x} cy={selectedPos.y} r={1.6 * pxScale} fill="#ffffff" />
+            {selectedTarget && (
+              <text
+                x={selectedPos.x + 13 * pxScale}
+                y={selectedPos.y - 6 * pxScale}
+                fill="var(--oi-sky)"
+                fontSize={5.5 * pxScale}
+                fontFamily="IBM Plex Mono, monospace"
+                fontWeight="bold"
+                style={{ textShadow: "0 1px 4px rgba(0,0,0,0.95)" }}
+              >
+                {selectedTarget.label}
+              </text>
+            )}
+          </g>
+        )}
+
+        {/* 5. Dropout / Non-detection Target Lock in Current Epoch */}
+        {dropoutPrediction && (
+          <g className="dropout-target-lock" style={{ pointerEvents: "none" }}>
+            <circle
+              cx={dropoutPrediction.x}
+              cy={dropoutPrediction.y}
+              r={16 * pxScale}
+              fill="rgba(245, 158, 11, 0.08)"
+              stroke="#f59e0b"
+              strokeWidth={1.3 * pxScale}
+              strokeDasharray={`${3.5 * pxScale},${2.5 * pxScale}`}
+            />
+            <line
+              x1={dropoutPrediction.x - 13 * pxScale}
+              y1={dropoutPrediction.y}
+              x2={dropoutPrediction.x + 13 * pxScale}
+              y2={dropoutPrediction.y}
+              stroke="#f59e0b"
+              strokeWidth={1 * pxScale}
+            />
+            <line
+              x1={dropoutPrediction.x}
+              y1={dropoutPrediction.y - 13 * pxScale}
+              x2={dropoutPrediction.x}
+              y2={dropoutPrediction.y + 13 * pxScale}
+              stroke="#f59e0b"
+              strokeWidth={1 * pxScale}
+            />
+            <text
+              x={dropoutPrediction.x + 15 * pxScale}
+              y={dropoutPrediction.y - 5 * pxScale}
+              fill="#f59e0b"
+              fontSize={5 * pxScale}
+              fontFamily="IBM Plex Mono, monospace"
+              fontWeight="bold"
+              style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95)" }}
+            >
+              TARGET (Non-detection in this epoch)
+            </text>
           </g>
         )}
 

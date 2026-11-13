@@ -30,6 +30,7 @@ interface ViewerStageProps {
   frameA?: CutoutFrame;
   bufA?: ScienceBuffer;
   bufB?: ScienceBuffer;
+  frames?: CutoutFrame[];
   gaiaSources: CatalogOverlaySource[];
   catwiseSources: CatalogOverlaySource[];
   detections: DetectionRead[];
@@ -38,6 +39,7 @@ interface ViewerStageProps {
   objectDetail?: TrackedObjectDetailResponse;
   onBoxSelect?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onVisibilityPause: (paused: boolean) => void;
+  onSelectEpoch?: (epoch: string) => void;
   loading?: boolean;
   errorMsg?: string;
   emptyWarning?: string;
@@ -51,6 +53,7 @@ export function ViewerStage({
   frameA,
   bufA,
   bufB,
+  frames,
   gaiaSources,
   catwiseSources,
   detections,
@@ -59,6 +62,7 @@ export function ViewerStage({
   objectDetail,
   onBoxSelect,
   onVisibilityPause,
+  onSelectEpoch,
   loading,
   errorMsg,
   emptyWarning,
@@ -68,7 +72,12 @@ export function ViewerStage({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
-  const [cursorInfo, setCursorInfo] = useState<{ ra: number; dec: number } | null>(null);
+  const [cursorInfo, setCursorInfo] = useState<{
+    ra: number;
+    dec: number;
+    px: number;
+    py: number;
+  } | null>(null);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const panStartRef = useRef<{
@@ -159,7 +168,13 @@ export function ViewerStage({
       if (vp) {
         const rect = vp.getBoundingClientRect();
         const sky = clientToSkyCoords(e.clientX, e.clientY, rect, pan, zoom, wcs);
-        if (sky) setCursorInfo(sky);
+        if (sky) {
+          const canvasX = (e.clientX - rect.left - pan.x) / zoom;
+          const canvasY = (e.clientY - rect.top - pan.y) / zoom;
+          const px = (canvasX / rect.width) * wcs.naxis1;
+          const py = (canvasY / rect.height) * wcs.naxis2;
+          setCursorInfo({ ra: sky.ra, dec: sky.dec, px, py });
+        }
       }
       if (panStartRef.current) {
         const dx = e.clientX - panStartRef.current.startX;
@@ -282,7 +297,17 @@ export function ViewerStage({
             tracks={track}
             selectBoxMode={selectBoxMode}
             objectDetail={objectDetail}
+            selectedTarget={selectedObjInfo}
+            currentEpoch={frameA?.epoch}
             onSelectBox={onBoxSelect}
+            onSelectEpoch={(ep) => {
+              if (onSelectEpoch) {
+                onSelectEpoch(ep);
+              } else if (frames) {
+                const idx = frames.findIndex((f) => f.epoch === ep);
+                if (idx >= 0) setView({ frame: idx });
+              }
+            }}
             onSelectCoord={(sRa, sDec) => {
               const nextLabel = nextTrackLabel(track);
               addTrack(nextLabel, sRa, sDec);
@@ -316,38 +341,60 @@ export function ViewerStage({
           />
         )}
 
-        {cursorInfo && (
-          <div className="viewer-coord-hud">
-            ICRS {cursorInfo.ra.toFixed(5)}°, {cursorInfo.dec.toFixed(5)}°
-            {selectBoxMode && <span> · Box Drag active</span>}
-            {zoom !== 1 && <span> · {(zoom * 100).toFixed(0)}%</span>}
-          </div>
-        )}
+        <div className="viewer-coord-hud stellarium-glass" role="status" aria-live="off">
+          {cursorInfo ? (
+            <>
+              <div className="hud-item">
+                <span className="hud-label">Pix: </span>
+                <span className="hud-val">
+                  X:{cursorInfo.px.toFixed(1)} Y:{cursorInfo.py.toFixed(1)}
+                </span>
+              </div>
+              <div className="hud-item hud-border-left">
+                <span className="hud-label">ICRS: </span>
+                <span className="hud-sky">
+                  RA {cursorInfo.ra.toFixed(4)}°, Dec {cursorInfo.dec.toFixed(4)}°
+                </span>
+              </div>
+              {selectBoxMode && <span className="hud-mode">· Box Drag active</span>}
+              {zoom !== 1 && <span className="hud-zoom">· {(zoom * 100).toFixed(0)}%</span>}
+            </>
+          ) : (
+            <span className="hud-idle">Pointer in focal plane</span>
+          )}
+        </div>
 
-        <div className="viewer-zoom-controls" role="group" aria-label="Viewport zoom controls">
+        <div
+          className="viewer-zoom-controls stellarium-glass"
+          role="group"
+          aria-label="Viewport zoom controls"
+        >
           <button
             type="button"
-            className="viewer-btn-sm"
+            className="viewer-zoom-btn"
             onClick={() => setZoom((z) => clampZoom(z * 1.25))}
-            title="Zoom in"
+            title="Zoom In (+)"
+            aria-label="Zoom In"
           >
             +
           </button>
           <button
             type="button"
-            className="viewer-btn-sm"
+            className="viewer-zoom-btn"
             onClick={() => setZoom((z) => clampZoom(z / 1.25))}
-            title="Zoom out"
+            title="Zoom Out (−)"
+            aria-label="Zoom Out"
           >
             −
           </button>
           <button
             type="button"
-            className="viewer-btn-sm"
+            className="viewer-zoom-btn"
             onClick={resetView}
-            title="Reset pan and zoom (double-click viewport)"
+            title="Fit to Screen / Reset view (Double-click field)"
+            aria-label="Fit to Screen"
           >
-            {(zoom * 100).toFixed(0)}% ⟲
+            ⟲
           </button>
         </div>
 

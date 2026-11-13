@@ -119,6 +119,7 @@ export function ViewerPage() {
             frameA={v.frameA}
             bufA={v.bufA}
             bufB={v.bufB}
+            frames={v.frames}
             gaiaSources={v.gaiaSources}
             catwiseSources={v.catwiseSources}
             detections={v.detections}

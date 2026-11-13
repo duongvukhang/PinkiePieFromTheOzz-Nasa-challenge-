@@ -409,6 +409,108 @@
   image-rendering: pixelated;
 }
 
+/* Stellarium Glass Utility (Inspired by legacy Nasa challenge observatory) */
+.stellarium-glass {
+  background: rgba(10, 14, 23, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.65);
+}
+
+.viewer-coord-hud.stellarium-glass {
+  position: absolute;
+  inset-block-end: 18px;
+  inset-inline-start: 18px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--sky-text);
+  pointer-events: none;
+  user-select: none;
+}
+
+.hud-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hud-border-left {
+  border-inline-start: 1px solid rgba(255, 255, 255, 0.12);
+  padding-inline-start: var(--space-3);
+}
+
+.hud-label {
+  color: var(--sky-muted);
+}
+
+.hud-val {
+  color: var(--sky-text);
+  font-weight: 600;
+}
+
+.hud-sky {
+  color: var(--oi-sky, #56b4e9);
+  font-weight: 600;
+}
+
+.hud-mode {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.hud-zoom {
+  color: var(--sky-muted);
+}
+
+.hud-idle {
+  color: var(--sky-muted);
+  font-style: italic;
+}
+
+/* Floating Vertical Zoom Controls (Top-Right Stellarium style) */
+.viewer-zoom-controls.stellarium-glass {
+  position: absolute;
+  inset-block-start: 18px;
+  inset-inline-end: 18px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.viewer-zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 30px;
+  block-size: 30px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--sky-muted);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.viewer-zoom-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
 .viewer-coord-hud,
 .viewer-frame-badge {
   position: absolute;
@@ -422,6 +524,12 @@
   color: var(--sky-text);
   display: flex;
   gap: var(--space-2);
+}
+
+.viewer-frame-badge {
+  inset-block-start: 14px;
+  inset-inline-start: 14px;
+  z-index: 10;
 }
 
 .viewer-coord-hud {
