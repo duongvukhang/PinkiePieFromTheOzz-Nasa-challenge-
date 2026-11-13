@@ -1,9 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, fetchScienceFrame, type CutoutFrame, type SuggestionItem } from "../../api/client";
+import {
+  api,
+  ApiError,
+  fetchScienceFrame,
+  type CutoutFrame,
+  type SuggestionItem,
+} from "../../api/client";
 import { useAuthStore } from "../../app/authStore";
 import { parseFitsWcs } from "../aladin/wcs";
 import { useViewStore } from "./viewStore";
+
+export const isUuid = (val?: string | null): boolean =>
+  Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
+
+export function nextTrackLabel(existing: string[]): string {
+  const set = new Set(existing.map((t) => t.split(":")[0]));
+  for (const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    if (!set.has(ch)) return ch;
+  }
+  return `O${set.size + 1}`;
+}
 
 export function useViewerData(search: string, skipSecondary = false) {
   const user = useAuthStore((s) => s.user);
@@ -95,9 +112,21 @@ export function useViewerData(search: string, skipSecondary = false) {
         to_utc: to ? `${to}T23:59:59Z` : undefined,
       });
       let status = accepted.status;
-      for (let i = 0; i < 8 && status !== "succeeded" && status !== "failed"; i++) {
-        await new Promise((r) => setTimeout(r, 120));
+      let delay = 150;
+      for (let i = 0; i < 30 && status !== "succeeded" && status !== "failed"; i++) {
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(1000, Math.round(delay * 1.25));
         status = (await api.getJob(accepted.job_id)).status;
+      }
+      if (status === "failed") {
+        throw new ApiError(500, `Cutout job ${accepted.job_id} failed`, "Cutout extraction failed");
+      }
+      if (status !== "succeeded") {
+        throw new ApiError(
+          504,
+          `Cutout job ${accepted.job_id} timed out`,
+          "Cutout extraction timed out",
+        );
       }
       return api.getCutoutSet(accepted.cutout_id);
     },
@@ -161,22 +190,25 @@ export function useViewerData(search: string, skipSecondary = false) {
       ? String(analysisQ.data.suggestions[0].detection_id)
       : undefined);
 
+  const hasValidObjUuid = isUuid(activeObjId);
+  const canQueryObj = !skipSecondary && Boolean(activeObjId && hasValidObjUuid);
+
   const objectQ = useQuery({
     queryKey: ["object", activeObjId],
     queryFn: () => api.getObjectDetail(activeObjId!),
-    enabled: !skipSecondary && Boolean(activeObjId),
+    enabled: canQueryObj,
   });
 
   const associationsQ = useQuery({
     queryKey: ["associations", activeObjId],
     queryFn: () => api.getObjectAssociations(activeObjId!),
-    enabled: !skipSecondary && Boolean(activeObjId),
+    enabled: canQueryObj,
   });
 
   const spectrumQ = useQuery({
     queryKey: ["spectrum", activeObjId, frameA?.epoch],
     queryFn: () => api.getObjectSpectrum(activeObjId!, frameA?.epoch),
-    enabled: !skipSecondary && Boolean(activeObjId),
+    enabled: canQueryObj,
   });
 
   // Blink playback timer
@@ -207,7 +239,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     detectionId?: number | null,
     reason = "User manual association override",
   ) => {
-    if (!activeObjId) return;
+    if (!activeObjId || !hasValidObjUuid) return;
     await api.overrideObjectAssociation(activeObjId, epoch, {
       action,
       detection_id: detectionId,
@@ -217,37 +249,39 @@ export function useViewerData(search: string, skipSecondary = false) {
     objectQ.refetch();
   };
 
-  const nextLabel = (existing: string[]): string => {
-    const set = new Set(existing.map((t) => t.split(":")[0]));
-    for (const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-      if (!set.has(ch)) return ch;
-    }
-    return `O${set.size + 1}`;
-  };
-
   const onTrackSuggestion = (s: SuggestionItem) => {
-    const lbl = nextLabel(track);
+    const lbl = nextTrackLabel(track);
     addTrack(lbl, s.ra, s.dec);
     setView({ obj: String(s.detection_id), inspectorTab: "object" });
   };
 
   const onBoxSelect = (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
-    const inBox = (analysisQ.data?.detections ?? []).filter(
-      (d) => d.ra >= box.raMin && d.ra <= box.raMax && d.dec >= box.decMin && d.dec <= box.decMax,
-    );
+    const inRa = (ra: number) =>
+      box.raMin <= box.raMax
+        ? ra >= box.raMin && ra <= box.raMax
+        : ra >= box.raMin || ra <= box.raMax;
+    const inDec = (dec: number) =>
+      box.decMin <= box.decMax
+        ? dec >= box.decMin && dec <= box.decMax
+        : dec >= box.decMax && dec <= box.decMin;
+
+    const inBox = (analysisQ.data?.detections ?? []).filter((d) => inRa(d.ra) && inDec(d.dec));
     if (inBox.length > 0) {
       let cur = track;
       inBox.forEach((d) => {
-        const lbl = nextLabel(cur);
+        const lbl = nextTrackLabel(cur);
         cur = [...cur, `${lbl}:${d.ra.toFixed(5)},${d.dec.toFixed(5)}`];
         addTrack(lbl, d.ra, d.dec);
       });
       const first = inBox[0];
       if (first) setView({ obj: String(first.id), inspectorTab: "object" });
     } else {
-      const midRa = 0.5 * (box.raMin + box.raMax);
+      const midRa =
+        box.raMin <= box.raMax
+          ? 0.5 * (box.raMin + box.raMax)
+          : (0.5 * (box.raMin + box.raMax + 360.0)) % 360.0;
       const midDec = 0.5 * (box.decMin + box.decMax);
-      addTrack(nextLabel(track), midRa, midDec);
+      addTrack(nextTrackLabel(track), midRa, midDec);
       setView({ inspectorTab: "object" });
     }
   };

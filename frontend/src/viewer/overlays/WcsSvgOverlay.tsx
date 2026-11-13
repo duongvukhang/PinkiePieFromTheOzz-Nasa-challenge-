@@ -8,15 +8,7 @@ import type {
 import type { WcsParams } from "../aladin/wcs";
 import { pixelToSky, skyToPixel } from "../aladin/wcs";
 
-const OKABE_ITO = [
-  "#E69F00",
-  "#56B4E9",
-  "#009E73",
-  "#F0E442",
-  "#0072B2",
-  "#D55E00",
-  "#CC79A7",
-];
+const OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"];
 
 interface WcsSvgOverlayProps {
   wcs: WcsParams;
@@ -60,8 +52,7 @@ export function WcsSvgOverlay({
   const onKeyDown = (e: KeyboardEvent<SVGSVGElement>) => {
     if (!selectBoxMode) return;
     const step = e.shiftKey ? 8 : 2;
-    const cur = dragCurr ?? { x: wcs.naxis1 / 2, y: wcs.naxis2 / 2 };
-    let { x, y } = cur;
+    let { x, y } = dragCurr ?? { x: wcs.naxis1 / 2, y: wcs.naxis2 / 2 };
     if (e.key === "ArrowRight") x = Math.min(wcs.naxis1, x + step);
     else if (e.key === "ArrowLeft") x = Math.max(0, x - step);
     else if (e.key === "ArrowDown") y = Math.min(wcs.naxis2, y + step);
@@ -72,8 +63,7 @@ export function WcsSvgOverlay({
         setDragStart({ x: Math.max(0, x - 10), y: Math.max(0, y - 10) });
         setDragCurr({ x: Math.min(wcs.naxis1, x + 10), y: Math.min(wcs.naxis2, y + 10) });
       } else {
-        const p1 = pixelToSky(dragStart.x, dragStart.y, wcs);
-        const p2 = pixelToSky(x, y, wcs);
+        const [p1, p2] = [pixelToSky(dragStart.x, dragStart.y, wcs), pixelToSky(x, y, wcs)];
         onSelectBox?.({
           raMin: Math.min(p1.ra, p2.ra),
           raMax: Math.max(p1.ra, p2.ra),
@@ -86,7 +76,7 @@ export function WcsSvgOverlay({
       return;
     } else return;
     e.preventDefault();
-    if (!dragStart && e.shiftKey) setDragStart(cur);
+    if (!dragStart && e.shiftKey) setDragStart({ x, y });
     setDragCurr({ x, y });
     setCursorInfo(pixelToSky(x, y, wcs));
   };
@@ -99,8 +89,8 @@ export function WcsSvgOverlay({
   const trajPoints = measurements.map((m) => {
     const p = skyToPixel(m.ra!, m.dec!, wcs);
     const degPerPx = Math.abs(wcs.cd11) || 0.0026;
-    const rx = Math.max(1.8 * pxScale, (((m.sig_ra_mas ?? 50) / 3.6e6) / degPerPx) * pxScale);
-    const ry = Math.max(1.8 * pxScale, (((m.sig_dec_mas ?? 50) / 3.6e6) / degPerPx) * pxScale);
+    const rx = Math.max(1.8 * pxScale, ((m.sig_ra_mas ?? 50) / 3.6e6 / degPerPx) * pxScale);
+    const ry = Math.max(1.8 * pxScale, ((m.sig_dec_mas ?? 50) / 3.6e6 / degPerPx) * pxScale);
     return { ...p, epoch: m.epoch, flags: m.flags, rx, ry };
   });
 
@@ -111,7 +101,7 @@ export function WcsSvgOverlay({
           const last = trajPoints[trajPoints.length - 1]!;
           const degPerPx = Math.abs(wcs.cd11) || 0.0026;
           // Length in pixels proportional to annual motion
-          const len = Math.max(8 * pxScale, ((motion.pm_total_masyr / 3.6e6) / degPerPx) * 0.8);
+          const len = Math.max(8 * pxScale, (motion.pm_total_masyr / 3.6e6 / degPerPx) * 0.8);
           const rad = (motion.pa_deg * Math.PI) / 180;
           return {
             x1: last.x,
@@ -130,7 +120,11 @@ export function WcsSvgOverlay({
         preserveAspectRatio="none"
         tabIndex={selectBoxMode ? 0 : undefined}
         role={selectBoxMode ? "application" : undefined}
-        aria-label={selectBoxMode ? "Sky selection box tool (use arrows + Shift to select, Enter to confirm)" : undefined}
+        aria-label={
+          selectBoxMode
+            ? "Sky selection box tool (use arrows + Shift to select, Enter to confirm)"
+            : undefined
+        }
         style={{ pointerEvents: "auto", cursor: selectBoxMode ? "crosshair" : "default" }}
         onKeyDown={onKeyDown}
         onPointerDown={(e) => {

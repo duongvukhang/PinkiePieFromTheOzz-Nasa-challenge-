@@ -34,6 +34,7 @@ from app.providers.base import (
     CatalogSource,
     FrameRef,
     Provider,
+    ProviderQueryError,
     ProviderRateLimitError,
     ProviderUnavailableError,
     ReleaseDescriptor,
@@ -86,9 +87,21 @@ class _FakeSpherexProvider(Provider):
         self.fetch_calls = 0
         self.release_calls = 0
         self.fail_with: Exception | None = None
+        self.profile = type(
+            "Profile",
+            (),
+            {
+                "collection_id": "spherex_qr_v1",
+                "provider": "spherex_irsa",
+                "mission": "SPHEREx",
+                "profile_name": "spherex_qr_v1",
+            },
+        )()
 
     def describe_releases(self) -> list[ReleaseDescriptor]:
         self.release_calls += 1
+        if self.fail_with is not None:
+            raise self.fail_with
         return [
             ReleaseDescriptor(
                 release_id="spherex_qr_2026-10",
@@ -163,6 +176,7 @@ class _FakeSimbadProvider(Provider):
 
     def __init__(self) -> None:
         self.calls = 0
+        self.fail_with: Exception | None = None
 
     def describe_releases(self) -> list[ReleaseDescriptor]:
         return []
@@ -170,16 +184,18 @@ class _FakeSimbadProvider(Provider):
     def lookup_object(self, target: str, **kwargs: Any) -> CatalogSource | None:
         del kwargs
         self.calls += 1
-        if target.lower() == "wise 0855":
+        if self.fail_with is not None:
+            raise self.fail_with
+        if target.lower() in ("wise 0855", "sirius"):
             return CatalogSource(
                 provider=self.name,
                 catalog="simbad",
-                source_id="WISE J085510.83-071442.5",
-                ra_deg=133.79513,
-                dec_deg=-7.24515,
+                source_id="Sirius" if target.lower() == "sirius" else "WISE J085510.83-071442.5",
+                ra_deg=101.287,
+                dec_deg=-16.716,
                 epoch=Time(2000.0, format="jyear", scale="tdb"),
-                pmra_masyr=-8123.7,
-                pmdec_masyr=673.2,
+                pmra_masyr=-546.0,
+                pmdec_masyr=-1223.0,
             )
         return None
 
@@ -191,6 +207,7 @@ class _FakeCatalogProvider(Provider):
         self.name = name
         self.catalog = catalog
         self.calls = 0
+        self.fail_with: Exception | None = None
 
     def describe_releases(self) -> list[ReleaseDescriptor]:
         return []
@@ -200,6 +217,8 @@ class _FakeCatalogProvider(Provider):
     ) -> list[CatalogSource]:
         del c, radius
         self.calls += 1
+        if self.fail_with is not None:
+            raise self.fail_with
         t = (epoch or Time.now()).tdb
         return [
             CatalogSource(
@@ -256,15 +275,28 @@ def test_resolve_endpoint_simbad_cache_sesame_and_errors(api_env: dict[str, Any]
     simbad: _FakeSimbadProvider = api_env["simbad"]
     cache: MemoryCacheBackend = api_env["cache"]
 
+    # Canonical benchmark target resolves from reference_values.json without calling SIMBAD
     r1 = client.get("/api/v1/resolve", params={"name": "WISE 0855"})
     assert r1.status_code == 200
     body = r1.json()
-    assert body["resolver"] == "simbad"
-    assert body["ra_deg"] == pytest.approx(133.79513)
-    assert body["pmra_masyr"] == pytest.approx(-8123.7)
+    assert body["resolver"] == "reference"
+    assert body["ra_deg"] == pytest.approx(133.79513, abs=1e-4)
+    assert body["pmra_masyr"] == pytest.approx(-8123.7, abs=1e-2)
 
     r2 = client.get("/api/v1/resolve", params={"name": "WISE 0855"})
     assert r2.status_code == 200
+    assert simbad.calls == 0  # served from cache / reference
+
+    # Arbitrary sky target resolves via SIMBAD and caches result
+    r_sim = client.get("/api/v1/resolve", params={"name": "Sirius"})
+    assert r_sim.status_code == 200
+    body_sim = r_sim.json()
+    assert body_sim["resolver"] == "simbad"
+    assert body_sim["ra_deg"] == pytest.approx(101.287)
+    assert simbad.calls == 1
+
+    r_sim2 = client.get("/api/v1/resolve", params={"name": "Sirius"})
+    assert r_sim2.status_code == 200
     assert simbad.calls == 1  # served from cache
 
     # Direct service check for Sesame fallback when SIMBAD misses
@@ -277,16 +309,37 @@ def test_resolve_endpoint_simbad_cache_sesame_and_errors(api_env: dict[str, Any]
     assert sesame_res is not None
     assert sesame_res.resolver == "sesame"
 
-    # Unresolvable target returns 404 RFC 9457 problem+json
+    # Upstream SIMBAD error (e.g. 404 / ProviderQueryError) gracefully falls through to Sesame / 404
+    simbad.fail_with = ProviderQueryError("HTTP 404: 404 Client Error: Not Found")
     r404 = client.get("/api/v1/resolve", params={"name": "NotARealTargetXYZ999"})
-    if r404.status_code == 404:
-        assert r404.headers["content-type"].startswith("application/problem+json")
-        assert r404.json()["status"] == 404
+    assert r404.status_code == 404
+    assert r404.headers["content-type"].startswith("application/problem+json")
+    assert r404.json()["status"] == 404
 
     # Validation error returns 422 RFC 9457 problem+json
     r422 = client.get("/api/v1/resolve", params={"name": ""})
     assert r422.status_code == 422
     assert r422.headers["content-type"].startswith("application/problem+json")
+
+
+def test_resolve_mandatory_benchmark_targets_and_aliases(api_env: dict[str, Any]) -> None:
+    client: TestClient = api_env["client"]
+    targets_to_test = [
+        ("WISE 0855", 133.79513, -7.24515),
+        ("wise_0855", 133.79513, -7.24515),
+        ("Barnard's Star", 269.44850, 4.73942),
+        ("barnard", 269.44850, 4.73942),
+        ("Epsilon Indi B", 331.04384, -56.78271),
+        ("RW Aurigae", 76.95608, 30.40120),
+        ("R Draconis", 248.16738, 66.75501),
+    ]
+    for name, exp_ra, exp_dec in targets_to_test:
+        res = client.get("/api/v1/resolve", params={"name": name})
+        assert res.status_code == 200, f"Failed to resolve {name}"
+        data = res.json()
+        assert data["resolver"] == "reference"
+        assert data["ra_deg"] == pytest.approx(exp_ra, abs=1e-3)
+        assert data["dec_deg"] == pytest.approx(exp_dec, abs=1e-3)
 
 
 def test_fields_frames_grouping_caching_validation_and_provider_errors(
@@ -342,17 +395,18 @@ def test_fields_frames_grouping_caching_validation_and_provider_errors(
     assert r_time.status_code == 400
     assert r_time.headers["content-type"].startswith("application/problem+json")
 
-    # Provider rate-limit and unavailable error envelopes
+    # Upstream archive provider error returns 200 with warnings instead of crashing page
     spherex.fail_with = ProviderRateLimitError("throttled", retry_after_s=12.0)
     r429 = client.get("/api/v1/fields/frames", params={"ra": 10.0, "dec": 20.0})
-    assert r429.status_code == 429
-    assert r429.headers["Retry-After"] == "12"
-    assert r429.headers["content-type"].startswith("application/problem+json")
+    assert r429.status_code == 200
+    assert r429.json()["epochs"] == []
+    assert any("Upstream provider query failed" in w for w in r429.json()["warnings"])
 
     spherex.fail_with = ProviderUnavailableError("irsa down")
     r503 = client.get("/api/v1/fields/frames", params={"ra": 11.0, "dec": 21.0})
-    assert r503.status_code == 503
-    assert r503.headers["content-type"].startswith("application/problem+json")
+    assert r503.status_code == 200
+    assert r503.json()["epochs"] == []
+    assert any("Upstream provider query failed" in w for w in r503.json()["warnings"])
 
 
 def test_cutouts_async_job_sse_artifacts_and_deduplication(api_env: dict[str, Any]) -> None:
@@ -454,10 +508,29 @@ def test_catalog_overlay_releases_examples_and_pagination(api_env: dict[str, Any
     assert w_res.status_code == 200
     assert w_res.json()["sources"][0]["catalog"] == "catwise_2020"
 
+    # Catalog provider error returns 200 with warnings instead of failing page
+    gaia.fail_with = ProviderQueryError("Upstream TAP 404")
+    g_err = client.get(
+        "/api/v1/catalogs/overlay",
+        params={"cat": "gaia", "ra": 10.0, "dec": 20.0},
+    )
+    assert g_err.status_code == 200
+    assert g_err.json()["sources"] == []
+    assert any("Upstream catalog provider query failed" in w for w in g_err.json()["warnings"])
+
     # Releases (provider fallback + seeded store)
     rel_res = client.get("/api/v1/releases")
     assert rel_res.status_code == 200
     assert rel_res.json()[0]["id"] == "spherex_qr_2026-10"
+
+    # Releases endpoint falls back to profile when provider describe_releases fails
+    spherex: _FakeSpherexProvider = api_env["spherex"]
+    cache: MemoryCacheBackend = api_env["cache"]
+    cache.delete("releases:spherex_irsa")
+    spherex.fail_with = ProviderUnavailableError("irsa down")
+    rel_fallback = client.get("/api/v1/releases")
+    assert rel_fallback.status_code == 200
+    assert rel_fallback.json()[0]["id"] == "spherex_qr_v1"
 
     # Examples returns the 5 mandatory benchmark targets
     ex_res = client.get("/api/v1/examples")

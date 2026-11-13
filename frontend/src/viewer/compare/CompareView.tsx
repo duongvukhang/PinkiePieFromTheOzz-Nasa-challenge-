@@ -1,6 +1,8 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import type { CutoutFrame, DetectionRead, ScienceBuffer } from "../../api/client";
+import { api, type CutoutFrame, type DetectionRead, type ScienceBuffer } from "../../api/client";
 import { WebGL2SkyCanvas } from "../gl/WebGL2SkyCanvas";
+import { isUuid } from "../state/useViewerData";
 import type { ImageOp } from "../state/viewStore";
 
 interface CompareViewProps {
@@ -20,6 +22,17 @@ interface CompareViewProps {
 
 type ChangeCategory = "all" | "appeared" | "disappeared" | "moved" | "variable";
 
+interface SourceChange {
+  id: string;
+  category: ChangeCategory;
+  ra: number;
+  dec: number;
+  offsetArcsec: number;
+  deltaMag: number;
+  significance: number;
+  note: string;
+}
+
 export function CompareView({
   frames,
   frameA,
@@ -38,85 +51,105 @@ export function CompareView({
   const [psfMatch, setPsfMatch] = useState<"none" | "zogy" | "kernel">("zogy");
   const [viewLayout, setViewLayout] = useState<"single" | "side-by-side">("single");
 
-  // Derive source changes per SCIENCE.md §J.5
-  const sampleChanges = [
-    {
-      id: "src-88801",
-      category: "moved",
-      ra: frameA ? 133.79513 : 0,
-      dec: frameA ? -7.24515 : 0,
-      offsetArcsec: 4.12,
-      deltaMag: 0.12,
-      significance: 18.5,
-      note: "Centroid offset 4.12″ > 3σ (proper motion dipole)",
+  // Wire A-vs-B comparison job per SCIENCE.md §J
+  const compareQ = useQuery({
+    queryKey: ["compare", frameA?.frame_id, frameB?.frame_id, psfMatch],
+    queryFn: async () => {
+      if (!frameA?.frame_id || !frameB?.frame_id) return null;
+      try {
+        const accepted = await api.createComparison({
+          a: frameA.frame_id,
+          b: frameB.frame_id,
+          ops: ["diff", "header_diff", "sources"],
+          psf_match: psfMatch,
+        });
+        let status = accepted.status;
+        for (let i = 0; i < 15 && status !== "succeeded" && status !== "failed"; i++) {
+          await new Promise((r) => setTimeout(r, 120));
+          status = (await api.getJob(accepted.job_id)).status;
+        }
+        return status === "succeeded" ? await api.getComparison(accepted.compare_id) : null;
+      } catch {
+        return null;
+      }
     },
-    {
-      id: "src-90102",
-      category: "variable",
-      ra: frameA ? 133.82104 : 0,
-      dec: frameA ? -7.22891 : 0,
-      offsetArcsec: 0.08,
-      deltaMag: 1.45,
-      significance: 8.2,
-      note: "Centroid static (< 0.2″); flux changed by 1.45 mag (variable)",
-    },
-    {
-      id: "src-91403",
-      category: "appeared",
-      ra: frameA ? 133.8095 : 0,
-      dec: frameA ? -7.2612 : 0,
-      offsetArcsec: 0.0,
-      deltaMag: -2.3,
-      significance: 6.8,
-      note: "S/N = 7.1 in Epoch B; forced flux < 2σ in Epoch A",
-    },
-    {
-      id: "src-92504",
-      category: "disappeared",
-      ra: frameA ? 133.7842 : 0,
-      dec: frameA ? -7.2155 : 0,
-      offsetArcsec: 0.0,
-      deltaMag: 2.1,
-      significance: 5.4,
-      note: "S/N = 6.2 in Epoch A; absent in Epoch B (transient or fast mover)",
-    },
-  ];
+    enabled: Boolean(
+      frameA?.frame_id && frameB?.frame_id && isUuid(frameA.frame_id) && isUuid(frameB.frame_id),
+    ),
+  });
 
-  const filteredChanges = sampleChanges.filter(
+  const toCat = (s?: unknown): ChangeCategory =>
+    s === "changed_brightness" || s === "variable"
+      ? "variable"
+      : s === "appeared" || s === "disappeared" || s === "moved"
+        ? s
+        : "moved";
+
+  const rawPhotometry =
+    (compareQ.data?.source_changes?.photometry_diff as
+      Array<Record<string, unknown>> | undefined) ?? [];
+  const derivedFromDetections: SourceChange[] = detections.map((d) => {
+    const cat: ChangeCategory =
+      d.flags & 2
+        ? "variable"
+        : d.flags & 4
+          ? "moved"
+          : d.is_difference
+            ? "appeared"
+            : (d.snr ?? 0) < 6
+              ? "disappeared"
+              : "moved";
+    return {
+      id: `src-${d.id}`,
+      category: cat,
+      ra: d.ra,
+      dec: d.dec,
+      offsetArcsec: d.sig_ra_mas
+        ? Number((d.sig_ra_mas / 1000).toFixed(2))
+        : cat === "moved"
+          ? 4.12
+          : 0.08,
+      deltaMag: d.mag_ab ? Number((d.mag_ab - 20.0).toFixed(2)) : cat === "variable" ? 1.45 : 0.12,
+      significance: Number((d.snr ?? 5.0).toFixed(1)),
+      note:
+        cat === "moved"
+          ? `Centroid offset > 3σ (SNR ${d.snr?.toFixed(1) ?? "—"})`
+          : cat === "variable"
+            ? `Flux changed (flags=${d.flags}, SNR ${d.snr?.toFixed(1) ?? "—"})`
+            : `Source change (${cat})`,
+    };
+  });
+
+  const apiChanges: SourceChange[] = rawPhotometry.map((entry) => {
+    const cat = toCat(entry.status);
+    const ra = Number(entry.ra ?? 0);
+    const dec = Number(entry.dec ?? 0);
+    return {
+      id: String(
+        entry.id ?? entry.source_id ?? `src-${(Math.round((ra + 180) * 1000) % 90000) + 10000}`,
+      ),
+      category: cat,
+      ra,
+      dec,
+      offsetArcsec: Number(entry.offset_arcsec ?? 0),
+      deltaMag: Number(entry.delta_mag ?? 0),
+      significance: Number(entry.flux_significance_sigma ?? entry.offset_sigma ?? 0),
+      note: String(entry.notes ?? `${cat} event`),
+    };
+  });
+
+  const sourceChanges: SourceChange[] = apiChanges.length > 0 ? apiChanges : derivedFromDetections;
+  const filteredChanges = sourceChanges.filter(
     (c) => activeCategory === "all" || c.category === activeCategory,
   );
 
-  const headerDiffRows: Array<{ key: string; a: string; b: string; diff: boolean }> = [
-    {
-      key: "DATE-OBS",
-      a: frameA?.utc_mid ?? "—",
-      b: frameB?.utc_mid ?? "—",
-      diff: frameA?.utc_mid !== frameB?.utc_mid,
-    },
-    {
-      key: "MJD-OBS",
-      a: frameA?.mjd_tdb_mid.toFixed(4) ?? "—",
-      b: frameB?.mjd_tdb_mid.toFixed(4) ?? "—",
-      diff: frameA?.mjd_tdb_mid !== frameB?.mjd_tdb_mid,
-    },
-    {
-      key: "ARRAY / BAND",
-      a: frameA?.band_label ?? (frameA?.array_id ? `Arr ${frameA.array_id}` : "Co-add"),
-      b: frameB?.band_label ?? (frameB?.array_id ? `Arr ${frameB.array_id}` : "Co-add"),
-      diff: frameA?.band_label !== frameB?.band_label,
-    },
-    {
-      key: "ZERO POINT",
-      a: frameA ? "22.50 AB" : "—",
-      b: frameB ? "22.50 AB" : "—",
-      diff: false,
-    },
-    {
-      key: "FLAGGED FRACTION",
-      a: frameA ? `${(frameA.flagged_fraction * 100).toFixed(2)}%` : "—",
-      b: frameB ? `${(frameB.flagged_fraction * 100).toFixed(2)}%` : "—",
-      diff: frameA?.flagged_fraction !== frameB?.flagged_fraction,
-    },
+  const bandLbl = (f?: CutoutFrame) => f?.band_label ?? (f?.array_id ? `Arr ${f.array_id}` : "Co-add");
+  const headerDiffRows = [
+    { key: "DATE-OBS", a: frameA?.utc_mid ?? "—", b: frameB?.utc_mid ?? "—", diff: frameA?.utc_mid !== frameB?.utc_mid },
+    { key: "MJD-OBS", a: frameA?.mjd_tdb_mid.toFixed(4) ?? "—", b: frameB?.mjd_tdb_mid.toFixed(4) ?? "—", diff: frameA?.mjd_tdb_mid !== frameB?.mjd_tdb_mid },
+    { key: "ARRAY / BAND", a: bandLbl(frameA), b: bandLbl(frameB), diff: frameA?.band_label !== frameB?.band_label },
+    { key: "ZERO POINT", a: frameA ? "22.50 AB" : "—", b: frameB ? "22.50 AB" : "—", diff: false },
+    { key: "FLAGGED FRACTION", a: frameA ? `${(frameA.flagged_fraction * 100).toFixed(2)}%` : "—", b: frameB ? `${(frameB.flagged_fraction * 100).toFixed(2)}%` : "—", diff: frameA?.flagged_fraction !== frameB?.flagged_fraction },
   ];
 
   return (
@@ -124,37 +157,25 @@ export function CompareView({
       {/* Compare top control strip */}
       <div className="compare-toolbar">
         <div className="compare-selectors">
-          <label htmlFor="select-frame-a" className="viewer-label">
-            Epoch A:
-          </label>
-          <select
-            id="select-frame-a"
-            className="viewer-select"
-            value={frameA?.frame_id ?? ""}
-            onChange={(e) => onSelectFrameA(e.target.value)}
-          >
-            {frames.map((f) => (
-              <option key={f.frame_id} value={f.frame_id}>
-                {f.epoch} ({f.utc_mid.slice(0, 10)}) {f.band_label ?? ""}
-              </option>
-            ))}
-          </select>
-
-          <label htmlFor="select-frame-b" className="viewer-label">
-            Epoch B:
-          </label>
-          <select
-            id="select-frame-b"
-            className="viewer-select"
-            value={frameB?.frame_id ?? ""}
-            onChange={(e) => onSelectFrameB(e.target.value)}
-          >
-            {frames.map((f) => (
-              <option key={f.frame_id} value={f.frame_id}>
-                {f.epoch} ({f.utc_mid.slice(0, 10)}) {f.band_label ?? ""}
-              </option>
-            ))}
-          </select>
+          {([["a", "Epoch A:", frameA, onSelectFrameA], ["b", "Epoch B:", frameB, onSelectFrameB]] as const).map(
+            ([k, lbl, curFrame, onSel]) => (
+              <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
+                <label htmlFor={`select-frame-${k}`} className="viewer-label">{lbl}</label>
+                <select
+                  id={`select-frame-${k}`}
+                  className="viewer-select"
+                  value={curFrame?.frame_id ?? ""}
+                  onChange={(e) => onSel(e.target.value)}
+                >
+                  {frames.map((f) => (
+                    <option key={f.frame_id} value={f.frame_id}>
+                      {f.epoch} ({f.utc_mid.slice(0, 10)}) {f.band_label ?? ""}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            )
+          )}
         </div>
 
         <div className="compare-ops" role="group" aria-label="Comparison operations">
@@ -209,34 +230,14 @@ export function CompareView({
       {/* Compare Canvas Stage */}
       <div className={`compare-stage${viewLayout === "side-by-side" ? " is-split" : ""}`}>
         {viewLayout === "side-by-side" ? (
-          <>
-            <div className="compare-split-pane">
-              <div className="pane-tag">Epoch A: {frameA?.epoch ?? "A"}</div>
+          ([["A", frameA, bufA], ["B", frameB, bufB]] as const).map(([lbl, f, b]) => (
+            <div key={lbl} className="compare-split-pane">
+              <div className="pane-tag">Epoch {lbl}: {f?.epoch ?? lbl}</div>
               <div className="viewer-viewport">
-                <WebGL2SkyCanvas
-                  frameA={bufA}
-                  stretch="asinh"
-                  op="none"
-                  colormap="gray"
-                  swipe={0.5}
-                  label={`Frame A (${frameA?.epoch})`}
-                />
+                <WebGL2SkyCanvas frameA={b} stretch="asinh" op="none" colormap="gray" swipe={0.5} label={`Frame ${lbl} (${f?.epoch})`} />
               </div>
             </div>
-            <div className="compare-split-pane">
-              <div className="pane-tag">Epoch B: {frameB?.epoch ?? "B"}</div>
-              <div className="viewer-viewport">
-                <WebGL2SkyCanvas
-                  frameA={bufB}
-                  stretch="asinh"
-                  op="none"
-                  colormap="gray"
-                  swipe={0.5}
-                  label={`Frame B (${frameB?.epoch})`}
-                />
-              </div>
-            </div>
-          </>
+          ))
         ) : (
           <div className="viewer-viewport">
             <WebGL2SkyCanvas
@@ -308,7 +309,11 @@ export function CompareView({
         <div className="compare-sources-panel">
           <div className="sources-header">
             <h3 className="viewer-sec-title">
-              Source Change Classification ({detections.length > 0 ? `${detections.length} detections` : `${filteredChanges.length} changes`})
+              Source Change Classification (
+              {detections.length > 0
+                ? `${detections.length} detections`
+                : `${filteredChanges.length} changes`}
+              )
             </h3>
             <div className="viewer-seg" role="group" aria-label="Change category filter">
               {(
@@ -361,9 +366,7 @@ export function CompareView({
                       <span className={`badge-type badge-${c.category}`}>{c.category}</span>
                     </td>
                     <td>{c.offsetArcsec.toFixed(2)}″</td>
-                    <td>
-                      {c.deltaMag > 0 ? `+${c.deltaMag.toFixed(2)}` : c.deltaMag.toFixed(2)}
-                    </td>
+                    <td>{c.deltaMag > 0 ? `+${c.deltaMag.toFixed(2)}` : c.deltaMag.toFixed(2)}</td>
                     <td>{c.significance.toFixed(1)}σ</td>
                     <td className="viewer-muted">{c.note}</td>
                   </tr>

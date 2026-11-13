@@ -8,18 +8,11 @@ import type {
   TrackedObjectDetailResponse,
 } from "../../api/client";
 import { useViewStore, type InspectorTab } from "../state/viewStore";
+import { nextTrackLabel } from "../state/useViewerData";
 import { FlagsMetaPanel } from "./FlagsMetaPanel";
 import { SpectrumChart } from "./SpectrumChart";
 
-const OKABE_ITO = [
-  "#E69F00",
-  "#56B4E9",
-  "#009E73",
-  "#F0E442",
-  "#0072B2",
-  "#D55E00",
-  "#CC79A7",
-];
+const OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"];
 
 interface InspectorTabsProps {
   activeFrame?: CutoutFrame;
@@ -266,9 +259,7 @@ export function InspectorTabs({
                 <div className="classification-box">
                   <p className="viewer-note">
                     Top hypothesis:{" "}
-                    <strong className="class-badge">
-                      {objectDetail.classification.top_class}
-                    </strong>{" "}
+                    <strong className="class-badge">{objectDetail.classification.top_class}</strong>{" "}
                     (p={objectDetail.classification.top_prob.toFixed(2)})
                   </p>
                   {Array.isArray(objectDetail.classification.evidence) &&
@@ -283,7 +274,9 @@ export function InspectorTabs({
               )}
 
               <p className="viewer-warn unconfirmed-banner" role="note">
-                ⚠ Scientific Notice: All classification results are unconfirmed hypotheses. Variables change brightness, NOT position; verify proper motion against independent archives before confirmation.
+                ⚠ Scientific Notice: All classification results are unconfirmed hypotheses.
+                Variables change brightness, NOT position; verify proper motion against independent
+                archives before confirmation.
               </p>
 
               {(objectDetail.caveats ?? []).map((c, i) => (
@@ -301,15 +294,11 @@ export function InspectorTabs({
                   <ul className="associations-list">
                     {associations.map((a) => {
                       const epochLabel = (() => {
-                        let best = `E${a.rank}`;
-                        let minD = Infinity;
+                        let best = `E${a.rank}`, minD = Infinity;
                         for (const m of objectDetail.measurements) {
                           if (m.ra != null && a.pred_ra != null) {
                             const d = Math.hypot(m.ra - a.pred_ra, (m.dec ?? 0) - (a.pred_dec ?? 0));
-                            if (d < minD) {
-                              minD = d;
-                              best = m.epoch ?? best;
-                            }
+                            if (d < minD) { minD = d; best = m.epoch ?? best; }
                           }
                         }
                         return minD < 0.005 ? best : `E${a.rank}`;
@@ -330,14 +319,7 @@ export function InspectorTabs({
                               type="button"
                               className="viewer-btn"
                               aria-label={`Accept match for epoch ${epochLabel}`}
-                              onClick={() =>
-                                onOverrideAssociation?.(
-                                  epochLabel,
-                                  "accept",
-                                  a.detection_id,
-                                  "User accepted hypothesis",
-                                )
-                              }
+                              onClick={() => onOverrideAssociation?.(epochLabel, "accept", a.detection_id, "User accepted hypothesis")}
                             >
                               Accept
                             </button>
@@ -345,14 +327,7 @@ export function InspectorTabs({
                               type="button"
                               className="viewer-btn"
                               aria-label={`Reject match for epoch ${epochLabel}`}
-                              onClick={() =>
-                                onOverrideAssociation?.(
-                                  epochLabel,
-                                  "reject",
-                                  null,
-                                  "User rejected match",
-                                )
-                              }
+                              onClick={() => onOverrideAssociation?.(epochLabel, "reject", null, "User rejected match")}
                             >
                               Reject
                             </button>
@@ -360,9 +335,7 @@ export function InspectorTabs({
                               type="button"
                               className="viewer-btn"
                               aria-label={`Reassign match for epoch ${epochLabel}`}
-                              onClick={() =>
-                                setReassigningEpoch(reassigningEpoch === epochLabel ? null : epochLabel)
-                              }
+                              onClick={() => setReassigningEpoch(reassigningEpoch === epochLabel ? null : epochLabel)}
                             >
                               Reassign…
                             </button>
@@ -410,14 +383,16 @@ export function InspectorTabs({
                   </ul>
                 ) : (
                   <p className="viewer-muted">
-                    No epoch association overrides yet recorded. Use Accept/Reject/Reassign to refine trajectory matches.
+                    No epoch association overrides yet recorded. Use Accept/Reject/Reassign to
+                    refine trajectory matches.
                   </p>
                 )}
               </div>
             </div>
           ) : (
             <p className="viewer-muted">
-              Select a candidate or drag a selection box on the sky to inspect fit &amp; uncertainty.
+              Select a candidate or drag a selection box on the sky to inspect fit &amp;
+              uncertainty.
             </p>
           )}
 
@@ -432,9 +407,7 @@ export function InspectorTabs({
                   <span>
                     Det #{s.detection_id} · ICRS {s.ra.toFixed(4)}°, {s.dec.toFixed(4)}°
                   </span>
-                  <span className="viewer-chip">
-                    Score {(s.score * 100).toFixed(0)}%
-                  </span>
+                  <span className="viewer-chip">Score {(s.score * 100).toFixed(0)}%</span>
                 </div>
                 <div className="suggestion-reasons">
                   {s.reasons.map((r, i) => (
@@ -448,7 +421,7 @@ export function InspectorTabs({
                   className="viewer-btn viewer-btn-primary"
                   onClick={() => onPickSuggestion(s)}
                 >
-                  Track {String.fromCharCode(65 + (tracks.length % 26))}
+                  Track {nextTrackLabel(tracks)}
                 </button>
               </li>
             ))}

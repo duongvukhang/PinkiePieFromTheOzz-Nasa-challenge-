@@ -70,7 +70,45 @@ class SimbadProvider(Provider):
         self._sleeper = sleeper
 
     def _query_tap(self, adql: str, *, maxrec: int) -> Any:
-        return _to_table(self._run(lambda: self._simbad.tap.search(adql, maxrec=maxrec)))
+        try:
+            return _to_table(self._run(lambda: self._simbad.tap.search(adql, maxrec=maxrec)))
+        except Exception:
+            import pyvo
+
+            svc = pyvo.dal.TAPService("https://simbad.cds.unistra.fr/simbad/sim-tap")
+            return _to_table(self._run(lambda: svc.search(adql, maxrec=maxrec)))
+
+    def _lookup_query_object_fallback(self, cleaned: str) -> list[CatalogSource]:
+        """Fallback identifier lookup via SimbadClass.query_object if TAP endpoint fails."""
+        try:
+            tbl = _to_table(self._run(lambda: self._simbad.query_object(cleaned)))
+            if tbl is None or not len(tbl):
+                return []
+            row = tbl[0]
+            main_id = str(row.get("MAIN_ID") or row.get("main_id") or cleaned).strip()
+            ra_raw, dec_raw = row.get("RA") or row.get("ra"), row.get("DEC") or row.get("dec")
+            if ra_raw is None or dec_raw is None:
+                return []
+            try:
+                ra_deg, dec_deg = float(ra_raw), float(dec_raw)
+            except (ValueError, TypeError):
+                sc = SkyCoord(str(ra_raw), str(dec_raw), unit=(u.hourangle, u.deg), frame="icrs")
+                ra_deg, dec_deg = float(sc.ra.deg), float(sc.dec.deg)
+            pmra, pmdec = row.get("PMRA") or row.get("pmra"), row.get("PMDEC") or row.get("pmdec")
+            return [
+                CatalogSource(
+                    provider=self.name,
+                    catalog="simbad",
+                    source_id=main_id,
+                    ra_deg=ra_deg % 360.0,
+                    dec_deg=dec_deg,
+                    epoch=SIMBAD_REF_EPOCH,
+                    pmra_masyr=float(pmra) if pmra is not None else None,
+                    pmdec_masyr=float(pmdec) if pmdec is not None else None,
+                )
+            ]
+        except Exception:
+            return []
 
     def describe_releases(self) -> list[ReleaseDescriptor]:
         """Return CDS SIMBAD service release descriptor."""
@@ -184,9 +222,12 @@ class SimbadProvider(Provider):
             "LEFT JOIN ids ON basic.oid = ids.oidref "
             f"WHERE ident.id = '{escaped}'"
         )
-        table = self._query_tap(adql, maxrec=5)
-        units = {col: getattr(table[col], "unit", None) for col in table.colnames}
-        rows = [src for row in table if (src := self._row_to_source(row, units)) is not None]
+        try:
+            table = self._query_tap(adql, maxrec=5)
+            units = {col: getattr(table[col], "unit", None) for col in table.colnames}
+            rows = [src for row in table if (src := self._row_to_source(row, units)) is not None]
+        except Exception:
+            rows = self._lookup_query_object_fallback(cleaned)
         if not rows:
             return None
         return (

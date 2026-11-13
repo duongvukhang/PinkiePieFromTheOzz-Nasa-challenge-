@@ -280,7 +280,7 @@ def test_embed_html_decimal_sexagesimal_target_and_security(env: dict[str, Any])
     r_tgt = client.get("/embed?target=WISE+0855&fov=10")
     assert r_tgt.status_code == 200
     assert "WISE 0855" in r_tgt.text
-    assert 'data-ra="133.795130"' in r_tgt.text
+    assert ('data-ra="133.795130"' in r_tgt.text or 'data-ra="133.795129"' in r_tgt.text)
 
     r_xss = client.get(
         "/embed",

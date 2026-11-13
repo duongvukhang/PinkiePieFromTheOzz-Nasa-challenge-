@@ -140,11 +140,7 @@ export const api = {
     apiJson<TrackedObjectDetailResponse>(`/api/v1/objects/${objectId}`),
   getObjectAssociations: (objectId: string) =>
     apiJson<ObjectAssociationsResponse>(`/api/v1/objects/${objectId}/associations`),
-  overrideObjectAssociation: (
-    objectId: string,
-    epoch: string,
-    body: AssociationOverrideRequest,
-  ) =>
+  overrideObjectAssociation: (objectId: string, epoch: string, body: AssociationOverrideRequest) =>
     apiJson<AssociationOverrideResponse>(`/api/v1/objects/${objectId}/associations/${epoch}`, {
       method: "PATCH",
       body: JSON.stringify(body),

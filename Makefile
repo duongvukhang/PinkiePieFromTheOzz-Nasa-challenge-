@@ -1,16 +1,19 @@
-.PHONY: help setup run up down test test-py test-fe lint lint-py lint-fe format compose-check
+.PHONY: help setup dev run up down test test-py test-fe lint lint-py lint-fe format compose-check
 
 PYTEST := $(if $(wildcard .venv/bin/pytest),.venv/bin/pytest,python3 -m pytest)
 RUFF := $(if $(wildcard .venv/bin/ruff),.venv/bin/ruff,ruff)
 
 help:
-	@echo "Targets: setup | run | up | down | test | test-py | test-fe | lint | format | compose-check"
+	@echo "Targets: setup | dev | run | up | down | test | test-py | test-fe | lint | format | compose-check"
 
 setup:
 	python3 -m venv .venv
 	.venv/bin/pip install --upgrade pip setuptools
 	.venv/bin/pip install -e ./science -e "./backend[dev]"
 	npm --prefix frontend install
+
+dev:
+	.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload & npm --prefix frontend run dev
 
 run:
 	docker compose up --build

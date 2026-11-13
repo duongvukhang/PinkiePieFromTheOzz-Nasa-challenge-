@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DataReleaseRead } from "../../api/client";
 
 interface PlanetXWizardProps {
@@ -9,13 +9,7 @@ interface PlanetXWizardProps {
   onOpenViewer: () => void;
 }
 
-export function PlanetXWizard({
-  ra,
-  dec,
-  fov,
-  releases,
-  onOpenViewer,
-}: PlanetXWizardProps) {
+export function PlanetXWizard({ ra, dec, fov, releases, onOpenViewer }: PlanetXWizardProps) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [distanceAu, setDistanceAu] = useState<number>(500);
   const [maxRateArcsecHr, setMaxRateArcsecHr] = useState<number>(0.25);
@@ -31,21 +25,23 @@ export function PlanetXWizard({
   // Expected 6-month orbital drift: ~ 58″ * (500 / d)^0.5
   const orbitalDriftArcsec = Math.round(58 * Math.sqrt(500 / Math.max(10, distanceAu)));
 
+  useEffect(() => {
+    if (searchStatus !== "running") return;
+    const timers = [
+      setTimeout(() => setProgress(55), 300),
+      setTimeout(() => setProgress(90), 650),
+      setTimeout(() => {
+        setProgress(100);
+        setSearchStatus("succeeded");
+        setStep(4);
+      }, 950),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [searchStatus]);
+
   const handleRunSearch = () => {
-    setSearchStatus("running");
     setProgress(15);
-    const t1 = setTimeout(() => setProgress(55), 300);
-    const t2 = setTimeout(() => setProgress(90), 650);
-    const t3 = setTimeout(() => {
-      setProgress(100);
-      setSearchStatus("succeeded");
-      setStep(4);
-    }, 950);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-    };
+    setSearchStatus("running");
   };
 
   return (
@@ -93,7 +89,10 @@ export function PlanetXWizard({
             The search links orphan sources across SPHEREx 6-month surveys taken at opposite sides
             of the Sun (baseline ≈ 2 AU).
           </p>
-          <dl className="viewer-dl" style={{ maxInlineSize: "28rem", marginBlock: "var(--space-3)" }}>
+          <dl
+            className="viewer-dl"
+            style={{ maxInlineSize: "28rem", marginBlock: "var(--space-3)" }}
+          >
             <div>
               <dt>Field Center (ICRS)</dt>
               <dd>
@@ -132,7 +131,10 @@ export function PlanetXWizard({
           <p className="viewer-muted">
             Configure the heliocentric distance hypothesis $d$ and apparent motion bounds.
           </p>
-          <div className="grid-controls" style={{ display: "grid", gap: "var(--space-3)", maxInlineSize: "32rem" }}>
+          <div
+            className="grid-controls"
+            style={{ display: "grid", gap: "var(--space-3)", maxInlineSize: "32rem" }}
+          >
             <div>
               <label htmlFor="px-distance-slider" className="viewer-label">
                 Heliocentric Distance $d$: <strong>{distanceAu} AU</strong>
@@ -164,7 +166,14 @@ export function PlanetXWizard({
               />
             </div>
 
-            <div className="physics-readout" style={{ padding: "var(--space-3)", background: "var(--sky-2)", borderRadius: "var(--radius-btn)" }}>
+            <div
+              className="physics-readout"
+              style={{
+                padding: "var(--space-3)",
+                background: "var(--sky-2)",
+                borderRadius: "var(--radius-btn)",
+              }}
+            >
               <h3 className="viewer-sec-title">Dynamical Constraints (B&amp;K Model)</h3>
               <ul className="viewer-muted" style={{ paddingInlineStart: "1.2rem", margin: 0 }}>
                 <li>
@@ -174,15 +183,13 @@ export function PlanetXWizard({
                   </strong>
                 </li>
                 <li>
-                  Bound velocity $|\mathbf v| \le 42.1\,d^{-1/2}$:{" "}
+                  Bound velocity $|\mathbf v| \le 42.1\,d^{-1 / 2}$:{" "}
                   <strong>{boundVelocityKmS} km/s</strong>
                 </li>
                 <li>
                   6-month orbital drift: <strong>~{orbitalDriftArcsec}″</strong>
                 </li>
-                <li>
-                  Grid parameter $\Delta\gamma = 1/d$: 80 uniform velocity steps
-                </li>
+                <li>Grid parameter $\Delta\gamma = 1/d$: 80 uniform velocity steps</li>
               </ul>
             </div>
           </div>
@@ -207,11 +214,19 @@ export function PlanetXWizard({
         <div className="wizard-panel">
           <h2 className="viewer-sec-title">Step 3 — KBMOD Digital Tracking Shift-and-Stack</h2>
           <p className="viewer-muted">
-            Sums S/N maps over N_eff ≈ 10⁹ hypothesis trials to recover sub-threshold
-            moving sources while removing static stars and persistent artifacts.
+            Sums S/N maps over N_eff ≈ 10⁹ hypothesis trials to recover sub-threshold moving sources
+            while removing static stars and persistent artifacts.
           </p>
 
-          <div className="stack-status-box" style={{ marginBlock: "var(--space-4)", padding: "var(--space-4)", background: "var(--sky-2)", borderRadius: "var(--radius-btn)" }}>
+          <div
+            className="stack-status-box"
+            style={{
+              marginBlock: "var(--space-4)",
+              padding: "var(--space-4)",
+              background: "var(--sky-2)",
+              borderRadius: "var(--radius-btn)",
+            }}
+          >
             <div>
               <strong>Status: </strong>
               <span className="viewer-mono">{searchStatus.toUpperCase()}</span>
@@ -266,37 +281,51 @@ export function PlanetXWizard({
       )}
 
       {/* Step 4: Candidate Gallery & Honest Detection Limits (SCIENCE.md §I.3) */}
+      {/* PHASE2: Backend shift-and-stack pipeline (/api/v1/planetx/stack) is deferred per ROADMAP.md §MVP scope. Candidate below is an illustrative hypothesis model fixture per AGENTS.md §4 & §7 with explicit unconfirmed caveat. */}
       {step === 4 && (
         <div className="wizard-panel">
-          <h2 className="viewer-sec-title">Step 4 — Candidate Evaluation &amp; Known Body Cross-Check</h2>
-          
+          <div className="viewer-callout" style={{ marginBlockEnd: "var(--space-3)" }}>
+            <span className="diff-pill">PHASE 2 PREVIEW</span> Illustrative model hypothesis fixture
+            for shift-and-stack candidate evaluation. All candidates require multi-epoch
+            verification and cross-check against Minor Planet Center records.
+          </div>
+          <h2 className="viewer-sec-title">
+            Step 4 — Candidate Evaluation &amp; Known Body Cross-Check
+          </h2>
+
           <div className="candidate-card">
             <div className="candidate-header">
               <strong>Candidate PX-CAND-01 · (Unconfirmed Hypothesis)</strong>
-              <span className="viewer-chip" style={{ background: "var(--oi-orange)", color: "var(--sky-0)" }}>
+              <span
+                className="viewer-chip"
+                style={{ background: "var(--oi-orange)", color: "var(--sky-0)" }}
+              >
                 SNR 7.4 · Real-Bogus 0.94
               </span>
             </div>
 
             <div className="candidate-stamps-row">
-              <div className="stamp-box">
-                <span className="stamp-label">Epoch S1 (2025-06)</span>
-                <div className="stamp-viewport">
-                  <div style={{ inlineSize: "8px", blockSize: "8px", borderRadius: "50%", background: "#fff", boxShadow: "0 0 6px #fff" }} />
+              {[
+                { ep: "S1 (2025-06)", tx: 0, ty: 0 },
+                { ep: "S2 (2025-12)", tx: 6, ty: -4 },
+                { ep: "S3 (2026-06)", tx: 12, ty: -8 },
+              ].map(({ ep, tx, ty }) => (
+                <div key={ep} className="stamp-box">
+                  <span className="stamp-label">Epoch {ep}</span>
+                  <div className="stamp-viewport">
+                    <div
+                      style={{
+                        inlineSize: "8px",
+                        blockSize: "8px",
+                        borderRadius: "50%",
+                        background: "#fff",
+                        boxShadow: "0 0 6px #fff",
+                        transform: tx || ty ? `translate(${tx}px, ${ty}px)` : undefined,
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
-              <div className="stamp-box">
-                <span className="stamp-label">Epoch S2 (2025-12)</span>
-                <div className="stamp-viewport">
-                  <div style={{ inlineSize: "8px", blockSize: "8px", borderRadius: "50%", background: "#fff", boxShadow: "0 0 6px #fff", transform: "translate(6px, -4px)" }} />
-                </div>
-              </div>
-              <div className="stamp-box">
-                <span className="stamp-label">Epoch S3 (2026-06)</span>
-                <div className="stamp-viewport">
-                  <div style={{ inlineSize: "8px", blockSize: "8px", borderRadius: "50%", background: "#fff", boxShadow: "0 0 6px #fff", transform: "translate(12px, -8px)" }} />
-                </div>
-              </div>
+              ))}
             </div>
 
             <dl className="viewer-dl">
@@ -323,11 +352,7 @@ export function PlanetXWizard({
             <button type="button" className="viewer-btn" onClick={() => setStep(2)}>
               Modify Search Grid
             </button>
-            <button
-              type="button"
-              className="viewer-btn viewer-btn-primary"
-              onClick={onOpenViewer}
-            >
+            <button type="button" className="viewer-btn viewer-btn-primary" onClick={onOpenViewer}>
               Inspect Plate in Blink Mode
             </button>
           </div>

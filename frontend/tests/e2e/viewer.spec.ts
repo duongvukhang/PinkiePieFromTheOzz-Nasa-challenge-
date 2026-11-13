@@ -262,7 +262,16 @@ async function mockWise0855Api(page: Page) {
       return route.fulfill({
         json: {
           items: [
-            { id: 88801, fits_file_id: CUTOUT_ID, ra: WISE_RA, dec: WISE_DEC, flags: 2, snr: 18.5 },
+            { id: 88801, fits_file_id: CUTOUT_ID, ra: WISE_RA, dec: WISE_DEC, flags: 4, snr: 18.5 },
+            {
+              id: 90102,
+              fits_file_id: CUTOUT_ID,
+              ra: WISE_RA + 0.02,
+              dec: WISE_DEC + 0.01,
+              flags: 2,
+              snr: 8.2,
+              mag_ab: 18.55,
+            },
           ],
           next_cursor: null,
         },
@@ -284,7 +293,10 @@ async function mockWise0855Api(page: Page) {
         },
       });
     }
-    if (path === "/api/v1/objects/88801") {
+    if (
+      path === "/api/v1/objects/88801" ||
+      path === "/api/v1/objects/00000000-0000-0000-0000-000000088801"
+    ) {
       return route.fulfill({
         json: {
           id: "00000000-0000-0000-0000-000000088801",
@@ -391,7 +403,10 @@ async function mockWise0855Api(page: Page) {
         },
       });
     }
-    if (path === "/api/v1/objects/88801/spectrum") {
+    if (
+      path === "/api/v1/objects/88801/spectrum" ||
+      path === "/api/v1/objects/00000000-0000-0000-0000-000000088801/spectrum"
+    ) {
       const lam = Array.from({ length: 24 }, (_, i) => 0.9 + i * 0.17);
       const flux = lam.map((l) => (l > 4.2 ? 38 + (l - 4.2) * 20 : 2 + l));
       return route.fulfill({
@@ -403,6 +418,69 @@ async function mockWise0855Api(page: Page) {
           mjd_tdb: lam.map(() => 60850.41),
           flags: lam.map((_, i) => (i === 5 ? 2 : 0)),
           method: "forced_psf",
+        },
+      });
+    }
+    if (path === "/api/v1/compare" && req.method() === "POST") {
+      return route.fulfill({
+        status: 202,
+        json: {
+          job_id: "00000000-0000-0000-0000-000000000030",
+          status: "succeeded",
+          compare_id: "00000000-0000-0000-0000-000000000088",
+        },
+      });
+    }
+    if (path === "/api/v1/compare/00000000-0000-0000-0000-000000000088") {
+      return route.fulfill({
+        json: {
+          compare_id: "00000000-0000-0000-0000-000000000088",
+          status: "succeeded",
+          source_changes: {
+            counts: { appeared: 1, disappeared: 1, moved: 1, changed_brightness: 1, total: 4 },
+            photometry_diff: [
+              {
+                id: "src-88801",
+                ra: WISE_RA,
+                dec: WISE_DEC,
+                status: "moved",
+                offset_arcsec: 4.12,
+                delta_mag: 0.12,
+                flux_significance_sigma: 18.5,
+                notes: "Centroid offset 4.12″ > 3σ (proper motion dipole)",
+              },
+              {
+                id: "src-90102",
+                ra: WISE_RA + 0.02,
+                dec: WISE_DEC + 0.01,
+                status: "changed_brightness",
+                offset_arcsec: 0.08,
+                delta_mag: 1.45,
+                flux_significance_sigma: 8.2,
+                notes: "Centroid static (< 0.2″); flux changed by 1.45 mag (variable)",
+              },
+              {
+                id: "src-91403",
+                ra: WISE_RA + 0.01,
+                dec: WISE_DEC - 0.01,
+                status: "appeared",
+                offset_arcsec: 0.0,
+                delta_mag: -2.3,
+                flux_significance_sigma: 6.8,
+                notes: "S/N = 7.1 in Epoch B; forced flux < 2σ in Epoch A",
+              },
+              {
+                id: "src-92504",
+                ra: WISE_RA - 0.01,
+                dec: WISE_DEC + 0.02,
+                status: "disappeared",
+                offset_arcsec: 0.0,
+                delta_mag: 2.1,
+                flux_significance_sigma: 5.4,
+                notes: "S/N = 6.2 in Epoch A; absent in Epoch B",
+              },
+            ],
+          },
         },
       });
     }
@@ -450,9 +528,7 @@ test.describe("SkyTrace Viewer /v & /embed (WISE 0855 mocked API)", () => {
     // 4. Feature C: Switch Inspector Tabs (Metadata & Flags + Object & Sources)
     await page.getByRole("tab", { name: "Metadata & Flags" }).click();
     await expect(page.locator(".meta-panel")).toContainText("60850.41");
-    await expect(
-      page.locator(".flag-row.is-active").filter({ hasText: "BLENDED" }),
-    ).toBeVisible();
+    await expect(page.locator(".flag-row.is-active").filter({ hasText: "BLENDED" })).toBeVisible();
     await page.screenshot({ path: `${SHOT_DIR}/viewer_wise0855_flags.png` });
 
     await page.getByRole("tab", { name: "Object & Sources" }).click();
@@ -496,10 +572,10 @@ test.describe("SkyTrace Viewer /v & /embed (WISE 0855 mocked API)", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockWise0855Api(page);
 
-    // Load viewer with obj=88801 and track=A:133.79513,-7.24515
+    // Load viewer with valid UUID obj and track=A:133.79513,-7.24515
     const binDone = page.waitForResponse((r) => r.url().includes("/science.bin") && r.ok());
     await page.goto(
-      "/v?target=WISE%200855&track=A:133.79513,-7.24515&obj=88801&inspectorTab=object",
+      "/v?target=WISE%200855&track=A:133.79513,-7.24515&obj=00000000-0000-0000-0000-000000088801&inspectorTab=object",
     );
     await binDone;
     await expect(page.locator("canvas.viewer-gl-canvas")).toBeVisible();

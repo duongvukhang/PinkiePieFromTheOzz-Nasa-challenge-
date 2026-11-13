@@ -11,6 +11,7 @@ import type { WcsParams } from "../aladin/wcs";
 import { WebGL2SkyCanvas } from "../gl/WebGL2SkyCanvas";
 import { WcsSvgOverlay } from "../overlays/WcsSvgOverlay";
 import { useViewStore } from "../state/viewStore";
+import { nextTrackLabel } from "../state/useViewerData";
 
 interface ViewerStageProps {
   wcs: WcsParams;
@@ -79,7 +80,7 @@ export function ViewerStage({
           objectDetail={objectDetail}
           onSelectBox={onBoxSelect}
           onSelectCoord={(sRa, sDec) => {
-            const nextLabel = String.fromCharCode(65 + (track.length % 26));
+            const nextLabel = nextTrackLabel(track);
             addTrack(nextLabel, sRa, sDec);
             setView({ inspectorTab: "object" }, false);
           }}

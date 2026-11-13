@@ -495,6 +495,23 @@ def test_simbad_cone_and_lookup_object() -> None:
     with pytest.raises(ProviderQueryError):
         prov.lookup_object("   ")
 
+    # Verify fallback to query_object when TAP raises error (e.g. 404)
+    sim.tap.search = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("404 Not Found"))
+    sim.query_object = lambda target: Table(
+        {
+            "MAIN_ID": ["NAME Barnard's Star"],
+            "RA": ["17 57 48.50"],
+            "DEC": ["+04 41 36.2"],
+            "PMRA": [-801.55],
+            "PMDEC": [10362.39],
+        }
+    )
+    fallback_obj = prov.lookup_object("Barnard's Star")
+    assert fallback_obj is not None
+    assert fallback_obj.source_id == "NAME Barnard's Star"
+    assert fallback_obj.pmra_masyr == pytest.approx(-801.55)
+    assert fallback_obj.pmdec_masyr == pytest.approx(10362.39)
+
 
 def test_horizons_ephemeris_vectors_sbdb_and_sb_ident() -> None:
     """Verify Horizons ephemerides (1-sig errors), observer vectors, SBDB, and sb_ident."""
