@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import type { DataReleaseRead, ExampleTargetSummary } from "../../api/client";
 import { formatSexagesimal, toGalacticAndEcliptic } from "../aladin/wcs";
 import { useViewStore, type ViewerMode } from "../state/viewStore";
@@ -10,9 +10,26 @@ interface ViewerToolbarProps {
   releases: DataReleaseRead[];
   authenticated: boolean;
   errorMsg?: string;
+  isLayersOpen?: boolean;
+  onToggleLayers?: () => void;
+  isTimelineOpen?: boolean;
+  onToggleTimeline?: () => void;
+  isInspectorOpen?: boolean;
+  onToggleInspector?: () => void;
 }
 
-export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: ViewerToolbarProps) {
+export function ViewerToolbar({
+  examples,
+  releases,
+  authenticated,
+  errorMsg,
+  isLayersOpen,
+  onToggleLayers,
+  isTimelineOpen,
+  onToggleTimeline,
+  isInspectorOpen,
+  onToggleInspector,
+}: ViewerToolbarProps) {
   const navigate = useNavigate();
   const { target, ra, dec, fov, from, to, release, mode, setView } = useViewStore();
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -23,6 +40,11 @@ export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: V
   return (
     <header className="viewer-topbar">
       <div className="viewer-control-group">
+        <Link to="/" className="viewer-brand-link" title="SkyTrace Astronomical Observatory">
+          <span className="viewer-brand-title">SkyTrace</span>
+          <span className="viewer-brand-pill">SPHEREx</span>
+        </Link>
+
         <button
           type="button"
           className="viewer-btn viewer-btn-primary"
@@ -132,6 +154,42 @@ export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: V
           </span>
         )}
         {errorMsg && <span className="viewer-error-text">{errorMsg}</span>}
+      </div>
+
+      <div className="viewer-panel-toggles" role="group" aria-label="Observatory panel toggles">
+        {onToggleLayers && (
+          <button
+            type="button"
+            className={`viewer-btn${isLayersOpen ? " viewer-btn-primary" : ""}`}
+            aria-pressed={isLayersOpen}
+            onClick={onToggleLayers}
+            title="Toggle Layers and Arrays Drawer (L)"
+          >
+            ☰ Layers
+          </button>
+        )}
+        {onToggleTimeline && (
+          <button
+            type="button"
+            className={`viewer-btn${isTimelineOpen ? " viewer-btn-primary" : ""}`}
+            aria-pressed={isTimelineOpen}
+            onClick={onToggleTimeline}
+            title="Toggle Multi-Epoch Timeline (T)"
+          >
+            ⏱ Timeline
+          </button>
+        )}
+        {onToggleInspector && (
+          <button
+            type="button"
+            className={`viewer-btn${isInspectorOpen ? " viewer-btn-primary" : ""}`}
+            aria-pressed={isInspectorOpen}
+            onClick={onToggleInspector}
+            title="Toggle Science & Object Inspector (I)"
+          >
+            📊 Inspector
+          </button>
+        )}
       </div>
 
       <ArchiveSearchModal

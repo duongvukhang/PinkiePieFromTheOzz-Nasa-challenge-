@@ -137,6 +137,28 @@
     overflow-x: clip;
   }
 
+  .app-shell.is-observatory {
+    block-size: 100vh;
+    block-size: 100dvh;
+    min-block-size: 0;
+    inline-size: 100vw;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+  }
+
+  .app-shell.is-observatory > main {
+    flex: 1 1 0%;
+    min-block-size: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
   .container {
     inline-size: 100%;
     max-inline-size: var(--container-max);

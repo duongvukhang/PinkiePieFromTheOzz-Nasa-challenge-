@@ -239,10 +239,10 @@ export function ViewerStage({
     : `Sky canvas centered at ICRS ${ra.toFixed(4)}°, ${dec.toFixed(4)}°`;
 
   return (
-    <div className="viewer-stage">
+    <div className="viewer-stage viewer-stage-fullscreen">
       <div
         ref={viewportRef}
-        className="viewer-viewport"
+        className="viewer-viewport viewer-viewport-fullscreen"
         style={{
           cursor: selectBoxMode ? "crosshair" : isPanning ? "grabbing" : "grab",
         }}

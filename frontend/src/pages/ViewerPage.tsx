@@ -1,4 +1,5 @@
 import "../design/viewer.css";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuthStore } from "../app/authStore";
 import { CompareView } from "../viewer/compare/CompareView";
@@ -14,12 +15,56 @@ import { useViewStore } from "../viewer/state/viewStore";
 export function ViewerPage() {
   const { search } = useLocation();
   const user = useAuthStore((s) => s.user);
-  const { mode, fov, release, op, swipe, setView } = useViewStore();
+  const { mode, fov, release, op, swipe, obj, setView } = useViewStore();
 
   const v = useViewerData(search);
 
+  // Floating observatory panels (closed by default for edge-to-edge astronomical field)
+  const [isLayersOpen, setIsLayersOpen] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
+
+  // Auto-open inspector when an object is selected/inspected
+  useEffect(() => {
+    if (obj || v.objectDetail) {
+      setIsInspectorOpen(true);
+    }
+  }, [obj, v.objectDetail]);
+
+  // Global hotkeys: L (Layers), T (Timeline), I (Inspector), Esc (Close drawers)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable)
+      ) {
+        return;
+      }
+      const k = e.key.toLowerCase();
+      if (k === "l") {
+        e.preventDefault();
+        setIsLayersOpen((p) => !p);
+      } else if (k === "t") {
+        e.preventDefault();
+        setIsTimelineOpen((p) => !p);
+      } else if (k === "i") {
+        e.preventDefault();
+        setIsInspectorOpen((p) => !p);
+      } else if (k === "escape") {
+        setIsLayersOpen(false);
+        setIsInspectorOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
-    <div className="viewer-shell" data-theme="dark">
+    <div className="viewer-shell is-observatory" data-theme="dark">
       <h1 id="main-heading" className="visually-hidden">
         SkyTrace Multi-Epoch Observatory Viewer
       </h1>
@@ -29,6 +74,12 @@ export function ViewerPage() {
         releases={v.releases}
         authenticated={Boolean(user)}
         errorMsg={v.errorMsg ?? v.resolveError}
+        isLayersOpen={isLayersOpen}
+        onToggleLayers={() => setIsLayersOpen((prev) => !prev)}
+        isTimelineOpen={isTimelineOpen}
+        onToggleTimeline={() => setIsTimelineOpen((prev) => !prev)}
+        isInspectorOpen={isInspectorOpen}
+        onToggleInspector={() => setIsInspectorOpen((prev) => !prev)}
       />
 
       {mode === "planetx" ? (
@@ -59,52 +110,91 @@ export function ViewerPage() {
           />
         </main>
       ) : (
-        <main className="viewer-workspace" id="main-content">
-          <LayerSidebar
-            selectBoxMode={v.selectBoxMode}
-            onToggleSelectBox={v.toggleSelectBox}
-            flaggedFraction={v.frameA?.flagged_fraction}
-          />
-
-          <div className="viewer-center">
-            <ViewerStage
-              wcs={v.wcs}
-              ra={v.activeRa}
-              dec={v.activeDec}
-              fov={fov}
-              frameA={v.frameA}
-              bufA={v.bufA}
-              bufB={v.bufB}
-              gaiaSources={v.gaiaSources}
-              catwiseSources={v.catwiseSources}
-              detections={v.detections}
-              suggestions={v.suggestions}
-              selectBoxMode={v.selectBoxMode}
-              objectDetail={v.objectDetail}
-              onBoxSelect={v.onBoxSelect}
-              onVisibilityPause={v.setPausedByVis}
-              loading={v.loadingCutouts}
-              errorMsg={v.errorMsg}
-              emptyWarning={v.warnings[0]}
-            />
-            <FrameStrip frames={v.frames} />
-          </div>
-
-          <InspectorTabs
-            activeFrame={v.frameA}
-            release={release}
-            warnings={v.warnings}
-            spectrum={v.spectrum}
-            objectDetail={v.objectDetail}
-            associations={v.associations}
-            suggestions={v.suggestions}
+        <div className="viewer-workspace-fullscreen">
+          <ViewerStage
+            wcs={v.wcs}
+            ra={v.activeRa}
+            dec={v.activeDec}
+            fov={fov}
+            frameA={v.frameA}
+            bufA={v.bufA}
+            bufB={v.bufB}
+            gaiaSources={v.gaiaSources}
+            catwiseSources={v.catwiseSources}
             detections={v.detections}
-            tracks={v.track}
-            onPickSuggestion={v.onTrackSuggestion}
-            onOverrideAssociation={v.overrideAssociation}
-            onRemoveTrack={v.removeTrack}
+            suggestions={v.suggestions}
+            selectBoxMode={v.selectBoxMode}
+            objectDetail={v.objectDetail}
+            onBoxSelect={v.onBoxSelect}
+            onVisibilityPause={v.setPausedByVis}
+            loading={v.loadingCutouts}
+            errorMsg={v.errorMsg}
+            emptyWarning={v.warnings[0]}
           />
-        </main>
+
+          {isTimelineOpen && (
+            <div className="viewer-timeline-dock">
+              <FrameStrip frames={v.frames} />
+            </div>
+          )}
+
+          {isLayersOpen && (
+            <aside
+              className="viewer-drawer viewer-drawer-left"
+              aria-label="Layers and scientific controls"
+            >
+              <div className="viewer-drawer-header">
+                <span className="viewer-drawer-title">Layers &amp; Arrays</span>
+                <button
+                  type="button"
+                  className="viewer-drawer-close"
+                  onClick={() => setIsLayersOpen(false)}
+                  aria-label="Close layers drawer"
+                >
+                  ✕
+                </button>
+              </div>
+              <LayerSidebar
+                selectBoxMode={v.selectBoxMode}
+                onToggleSelectBox={v.toggleSelectBox}
+                flaggedFraction={v.frameA?.flagged_fraction}
+              />
+            </aside>
+          )}
+
+          {isInspectorOpen && (
+            <aside
+              className="viewer-drawer viewer-drawer-right"
+              aria-label="Scientific inspection and object properties"
+            >
+              <div className="viewer-drawer-header">
+                <span className="viewer-drawer-title">Object &amp; Science Inspector</span>
+                <button
+                  type="button"
+                  className="viewer-drawer-close"
+                  onClick={() => setIsInspectorOpen(false)}
+                  aria-label="Close inspector drawer"
+                >
+                  ✕
+                </button>
+              </div>
+              <InspectorTabs
+                activeFrame={v.frameA}
+                release={release}
+                warnings={v.warnings}
+                spectrum={v.spectrum}
+                objectDetail={v.objectDetail}
+                associations={v.associations}
+                suggestions={v.suggestions}
+                detections={v.detections}
+                tracks={v.track}
+                onPickSuggestion={v.onTrackSuggestion}
+                onOverrideAssociation={v.overrideAssociation}
+                onRemoveTrack={v.removeTrack}
+              />
+            </aside>
+          )}
+        </div>
       )}
     </div>
   );
