@@ -550,3 +550,33 @@ def test_catalog_overlay_releases_examples_and_pagination(api_env: dict[str, Any
     assert celery_app.conf.task_routes["app.workers.tasks_fast.*"] == {"queue": "fast"}
     assert store.list_releases() == []
     assert datetime.now(UTC) is not None
+
+
+def test_cutouts_synthetic_fallback_and_examples_guard(api_env: dict[str, Any]) -> None:
+    client: TestClient = api_env["client"]
+    spherex: _FakeSpherexProvider = api_env["spherex"]
+
+    # 1. Provider failure -> fallback generates synthetic sequence with 3 playable frames
+    spherex.fail_with = ProviderUnavailableError("Simulated IRSA outage")
+    req = {"ra": 200.0, "dec": 10.0, "fov_arcmin": 10.0, "bands": ["all"]}
+    post_res = client.post("/api/v1/cutouts", json=req)
+    assert post_res.status_code == 202
+    cutout_id = post_res.json()["cutout_id"]
+
+    cut_res = client.get(f"/api/v1/cutouts/{cutout_id}")
+    assert cut_res.status_code == 200
+    cut_body = cut_res.json()
+    assert len(cut_body["frames"]) == 3
+    assert any("synthetic" in w.lower() for w in cut_body["warnings"])
+
+    # First synthetic frame has playable display and science arrays
+    f0 = cut_body["frames"][0]
+    disp = client.get(f0["display_url"])
+    assert disp.status_code == 200
+    assert disp.content[:4] == b"RIFF"
+
+    # 2. list_examples_service with nonexistent file returns empty list, not 500
+    from app.services.fields import list_examples_service
+
+    res = list_examples_service(reference_path=Path("/tmp/nonexistent_reference_file.json"))
+    assert res.targets == []

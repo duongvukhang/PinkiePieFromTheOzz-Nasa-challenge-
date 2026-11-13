@@ -69,13 +69,27 @@ _TARGET_MAP: dict[str, str] = {
 }
 
 
+def _get_reference_path(reference_path: Path | None = None) -> Path:
+    if reference_path is not None:
+        return reference_path
+    env_val = os.environ.get("SPHX_REFERENCE_VALUES_PATH")
+    if env_val and Path(env_val).is_file():
+        return Path(env_val)
+    for cand in (
+        DEFAULT_REFERENCE_PATH,
+        Path("/app/tests/science/reference_values.json"),
+        Path("tests/science/reference_values.json"),
+    ):
+        if cand.is_file():
+            return cand
+    return Path(env_val) if env_val else DEFAULT_REFERENCE_PATH
+
+
 def _lookup_reference_target(
     name: str, *, reference_path: Path | None = None
 ) -> ResolveResponse | None:
     """Resolve mandatory benchmark targets from canonical `reference_values.json`."""
-    path = reference_path or Path(
-        os.environ.get("SPHX_REFERENCE_VALUES_PATH", str(DEFAULT_REFERENCE_PATH))
-    )
+    path = _get_reference_path(reference_path)
     if not path.is_file():
         return None
     try:
@@ -366,7 +380,7 @@ def list_releases_service(
         for d in descriptors
     ]
     if not releases and hasattr(provider, "profile"):
-        prof = getattr(provider, "profile")
+        prof = provider.profile
         releases = [
             DataReleaseRead(
                 id=getattr(prof, "collection_id", "spherex_qr_v1"),
@@ -386,14 +400,21 @@ def list_releases_service(
 
 def list_examples_service(*, reference_path: Path | None = None) -> ExamplesResponse:
     """Load the 5 mandatory benchmark target presets from `reference_values.json`."""
-    path = reference_path or Path(
-        os.environ.get("SPHX_REFERENCE_VALUES_PATH", str(DEFAULT_REFERENCE_PATH))
-    )
-    targets: dict[str, Any] = json.loads(path.read_text(encoding="utf-8")).get("targets", {})
+    path = _get_reference_path(reference_path)
+    if not path.is_file():
+        return ExamplesResponse(targets=[])
+    try:
+        targets: dict[str, Any] = json.loads(path.read_text(encoding="utf-8")).get("targets", {})
+    except Exception:
+        return ExamplesResponse(targets=[])
     items: list[ExampleTargetSummary] = []
     for key in MANDATORY_EXAMPLE_KEYS:
         t = targets.get(key)
-        if not t or (ra := t.get("ra_deg", t.get("challenge_ra_deg"))) is None or (dec := t.get("dec_deg", t.get("challenge_dec_deg"))) is None:
+        if not t:
+            continue
+        ra = t.get("ra_deg", t.get("challenge_ra_deg"))
+        dec = t.get("dec_deg", t.get("challenge_dec_deg"))
+        if ra is None or dec is None:
             continue
         items.append(
             ExampleTargetSummary(

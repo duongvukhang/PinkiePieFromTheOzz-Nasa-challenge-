@@ -29,9 +29,13 @@ export function ViewerPage() {
         releases={v.releases}
         authenticated={Boolean(user)}
         resolving={v.resolving}
-        errorMsg={v.resolveError}
+        errorMsg={v.errorMsg ?? v.resolveError}
         onResolveName={async (name) => {
-          setView({ target: name, ra: undefined, dec: undefined });
+          try {
+            await v.resolveTargetDirect(name);
+          } catch {
+            setView({ target: name, ra: undefined, dec: undefined });
+          }
         }}
       />
 

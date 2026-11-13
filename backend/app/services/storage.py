@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import tempfile
@@ -172,6 +173,11 @@ class S3StorageBackend(StorageBackend):
             aws_secret_access_key=secret_key,
             region_name=region_name or "us-east-1",
         )
+        try:
+            self._client.head_bucket(Bucket=self.bucket)
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._client.create_bucket(Bucket=self.bucket)
 
     def _head(self, key: str) -> dict[str, Any] | None:
         rel = _normalize_key(key)

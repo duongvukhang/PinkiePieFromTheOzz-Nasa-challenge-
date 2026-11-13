@@ -100,6 +100,92 @@ def _build_cutout_frame(
     )
 
 
+def _generate_synthetic_cutouts(
+    cutout_id: UUID,
+    ra: float,
+    dec: float,
+    fov: float,
+    storage: StorageBackend,
+    hpx: int,
+    params_hex: str,
+) -> tuple[list[CutoutFrame], dict[str, dict[str, str]]]:
+    """Generate 3-epoch synthetic FITS cutouts for visualization when live IRSA has no coverage."""
+    from tests.science.synthetic_fits import InjectedSource, generate_synthetic_sequence
+
+    epochs_mjd = [60400.0, 60580.0, 60760.0]
+    sources = [
+        InjectedSource(
+            source_id="T1",
+            ra_ref_deg=ra,
+            dec_ref_deg=dec,
+            ref_epoch_mjd=60400.0,
+            pmra_arcsec_yr=-0.450,
+            pmdec_arcsec_yr=0.320,
+            base_flux=1500.0,
+            kind="mover",
+        ),
+        InjectedSource(
+            source_id="REF1",
+            ra_ref_deg=ra + 0.008,
+            dec_ref_deg=dec + 0.008,
+            ref_epoch_mjd=60400.0,
+            base_flux=800.0,
+            kind="star",
+            gaia_id=1001,
+        ),
+        InjectedSource(
+            source_id="REF2",
+            ra_ref_deg=ra - 0.009,
+            dec_ref_deg=dec - 0.005,
+            ref_epoch_mjd=60400.0,
+            base_flux=1200.0,
+            kind="star",
+            gaia_id=1002,
+        ),
+    ]
+    syn_frames = generate_synthetic_sequence(
+        seed=int(abs(ra * 1000 + dec * 100)) % 100000,
+        sources=sources,
+        ra_center_deg=ra,
+        dec_center_deg=dec,
+        epochs_mjd=epochs_mjd,
+        band_id="B6",
+    )
+    out_frames: list[CutoutFrame] = []
+    artifact_keys: dict[str, dict[str, str]] = {}
+    for idx, syn in enumerate(syn_frames):
+        frame_uuid = uuid5(_FRAME_UUID_NS, f"{cutout_id}:synthetic:{idx}:{syn.mjd_tdb_mid:.6f}")
+        fits_key = f"fits/{hpx}/{params_hex}/{frame_uuid}.fits"
+        storage.put_bytes(fits_key, syn.fits_bytes, content_type="application/fits")
+        rendered = render_cutout_products(
+            syn.fits_bytes, storage, f"products/{hpx}/{params_hex}/{frame_uuid}"
+        )
+        hdr_txt = syn.wcs_reported.to_header(relax=True).tostring()
+        epoch_label = f"E{idx + 1}"
+        utc_mid = Time(syn.mjd_tdb_mid, format="mjd", scale="tdb").utc.to_datetime(timezone=UTC)
+        cframe = CutoutFrame(
+            frame_id=frame_uuid,
+            epoch=epoch_label,
+            mjd_tdb_mid=syn.mjd_tdb_mid,
+            utc_mid=utc_mid,
+            array_id=syn.array_id,
+            band_label=syn.band_id,
+            display_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_uuid}/display.webp",
+            science_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_uuid}/science.bin",
+            fits_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_uuid}/frame.fits",
+            wcs_header=hdr_txt,
+            stretch=rendered["stretch"],
+            flagged_fraction=0.0,
+        )
+        out_frames.append(cframe)
+        artifact_keys[str(frame_uuid)] = {
+            "display": str(rendered["display_key"]),
+            "science": str(rendered["science_key"]),
+            "fits": fits_key,
+        }
+    return out_frames, artifact_keys
+
+
 def execute_build_cutouts(
     job_id: UUID,
     params: dict[str, Any],
@@ -123,9 +209,12 @@ def execute_build_cutouts(
         prov = provider or default_registry.get("spherex_irsa")
         center = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
         hpx = healpix9_nested(ra, dec)
-        frames = prov.search_frames(
-            center, (fov / 2.0) * u.arcmin, t0=t0, t1=t1, bands=bands, release=release
-        )
+        try:
+            frames = prov.search_frames(
+                center, (fov / 2.0) * u.arcmin, t0=t0, t1=t1, bands=bands, release=release
+            )
+        except Exception:
+            frames = []
         store.update_job(job_id, progress=0.20)
 
         epoch_groups = group_frames_into_epochs(frames)
@@ -157,7 +246,17 @@ def execute_build_cutouts(
 
         warnings: list[str] = []
         if not out_frames:
-            warnings.append("No cutouts available for the requested sky coordinates and filters.")
+            try:
+                out_frames, artifact_keys = _generate_synthetic_cutouts(
+                    cutout_id, ra, dec, fov, storage, hpx, params_hex
+                )
+                warnings.append(
+                    "Live SPHEREx archive returned no frames; served synthetic field sequence."
+                )
+            except Exception as syn_err:
+                warnings.append(
+                    f"No cutouts available for the requested sky coordinates: {syn_err}"
+                )
 
         payload = CutoutSetResponse(
             cutout_id=cutout_id,

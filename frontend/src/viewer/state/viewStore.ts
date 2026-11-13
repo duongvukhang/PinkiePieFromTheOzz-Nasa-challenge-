@@ -118,7 +118,7 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     obj: q.get("obj") ?? undefined,
     inspectorTab: (() => {
       const t = (q.get("inspectorTab") || q.get("tab")) as InspectorTab;
-      return t && INSPECTOR_TABS.has(t) ? t : undefined;
+      return t && INSPECTOR_TABS.has(t) ? t : "spectrum";
     })(),
   };
 }

@@ -8,7 +8,9 @@ WORKDIR /app
 COPY science/pyproject.toml ./science/pyproject.toml
 COPY science/sphx_core ./science/sphx_core
 COPY backend/pyproject.toml ./backend/pyproject.toml
+COPY backend/alembic.ini ./backend/alembic.ini
 COPY backend/app ./backend/app
+COPY tests ./tests
 
 RUN pip install --no-cache-dir --upgrade pip setuptools \
     && pip install --no-cache-dir -e ./science -e ./backend

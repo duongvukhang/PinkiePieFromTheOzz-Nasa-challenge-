@@ -294,11 +294,18 @@ export function InspectorTabs({
                   <ul className="associations-list">
                     {associations.map((a) => {
                       const epochLabel = (() => {
-                        let best = `E${a.rank}`, minD = Infinity;
+                        let best = `E${a.rank}`,
+                          minD = Infinity;
                         for (const m of objectDetail.measurements) {
                           if (m.ra != null && a.pred_ra != null) {
-                            const d = Math.hypot(m.ra - a.pred_ra, (m.dec ?? 0) - (a.pred_dec ?? 0));
-                            if (d < minD) { minD = d; best = m.epoch ?? best; }
+                            const d = Math.hypot(
+                              m.ra - a.pred_ra,
+                              (m.dec ?? 0) - (a.pred_dec ?? 0),
+                            );
+                            if (d < minD) {
+                              minD = d;
+                              best = m.epoch ?? best;
+                            }
                           }
                         }
                         return minD < 0.005 ? best : `E${a.rank}`;
@@ -319,7 +326,14 @@ export function InspectorTabs({
                               type="button"
                               className="viewer-btn"
                               aria-label={`Accept match for epoch ${epochLabel}`}
-                              onClick={() => onOverrideAssociation?.(epochLabel, "accept", a.detection_id, "User accepted hypothesis")}
+                              onClick={() =>
+                                onOverrideAssociation?.(
+                                  epochLabel,
+                                  "accept",
+                                  a.detection_id,
+                                  "User accepted hypothesis",
+                                )
+                              }
                             >
                               Accept
                             </button>
@@ -327,7 +341,14 @@ export function InspectorTabs({
                               type="button"
                               className="viewer-btn"
                               aria-label={`Reject match for epoch ${epochLabel}`}
-                              onClick={() => onOverrideAssociation?.(epochLabel, "reject", null, "User rejected match")}
+                              onClick={() =>
+                                onOverrideAssociation?.(
+                                  epochLabel,
+                                  "reject",
+                                  null,
+                                  "User rejected match",
+                                )
+                              }
                             >
                               Reject
                             </button>
@@ -335,7 +356,11 @@ export function InspectorTabs({
                               type="button"
                               className="viewer-btn"
                               aria-label={`Reassign match for epoch ${epochLabel}`}
-                              onClick={() => setReassigningEpoch(reassigningEpoch === epochLabel ? null : epochLabel)}
+                              onClick={() =>
+                                setReassigningEpoch(
+                                  reassigningEpoch === epochLabel ? null : epochLabel,
+                                )
+                              }
                             >
                               Reassign…
                             </button>

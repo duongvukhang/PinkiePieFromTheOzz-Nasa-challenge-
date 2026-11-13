@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { DataReleaseRead, ExampleTargetSummary } from "../../api/client";
 import { formatSexagesimal, toGalacticAndEcliptic } from "../aladin/wcs";
 import { parseCoordsInput, useViewStore, type ViewerMode } from "../state/viewStore";
@@ -26,6 +26,14 @@ export function ViewerToolbar({
       (ra !== undefined && dec !== undefined ? `${ra.toFixed(5)}, ${dec.toFixed(5)}` : "WISE 0855"),
   );
 
+  useEffect(() => {
+    if (target) {
+      setInput(target);
+    } else if (ra !== undefined && dec !== undefined) {
+      setInput(`${ra.toFixed(5)}, ${dec.toFixed(5)}`);
+    }
+  }, [target, ra, dec]);
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
@@ -35,7 +43,6 @@ export function ViewerToolbar({
       setView({ ra: parsed.ra, dec: parsed.dec, target: "", frame: 0 });
       return;
     }
-    setView({ target: trimmed, frame: 0 });
     await onResolveName(trimmed);
   };
 

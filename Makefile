@@ -13,7 +13,7 @@ setup:
 	npm --prefix frontend install
 
 dev:
-	.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload & npm --prefix frontend run dev
+	SPHX_STORE_MODE=memory SPHX_CACHE_BACKEND=memory SPHX_STORAGE_BACKEND=local CELERY_TASK_ALWAYS_EAGER=true .venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload & npm --prefix frontend run dev
 
 run:
 	docker compose up --build

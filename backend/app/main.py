@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +25,34 @@ from app.providers import ProviderError
 from app.schemas.common import HealthResponse
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Auto-initialize database schema when running with a relational store."""
+    if os.environ.get("DATABASE_URL") and os.environ.get("SPHX_STORE_MODE", "").lower() != "memory":
+        try:
+            from alembic import command
+            from alembic.config import Config
+
+            paths = (Path("backend/alembic.ini"), Path("/app/backend/alembic.ini"))
+            cfg_path = next((p for p in paths if p.is_file()), None)
+            if cfg_path:
+                command.upgrade(Config(str(cfg_path)), "head")
+        except Exception:
+            with suppress(Exception):
+                from sqlalchemy import text
+
+                import app.db.models  # noqa: F401
+                from app.db.base import Base
+                from app.db.session import get_engine
+
+                with get_engine().connect() as conn:
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS citext"))
+                    conn.commit()
+                Base.metadata.create_all(bind=get_engine())
+    yield
+
+
 def create_app() -> FastAPI:
     """Build FastAPI app with OpenAPI 3.1 contract routes and RFC 9457 error handlers."""
     app = FastAPI(
@@ -28,6 +60,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="SPHEREx moving-object detection, astrometry, and trajectory API.",
         openapi_url="/api/v1/openapi.json",
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,

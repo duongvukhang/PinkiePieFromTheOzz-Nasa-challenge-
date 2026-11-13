@@ -143,13 +143,34 @@ export function CompareView({
     (c) => activeCategory === "all" || c.category === activeCategory,
   );
 
-  const bandLbl = (f?: CutoutFrame) => f?.band_label ?? (f?.array_id ? `Arr ${f.array_id}` : "Co-add");
+  const bandLbl = (f?: CutoutFrame) =>
+    f?.band_label ?? (f?.array_id ? `Arr ${f.array_id}` : "Co-add");
   const headerDiffRows = [
-    { key: "DATE-OBS", a: frameA?.utc_mid ?? "—", b: frameB?.utc_mid ?? "—", diff: frameA?.utc_mid !== frameB?.utc_mid },
-    { key: "MJD-OBS", a: frameA?.mjd_tdb_mid.toFixed(4) ?? "—", b: frameB?.mjd_tdb_mid.toFixed(4) ?? "—", diff: frameA?.mjd_tdb_mid !== frameB?.mjd_tdb_mid },
-    { key: "ARRAY / BAND", a: bandLbl(frameA), b: bandLbl(frameB), diff: frameA?.band_label !== frameB?.band_label },
+    {
+      key: "DATE-OBS",
+      a: frameA?.utc_mid ?? "—",
+      b: frameB?.utc_mid ?? "—",
+      diff: frameA?.utc_mid !== frameB?.utc_mid,
+    },
+    {
+      key: "MJD-OBS",
+      a: frameA?.mjd_tdb_mid.toFixed(4) ?? "—",
+      b: frameB?.mjd_tdb_mid.toFixed(4) ?? "—",
+      diff: frameA?.mjd_tdb_mid !== frameB?.mjd_tdb_mid,
+    },
+    {
+      key: "ARRAY / BAND",
+      a: bandLbl(frameA),
+      b: bandLbl(frameB),
+      diff: frameA?.band_label !== frameB?.band_label,
+    },
     { key: "ZERO POINT", a: frameA ? "22.50 AB" : "—", b: frameB ? "22.50 AB" : "—", diff: false },
-    { key: "FLAGGED FRACTION", a: frameA ? `${(frameA.flagged_fraction * 100).toFixed(2)}%` : "—", b: frameB ? `${(frameB.flagged_fraction * 100).toFixed(2)}%` : "—", diff: frameA?.flagged_fraction !== frameB?.flagged_fraction },
+    {
+      key: "FLAGGED FRACTION",
+      a: frameA ? `${(frameA.flagged_fraction * 100).toFixed(2)}%` : "—",
+      b: frameB ? `${(frameB.flagged_fraction * 100).toFixed(2)}%` : "—",
+      diff: frameA?.flagged_fraction !== frameB?.flagged_fraction,
+    },
   ];
 
   return (
@@ -157,25 +178,33 @@ export function CompareView({
       {/* Compare top control strip */}
       <div className="compare-toolbar">
         <div className="compare-selectors">
-          {([["a", "Epoch A:", frameA, onSelectFrameA], ["b", "Epoch B:", frameB, onSelectFrameB]] as const).map(
-            ([k, lbl, curFrame, onSel]) => (
-              <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
-                <label htmlFor={`select-frame-${k}`} className="viewer-label">{lbl}</label>
-                <select
-                  id={`select-frame-${k}`}
-                  className="viewer-select"
-                  value={curFrame?.frame_id ?? ""}
-                  onChange={(e) => onSel(e.target.value)}
-                >
-                  {frames.map((f) => (
-                    <option key={f.frame_id} value={f.frame_id}>
-                      {f.epoch} ({f.utc_mid.slice(0, 10)}) {f.band_label ?? ""}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            )
-          )}
+          {(
+            [
+              ["a", "Epoch A:", frameA, onSelectFrameA],
+              ["b", "Epoch B:", frameB, onSelectFrameB],
+            ] as const
+          ).map(([k, lbl, curFrame, onSel]) => (
+            <span
+              key={k}
+              style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
+            >
+              <label htmlFor={`select-frame-${k}`} className="viewer-label">
+                {lbl}
+              </label>
+              <select
+                id={`select-frame-${k}`}
+                className="viewer-select"
+                value={curFrame?.frame_id ?? ""}
+                onChange={(e) => onSel(e.target.value)}
+              >
+                {frames.map((f) => (
+                  <option key={f.frame_id} value={f.frame_id}>
+                    {f.epoch} ({f.utc_mid.slice(0, 10)}) {f.band_label ?? ""}
+                  </option>
+                ))}
+              </select>
+            </span>
+          ))}
         </div>
 
         <div className="compare-ops" role="group" aria-label="Comparison operations">
@@ -230,11 +259,25 @@ export function CompareView({
       {/* Compare Canvas Stage */}
       <div className={`compare-stage${viewLayout === "side-by-side" ? " is-split" : ""}`}>
         {viewLayout === "side-by-side" ? (
-          ([["A", frameA, bufA], ["B", frameB, bufB]] as const).map(([lbl, f, b]) => (
+          (
+            [
+              ["A", frameA, bufA],
+              ["B", frameB, bufB],
+            ] as const
+          ).map(([lbl, f, b]) => (
             <div key={lbl} className="compare-split-pane">
-              <div className="pane-tag">Epoch {lbl}: {f?.epoch ?? lbl}</div>
+              <div className="pane-tag">
+                Epoch {lbl}: {f?.epoch ?? lbl}
+              </div>
               <div className="viewer-viewport">
-                <WebGL2SkyCanvas frameA={b} stretch="asinh" op="none" colormap="gray" swipe={0.5} label={`Frame ${lbl} (${f?.epoch})`} />
+                <WebGL2SkyCanvas
+                  frameA={b}
+                  stretch="asinh"
+                  op="none"
+                  colormap="gray"
+                  swipe={0.5}
+                  label={`Frame ${lbl} (${f?.epoch})`}
+                />
               </div>
             </div>
           ))

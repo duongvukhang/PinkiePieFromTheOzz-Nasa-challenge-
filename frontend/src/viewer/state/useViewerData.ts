@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   api,
   ApiError,
@@ -68,6 +68,15 @@ export function useViewerData(search: string, skipSecondary = false) {
     enabled: !skipSecondary,
   });
 
+  const resolveTargetDirect = useCallback(
+    async (name: string) => {
+      const res = await api.resolveTarget(name);
+      setView({ target: name, ra: res.ra_deg, dec: res.dec_deg, frame: 0 });
+      return res;
+    },
+    [setView],
+  );
+
   const resolveQ = useQuery({
     queryKey: ["resolve", target],
     queryFn: () => api.resolveTarget(target),
@@ -75,10 +84,10 @@ export function useViewerData(search: string, skipSecondary = false) {
   });
 
   useEffect(() => {
-    if (resolveQ.data && ra === undefined) {
+    if (resolveQ.data && (ra === undefined || dec === undefined)) {
       setView({ ra: resolveQ.data.ra_deg, dec: resolveQ.data.dec_deg });
     }
-  }, [resolveQ.data, ra, setView]);
+  }, [resolveQ.data, ra, dec, setView]);
 
   const activeRa = ra ?? resolveQ.data?.ra_deg;
   const activeDec = dec ?? resolveQ.data?.dec_deg;
@@ -312,8 +321,16 @@ export function useViewerData(search: string, skipSecondary = false) {
     selectBoxMode,
     toggleSelectBox,
     spectrum: spectrumQ.data,
+    resolveTargetDirect,
     resolving: resolveQ.isFetching,
-    resolveError: resolveQ.error instanceof Error ? resolveQ.error.message : undefined,
+    errorMsg: (() => {
+      const err = resolveQ.error ?? cutoutQ.error ?? fieldsQ.error ?? bufAQ.error ?? null;
+      return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+    })(),
+    resolveError: (() => {
+      const err = resolveQ.error ?? cutoutQ.error ?? fieldsQ.error ?? bufAQ.error ?? null;
+      return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+    })(),
     setPausedByVis,
   };
 }

@@ -48,6 +48,10 @@ describe("viewer WCS & URL state", () => {
     expect(parsed.bands).toBe("arr6");
     expect(parsed.op).toBe("diff");
     expect(parsed.overlay).toEqual(["gaia", "catwise"]);
+    expect(parsed.inspectorTab).toBe("spectrum");
+
+    const parsedFlags = parseViewParams("?inspectorTab=flags", false);
+    expect(parsedFlags.inspectorTab).toBe("flags");
 
     const qs = toViewQuery({
       target: "WISE 0855",
