@@ -156,6 +156,8 @@ IMPLEMENTED_OPS: set[tuple[str, str]] = {
     ("POST", "/api/v1/compare"),
     ("GET", "/api/v1/compare/{compare_id}"),
     ("GET", "/api/v1/compare/{compare_id}/products/{product_name}"),
+    ("GET", "/api/v1/archive/search"),
+    ("POST", "/api/v1/archive/load"),
     ("GET", "/api/v1/catalogs/overlay"),
     ("GET", "/api/v1/releases"),
     ("GET", "/api/v1/examples"),

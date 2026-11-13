@@ -108,6 +108,8 @@ const CALIBRATION_CARDS = [
 export function Home() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+  const [fromDate, setFromDate] = useState("2025-01-01");
+  const [toDate, setToDate] = useState("2025-12-31");
   const [epochIdx, setEpochIdx] = useState(0);
   const [mode, setMode] = useState<"mover" | "variable">("mover");
 
@@ -119,12 +121,23 @@ export function Home() {
   const handleSearch = (e: FormEvent) => {
     e.preventDefault();
     const q = query.trim();
+    const qs = new URLSearchParams();
+    if (fromDate) qs.set("from", fromDate);
+    if (toDate) qs.set("to", toDate);
+
     if (!q) {
-      navigate("/v?target=WISE%200855");
+      qs.set("target", "WISE 0855");
+      navigate(`/v?${qs.toString()}`);
       return;
     }
     const coords = q.match(/^(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)$/);
-    navigate(coords ? `/v?ra=${coords[1]}&dec=${coords[2]}` : `/v?target=${encodeURIComponent(q)}`);
+    if (coords) {
+      qs.set("ra", Number(coords[1]).toFixed(5));
+      qs.set("dec", Number(coords[2]).toFixed(5));
+    } else {
+      qs.set("target", q);
+    }
+    navigate(`/v?${qs.toString()}`);
   };
 
   return (
@@ -152,28 +165,89 @@ export function Home() {
             <div className="hero-overlay">
               <h2 className="hero-display-title">The Memory of Light</h2>
               <p className="hero-overlay-copy">
-                Enter an astronomical target or celestial coordinates to inspect multi-epoch
-                infrared plates across time.
+                Enter an astronomical target or celestial coordinates and choose observation time
+                intervals to inspect multi-epoch infrared plates across time.
               </p>
 
               <search style={{ inlineSize: "100%", display: "flex", justifyContent: "center" }}>
-                <form className="hero-search-pill" onSubmit={handleSearch}>
-                  <label htmlFor="hero-coord-input" className="visually-hidden">
-                    Target name or ICRS coordinates
-                  </label>
-                  <input
-                    id="hero-coord-input"
-                    type="search"
-                    placeholder="Try WISE 0855, Barnard's Star, or 133.795, -7.245"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    spellCheck={false}
-                    autoCorrect="off"
-                    autoCapitalize="none"
-                  />
-                  <button type="submit" className="btn btn-dark">
-                    Inspect sky →
-                  </button>
+                <form className="hero-search-box" onSubmit={handleSearch}>
+                  <div className="hero-search-top">
+                    <label htmlFor="hero-coord-input" className="visually-hidden">
+                      Target name or ICRS coordinates
+                    </label>
+                    <input
+                      id="hero-coord-input"
+                      type="search"
+                      placeholder="Try WISE 0855, Barnard's Star, or 133.795, -7.245"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      spellCheck={false}
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                    />
+                    <button type="submit" className="btn btn-dark">
+                      Inspect sky →
+                    </button>
+                  </div>
+
+                  <div className="hero-search-interval">
+                    <span className="hero-interval-label">Observation Interval:</span>
+                    <label htmlFor="hero-from-date" className="visually-hidden">
+                      From date
+                    </label>
+                    <input
+                      id="hero-from-date"
+                      type="date"
+                      className="hero-date-input"
+                      value={fromDate}
+                      onChange={(e) => setFromDate(e.target.value)}
+                      title="Start date of observation interval"
+                    />
+                    <span className="hero-interval-sep">to</span>
+                    <label htmlFor="hero-to-date" className="visually-hidden">
+                      To date
+                    </label>
+                    <input
+                      id="hero-to-date"
+                      type="date"
+                      className="hero-date-input"
+                      value={toDate}
+                      onChange={(e) => setToDate(e.target.value)}
+                      title="End date of observation interval"
+                    />
+                    <div className="hero-date-presets">
+                      <button
+                        type="button"
+                        className="hero-date-chip"
+                        onClick={() => {
+                          setFromDate("2025-01-01");
+                          setToDate("2025-12-31");
+                        }}
+                      >
+                        2025
+                      </button>
+                      <button
+                        type="button"
+                        className="hero-date-chip"
+                        onClick={() => {
+                          setFromDate("2024-01-01");
+                          setToDate("2026-12-31");
+                        }}
+                      >
+                        Multi-Year
+                      </button>
+                      <button
+                        type="button"
+                        className="hero-date-chip"
+                        onClick={() => {
+                          setFromDate("");
+                          setToDate("");
+                        }}
+                      >
+                        All Time
+                      </button>
+                    </div>
+                  </div>
                 </form>
               </search>
 

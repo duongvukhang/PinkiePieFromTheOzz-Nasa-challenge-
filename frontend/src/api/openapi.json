@@ -656,6 +656,309 @@
         }
       }
     },
+    "/api/v1/archive/search": {
+      "get": {
+        "tags": [
+          "archive"
+        ],
+        "summary": "Search Nasa Archive",
+        "description": "Query NASA-affiliated archives (SPHEREx, WISE, 2MASS, SkyView) with spatial and temporal intervals.",
+        "operationId": "search_nasa_archive_api_v1_archive_search_get",
+        "parameters": [
+          {
+            "name": "ra",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "minimum": 0.0,
+              "exclusiveMaximum": 360.0,
+              "title": "Ra"
+            }
+          },
+          {
+            "name": "dec",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "maximum": 90.0,
+              "minimum": -90.0,
+              "title": "Dec"
+            }
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 300.0,
+              "exclusiveMinimum": 0.0,
+              "default": 5.0,
+              "title": "Radius"
+            }
+          },
+          {
+            "name": "radius_unit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "arcsec",
+                "arcmin",
+                "deg"
+              ],
+              "type": "string",
+              "default": "arcmin",
+              "title": "Radius Unit"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "spherex_irsa",
+                "wise_irsa",
+                "twomass_irsa",
+                "skyview"
+              ],
+              "type": "string",
+              "default": "spherex_irsa",
+              "title": "Source"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "name": "band",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Band"
+            }
+          },
+          {
+            "name": "max_records",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Max Records"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/archive/load": {
+      "post": {
+        "tags": [
+          "archive"
+        ],
+        "summary": "Load Archive Product",
+        "description": "Stream download and register an authentic NASA archive FITS into the active workspace.",
+        "operationId": "load_archive_product_api_v1_archive_load_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveLoadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Load Archive Product Api V1 Archive Load Post"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/fields/frames": {
       "get": {
         "tags": [
@@ -6301,6 +6604,338 @@
         "title": "ApiTokenRead",
         "description": "Stored API token metadata without raw secret."
       },
+      "ArchiveLoadRequest": {
+        "properties": {
+          "obs_id": {
+            "type": "string",
+            "title": "Obs Id"
+          },
+          "access_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Url"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "spherex_irsa",
+              "wise_irsa",
+              "twomass_irsa",
+              "skyview"
+            ],
+            "title": "Source",
+            "default": "spherex_irsa"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "ra_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ra Deg"
+          },
+          "dec_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dec Deg"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obs_id"
+        ],
+        "title": "ArchiveLoadRequest",
+        "description": "Request payload to download/register an authentic archive product into active session."
+      },
+      "ArchiveRecord": {
+        "properties": {
+          "obs_id": {
+            "type": "string",
+            "title": "Obs Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "ra_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ra Deg"
+          },
+          "dec_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dec Deg"
+          },
+          "date_obs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Obs"
+          },
+          "mjd_obs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mjd Obs"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "detector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detector"
+          },
+          "wavelength_center_um": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wavelength Center Um"
+          },
+          "wavelength_range_um": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wavelength Range Um"
+          },
+          "access_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Url"
+          },
+          "filesize_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filesize Bytes"
+          },
+          "data_release": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Release"
+          },
+          "product_type": {
+            "type": "string",
+            "title": "Product Type",
+            "default": "Level 2 Science Image"
+          },
+          "spatial_coverage": {
+            "type": "string",
+            "title": "Spatial Coverage",
+            "default": ""
+          },
+          "retrieval_status": {
+            "type": "string",
+            "title": "Retrieval Status",
+            "default": "available"
+          },
+          "instrument": {
+            "type": "string",
+            "title": "Instrument",
+            "default": "SPHEREx"
+          },
+          "service_source": {
+            "type": "string",
+            "title": "Service Source",
+            "default": "NASA/IPAC IRSA"
+          },
+          "observation_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Group Id"
+          },
+          "is_cached_fallback": {
+            "type": "boolean",
+            "title": "Is Cached Fallback",
+            "default": false
+          },
+          "source_origin": {
+            "type": "string",
+            "title": "Source Origin",
+            "default": "live_archive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obs_id",
+          "filename"
+        ],
+        "title": "ArchiveRecord",
+        "description": "Individual archive discovery record."
+      },
+      "ArchiveSearchResponse": {
+        "properties": {
+          "query_params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Query Params"
+          },
+          "service_status": {
+            "type": "string",
+            "enum": [
+              "LIVE_ARCHIVE",
+              "CACHED_FALLBACK",
+              "SYNTHETIC_DEMO",
+              "EMPTY",
+              "ERROR"
+            ],
+            "title": "Service Status"
+          },
+          "is_offline_fallback": {
+            "type": "boolean",
+            "title": "Is Offline Fallback",
+            "default": false
+          },
+          "total_found": {
+            "type": "integer",
+            "title": "Total Found",
+            "default": 0
+          },
+          "total_epochs": {
+            "type": "integer",
+            "title": "Total Epochs",
+            "default": 0
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/ArchiveRecord"
+            },
+            "type": "array",
+            "title": "Records"
+          },
+          "epochs": {
+            "items": {
+              "$ref": "#/components/schemas/ObservationEpoch"
+            },
+            "type": "array",
+            "title": "Epochs"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "error_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query_params",
+          "service_status"
+        ],
+        "title": "ArchiveSearchResponse",
+        "description": "Response payload for multi-archive spatial/temporal search."
+      },
       "AssociationHypothesis": {
         "properties": {
           "id": {
@@ -7545,6 +8180,93 @@
         "title": "EpochMeasurementRead",
         "description": "Single-epoch measurement (MJD TDB, ICRS deg, mas, uJy)."
       },
+      "EpochProduct": {
+        "properties": {
+          "obs_id": {
+            "type": "string",
+            "title": "Obs Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "detector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detector"
+          },
+          "wavelength_range_um": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wavelength Range Um"
+          },
+          "access_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Url"
+          },
+          "filesize_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filesize Bytes"
+          },
+          "is_loaded": {
+            "type": "boolean",
+            "title": "Is Loaded",
+            "default": false
+          },
+          "is_cached_fallback": {
+            "type": "boolean",
+            "title": "Is Cached Fallback",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "obs_id",
+          "filename"
+        ],
+        "title": "EpochProduct",
+        "description": "Single science data product within an observation epoch."
+      },
       "ExampleTargetSummary": {
         "properties": {
           "id": {
@@ -8529,6 +9251,113 @@
         ],
         "title": "ObjectAssociationsResponse",
         "description": "Per-epoch association hypotheses for one tracked object."
+      },
+      "ObservationEpoch": {
+        "properties": {
+          "epoch_id": {
+            "type": "string",
+            "title": "Epoch Id"
+          },
+          "epoch_index": {
+            "type": "integer",
+            "title": "Epoch Index"
+          },
+          "date_obs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Obs"
+          },
+          "mjd_obs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mjd Obs"
+          },
+          "time_delta_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Delta Days"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "NASA IRSA"
+          },
+          "pointing_ra_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pointing Ra Deg"
+          },
+          "pointing_dec_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pointing Dec Deg"
+          },
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/EpochProduct"
+            },
+            "type": "array",
+            "title": "Products"
+          },
+          "selected_product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Product Id"
+          },
+          "is_loaded": {
+            "type": "boolean",
+            "title": "Is Loaded",
+            "default": false
+          },
+          "is_cached_fallback": {
+            "type": "boolean",
+            "title": "Is Cached Fallback",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "epoch_id",
+          "epoch_index"
+        ],
+        "title": "ObservationEpoch",
+        "description": "Grouped observation epoch representing a distinct temporal visit."
       },
       "PaginatedResponse_DetectionRead_": {
         "properties": {

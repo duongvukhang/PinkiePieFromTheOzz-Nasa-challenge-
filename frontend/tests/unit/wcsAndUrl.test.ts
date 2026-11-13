@@ -53,13 +53,17 @@ describe("viewer WCS & URL state", () => {
     const parsedFlags = parseViewParams("?inspectorTab=flags", false);
     expect(parsedFlags.inspectorTab).toBe("flags");
 
+    const parsedInterval = parseViewParams("?from=2025-01-01&to=2025-12-31", false);
+    expect(parsedInterval.from).toBe("2025-01-01");
+    expect(parsedInterval.to).toBe("2025-12-31");
+
     const qs = toViewQuery({
       target: "WISE 0855",
       ra: 133.79513,
       dec: -7.24515,
       fov: 8,
-      from: "",
-      to: "",
+      from: "2025-01-01",
+      to: "2025-12-31",
       release: "latest",
       bands: "arr6",
       mode: "compare",
@@ -76,6 +80,8 @@ describe("viewer WCS & URL state", () => {
       inspectorTab: "spectrum",
       selectBoxMode: false,
     });
+    expect(qs).toContain("from=2025-01-01");
+    expect(qs).toContain("to=2025-12-31");
     expect(qs).toContain("bands=arr6");
     expect(qs).toContain("op=diff");
     expect(qs).toContain("overlay=gaia%2Ccatwise");

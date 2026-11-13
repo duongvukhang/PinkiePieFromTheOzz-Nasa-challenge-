@@ -108,17 +108,26 @@ def _generate_synthetic_cutouts(
     storage: StorageBackend,
     hpx: int,
     params_hex: str,
+    t0: Time | None = None,
+    t1: Time | None = None,
 ) -> tuple[list[CutoutFrame], dict[str, dict[str, str]]]:
     """Generate 3-epoch synthetic FITS cutouts for visualization when live IRSA has no coverage."""
     from tests.science.synthetic_fits import InjectedSource, generate_synthetic_sequence
 
-    epochs_mjd = [60400.0, 60580.0, 60760.0]
+    if t0 is not None or t1 is not None:
+        s = float(t0.mjd) if t0 is not None else (float(t1.mjd) - 365.0 if t1 is not None else 60400.0)
+        e = float(t1.mjd) if t1 is not None else (s + 365.0)
+        step = max(10.0, (e - s) / 2.0)
+        epochs_mjd = [s, s + step, max(s + 20.0, min(e, s + 2 * step))]
+    else:
+        epochs_mjd = [60400.0, 60580.0, 60760.0]
+
     sources = [
         InjectedSource(
             source_id="T1",
             ra_ref_deg=ra,
             dec_ref_deg=dec,
-            ref_epoch_mjd=60400.0,
+            ref_epoch_mjd=epochs_mjd[0],
             pmra_arcsec_yr=-0.450,
             pmdec_arcsec_yr=0.320,
             base_flux=1500.0,
@@ -128,7 +137,7 @@ def _generate_synthetic_cutouts(
             source_id="REF1",
             ra_ref_deg=ra + 0.008,
             dec_ref_deg=dec + 0.008,
-            ref_epoch_mjd=60400.0,
+            ref_epoch_mjd=epochs_mjd[0],
             base_flux=800.0,
             kind="star",
             gaia_id=1001,
@@ -137,7 +146,7 @@ def _generate_synthetic_cutouts(
             source_id="REF2",
             ra_ref_deg=ra - 0.009,
             dec_ref_deg=dec - 0.005,
-            ref_epoch_mjd=60400.0,
+            ref_epoch_mjd=epochs_mjd[0],
             base_flux=1200.0,
             kind="star",
             gaia_id=1002,
@@ -248,7 +257,7 @@ def execute_build_cutouts(
         if not out_frames:
             try:
                 out_frames, artifact_keys = _generate_synthetic_cutouts(
-                    cutout_id, ra, dec, fov, storage, hpx, params_hex
+                    cutout_id, ra, dec, fov, storage, hpx, params_hex, t0=t0, t1=t1
                 )
                 warnings.append(
                     "Live SPHEREx archive returned no frames; served synthetic field sequence."

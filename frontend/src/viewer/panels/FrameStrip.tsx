@@ -144,18 +144,30 @@ export function FrameStrip({ frames, compact = false }: FrameStripProps) {
       )}
 
       <div className="viewer-epoch-pills" role="group" aria-label="Loaded epochs">
-        {frames.map((f, i) => (
-          <button
-            key={f.frame_id}
-            type="button"
-            className="viewer-epoch-btn"
-            aria-pressed={i === safeIdx}
-            onClick={() => setView({ frame: i, playing: false })}
-          >
-            <span>{f.epoch}</span>
-            <span className="viewer-epoch-meta">{f.utc_mid.slice(0, 7)}</span>
-          </button>
-        ))}
+        {frames.map((f, i) => {
+          const mjd0 = frames[0]?.mjd_tdb_mid ?? f.mjd_tdb_mid;
+          const dt =
+            i === 0
+              ? "t₀"
+              : `${f.mjd_tdb_mid - mjd0 >= 0 ? "+" : ""}${(f.mjd_tdb_mid - mjd0).toFixed(0)}d`;
+
+          return (
+            <button
+              key={f.frame_id}
+              type="button"
+              className="viewer-epoch-btn"
+              aria-pressed={i === safeIdx}
+              title={`Epoch ${f.epoch}: ${f.utc_mid.slice(0, 10)}, MJD ${f.mjd_tdb_mid.toFixed(2)} (${dt})`}
+              onClick={() => setView({ frame: i, playing: false })}
+            >
+              <span>{f.epoch}</span>
+              <span className="viewer-epoch-meta">{f.utc_mid.slice(0, 7)}</span>
+              <span className="viewer-epoch-delta" style={{ opacity: 0.8, fontSize: "0.68rem" }}>
+                {dt}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       <p role="status" className="visually-hidden" aria-live="polite">

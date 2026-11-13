@@ -1,0 +1,494 @@
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  api,
+  type ArchiveSearchParams,
+  type ArchiveSearchResponse,
+  type ArchiveSourceId,
+  type ObservationEpoch,
+} from "../../api/client";
+
+interface ArchiveSearchModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  initialRa?: number;
+  initialDec?: number;
+  initialFrom?: string;
+  initialTo?: string;
+  onApplyInterval: (params: {
+    ra: number;
+    dec: number;
+    from?: string;
+    to?: string;
+    bands?: string;
+    source: ArchiveSourceId;
+  }) => void;
+}
+
+const ARCHIVE_SOURCES: { id: ArchiveSourceId; label: string; desc: string }[] = [
+  {
+    id: "spherex_irsa",
+    label: "NASA / IPAC IRSA — SPHEREx (ObsCore)",
+    desc: "Primary all-sky spectral survey (Bands D1–D6, 0.75–5.0 µm)",
+  },
+  {
+    id: "wise_irsa",
+    label: "NASA / IPAC IRSA — WISE / NEOWISE",
+    desc: "Multi-epoch mid-infrared sky passes (W1 3.4 µm, W2 4.6 µm)",
+  },
+  {
+    id: "twomass_irsa",
+    label: "NASA / IPAC IRSA — 2MASS",
+    desc: "Near-infrared baseline epochs (J 1.25 µm, H 1.65 µm, Ks 2.17 µm)",
+  },
+  {
+    id: "skyview",
+    label: "NASA SkyView Virtual Observatory",
+    desc: "NASA GSFC multi-mission virtual observatory survey cutouts",
+  },
+];
+
+const PRESETS = [
+  { name: "WISE 0855", ra: 133.79513, dec: -7.24515 },
+  { name: "Barnard's Star", ra: 269.45208, dec: 4.69339 },
+  { name: "ε Indi B", ra: 330.84042, dec: -56.78608 },
+  { name: "RW Aurigae", ra: 76.95375, dec: 30.40139 },
+];
+
+export function ArchiveSearchModal({
+  isOpen,
+  onClose,
+  initialRa = 133.79513,
+  initialDec = -7.24515,
+  initialFrom = "2025-01-01",
+  initialTo = "2025-12-31",
+  onApplyInterval,
+}: ArchiveSearchModalProps) {
+  const [source, setSource] = useState<ArchiveSourceId>("spherex_irsa");
+  const [ra, setRa] = useState(initialRa.toFixed(5));
+  const [dec, setDec] = useState(initialDec.toFixed(5));
+  const [radius, setRadius] = useState("5.0");
+  const [radiusUnit, setRadiusUnit] = useState<"arcsec" | "arcmin" | "deg">("arcmin");
+  const [startDate, setStartDate] = useState(initialFrom);
+  const [endDate, setEndDate] = useState(initialTo);
+  const [band, setBand] = useState("ALL");
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [searchResult, setSearchResult] = useState<ArchiveSearchResponse | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setRa(initialRa.toFixed(5));
+      setDec(initialDec.toFixed(5));
+      if (initialFrom) setStartDate(initialFrom);
+      if (initialTo) setEndDate(initialTo);
+    }
+  }, [isOpen, initialRa, initialDec, initialFrom, initialTo]);
+
+  // Handle escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isOpen) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const handleSearch = async (e?: FormEvent) => {
+    if (e) e.preventDefault();
+    setError(null);
+    const raNum = Number.parseFloat(ra);
+    const decNum = Number.parseFloat(dec);
+    const radNum = Number.parseFloat(radius);
+
+    if (!Number.isFinite(raNum) || raNum < 0 || raNum > 360) {
+      setError("RA must be between 0.0° and 360.0°");
+      return;
+    }
+    if (!Number.isFinite(decNum) || decNum < -90 || decNum > 90) {
+      setError("Dec must be between -90.0° and +90.0°");
+      return;
+    }
+    if (!Number.isFinite(radNum) || radNum <= 0) {
+      setError("Radius must be greater than 0");
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      setError("Start date cannot be after end date");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const q: ArchiveSearchParams = {
+        ra: raNum,
+        dec: decNum,
+        radius: radNum,
+        radius_unit: radiusUnit,
+        source,
+        from: startDate || undefined,
+        to: endDate || undefined,
+        band: band === "ALL" ? undefined : band,
+        max_records: 50,
+      };
+      const res = await api.searchArchive(q);
+      setSearchResult(res);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Archive query failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLoadEpoch = (ep: ObservationEpoch) => {
+    const raNum = Number.parseFloat(ra);
+    const decNum = Number.parseFloat(dec);
+    const dateStr = ep.date_obs ? ep.date_obs.slice(0, 10) : startDate;
+    onApplyInterval({
+      ra: raNum,
+      dec: decNum,
+      from: dateStr,
+      to: dateStr,
+      bands: band === "ALL" ? "all" : band.toLowerCase(),
+      source,
+    });
+    onClose();
+  };
+
+  const handleLoadAllInterval = () => {
+    const raNum = Number.parseFloat(ra);
+    const decNum = Number.parseFloat(dec);
+    onApplyInterval({
+      ra: raNum,
+      dec: decNum,
+      from: startDate || undefined,
+      to: endDate || undefined,
+      bands: band === "ALL" ? "all" : band.toLowerCase(),
+      source,
+    });
+    onClose();
+  };
+
+  return (
+    <div
+      className="archive-modal-backdrop"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="archive-modal-title"
+    >
+      <div className="archive-modal-window">
+        {/* Header */}
+        <div className="archive-modal-header">
+          <div>
+            <h2 id="archive-modal-title" className="archive-modal-heading">
+              Search NASA Astronomical Archives
+            </h2>
+            <p className="archive-modal-subheading">
+              Query multi-epoch infrared surveys, filter temporal intervals, and inspect verified
+              observation epochs.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="archive-modal-close"
+            onClick={onClose}
+            aria-label="Close archive dialog"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="archive-modal-body">
+          {/* Data Source Selector */}
+          <div className="archive-form-group">
+            <label htmlFor="archive-source-select" className="viewer-label">
+              NASA Data Source
+            </label>
+            <select
+              id="archive-source-select"
+              className="viewer-select"
+              style={{ width: "100%" }}
+              value={source}
+              onChange={(e) => {
+                setSource(e.target.value as ArchiveSourceId);
+                setBand("ALL");
+              }}
+            >
+              {ARCHIVE_SOURCES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <span className="viewer-muted" style={{ fontSize: "0.75rem", marginTop: "2px" }}>
+              {ARCHIVE_SOURCES.find((s) => s.id === source)?.desc}
+            </span>
+          </div>
+
+          {/* Quick Presets */}
+          <div className="archive-presets-row">
+            <span className="viewer-muted" style={{ fontSize: "0.75rem" }}>
+              Presets:
+            </span>
+            {PRESETS.map((p) => (
+              <button
+                key={p.name}
+                type="button"
+                className="viewer-chip"
+                onClick={() => {
+                  setRa(p.ra.toFixed(5));
+                  setDec(p.dec.toFixed(5));
+                }}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+
+          {/* Coordinates & Radius Row */}
+          <div className="archive-form-grid">
+            <div className="archive-form-group">
+              <label htmlFor="archive-ra" className="viewer-label">
+                Right Ascension (deg)
+              </label>
+              <input
+                id="archive-ra"
+                type="number"
+                step="0.00001"
+                className="viewer-input"
+                value={ra}
+                onChange={(e) => setRa(e.target.value)}
+                placeholder="e.g. 133.79513"
+              />
+            </div>
+            <div className="archive-form-group">
+              <label htmlFor="archive-dec" className="viewer-label">
+                Declination (deg)
+              </label>
+              <input
+                id="archive-dec"
+                type="number"
+                step="0.00001"
+                className="viewer-input"
+                value={dec}
+                onChange={(e) => setDec(e.target.value)}
+                placeholder="e.g. -7.24515"
+              />
+            </div>
+            <div className="archive-form-group">
+              <label htmlFor="archive-radius" className="viewer-label">
+                Cone Radius
+              </label>
+              <div style={{ display: "flex", gap: "6px" }}>
+                <input
+                  id="archive-radius"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  className="viewer-input"
+                  style={{ width: "65%" }}
+                  value={radius}
+                  onChange={(e) => setRadius(e.target.value)}
+                />
+                <select
+                  aria-label="Radius unit"
+                  className="viewer-select"
+                  style={{ width: "35%" }}
+                  value={radiusUnit}
+                  onChange={(e) => setRadiusUnit(e.target.value as "arcsec" | "arcmin" | "deg")}
+                >
+                  <option value="arcsec">arcsec</option>
+                  <option value="arcmin">arcmin</option>
+                  <option value="deg">deg</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Time Interval & Band Row */}
+          <div className="archive-form-grid">
+            <div className="archive-form-group">
+              <label htmlFor="archive-start-date" className="viewer-label">
+                Start Date (from)
+              </label>
+              <input
+                id="archive-start-date"
+                type="date"
+                className="viewer-input"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="archive-form-group">
+              <label htmlFor="archive-end-date" className="viewer-label">
+                End Date (to)
+              </label>
+              <input
+                id="archive-end-date"
+                type="date"
+                className="viewer-input"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+            <div className="archive-form-group">
+              <label htmlFor="archive-band" className="viewer-label">
+                Band / Detector
+              </label>
+              <select
+                id="archive-band"
+                className="viewer-select"
+                value={band}
+                onChange={(e) => setBand(e.target.value)}
+              >
+                <option value="ALL">ALL Bands</option>
+                {source === "spherex_irsa" && (
+                  <>
+                    <option value="D1">Band 1 (LVF1 0.75–1.11 µm)</option>
+                    <option value="D2">Band 2 (LVF2 1.11–1.64 µm)</option>
+                    <option value="D3">Band 3 (LVF3 1.64–2.42 µm)</option>
+                    <option value="D4">Band 4 (LVF4 2.42–3.82 µm)</option>
+                    <option value="D5">Band 5 (LVF5 3.82–4.42 µm)</option>
+                    <option value="D6">Band 6 (LVF6 4.42–5.00 µm)</option>
+                  </>
+                )}
+                {source === "wise_irsa" && (
+                  <>
+                    <option value="W1">WISE W1 (3.4 µm)</option>
+                    <option value="W2">WISE W2 (4.6 µm)</option>
+                    <option value="W3">WISE W3 (12.0 µm)</option>
+                    <option value="W4">WISE W4 (22.0 µm)</option>
+                  </>
+                )}
+                {source === "twomass_irsa" && (
+                  <>
+                    <option value="J">2MASS J (1.25 µm)</option>
+                    <option value="H">2MASS H (1.65 µm)</option>
+                    <option value="Ks">2MASS Ks (2.17 µm)</option>
+                  </>
+                )}
+              </select>
+            </div>
+          </div>
+
+          {/* Action Row */}
+          <div style={{ display: "flex", gap: "10px", marginTop: "12px", alignItems: "center" }}>
+            <button
+              type="button"
+              className="viewer-btn viewer-btn-primary"
+              style={{ padding: "8px 18px", fontWeight: 600 }}
+              disabled={loading}
+              onClick={() => handleSearch()}
+            >
+              {loading ? "Searching NASA Archive…" : "Search Archive"}
+            </button>
+            <button
+              type="button"
+              className="viewer-btn"
+              onClick={() => {
+                setRa(initialRa.toFixed(5));
+                setDec(initialDec.toFixed(5));
+                setStartDate("2025-01-01");
+                setEndDate("2025-12-31");
+                setBand("ALL");
+                setSearchResult(null);
+                setError(null);
+              }}
+            >
+              Reset
+            </button>
+            {error && <span className="archive-error-text">{error}</span>}
+          </div>
+
+          {/* Results Area */}
+          {searchResult && (
+            <div className="archive-results-container">
+              <div className="archive-results-header">
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span className="archive-status-tag" data-status={searchResult.service_status}>
+                    {searchResult.service_status === "LIVE_ARCHIVE"
+                      ? "● NASA Live Archive"
+                      : searchResult.service_status === "CACHED_FALLBACK"
+                        ? "▲ Verified Cache"
+                        : "◆ Synthetic Survey Demo"}
+                  </span>
+                  <span style={{ fontSize: "0.8rem", color: "var(--sky-muted)" }}>
+                    Found {searchResult.total_epochs} epochs ({searchResult.total_found} products)
+                  </span>
+                </div>
+                {searchResult.total_epochs > 0 && (
+                  <button
+                    type="button"
+                    className="viewer-btn viewer-btn-primary"
+                    style={{ fontSize: "0.75rem", padding: "4px 10px" }}
+                    onClick={handleLoadAllInterval}
+                  >
+                    Load All in Interval →
+                  </button>
+                )}
+              </div>
+
+              {searchResult.notes.length > 0 && (
+                <div className="archive-notes-box">
+                  {searchResult.notes.map((n, i) => (
+                    <div key={i}>{n}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Epoch List */}
+              <div className="archive-epoch-list">
+                {searchResult.epochs.map((ep) => {
+                  const deltaText =
+                    ep.time_delta_days === 0
+                      ? "Reference Epoch (t₀)"
+                      : ep.time_delta_days !== null && ep.time_delta_days !== undefined
+                        ? `Δt: ${ep.time_delta_days > 0 ? "+" : ""}${ep.time_delta_days.toFixed(1)} days`
+                        : "Undated";
+
+                  return (
+                    <div key={ep.epoch_id} className="archive-epoch-card">
+                      <div className="archive-epoch-card-left">
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span className="archive-epoch-badge">Epoch {ep.epoch_index + 1}</span>
+                          <span style={{ fontWeight: 600 }}>
+                            {ep.date_obs ? ep.date_obs.slice(0, 10) : "Undated"}
+                          </span>
+                          <span className="archive-delta-badge">{deltaText}</span>
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "var(--sky-muted)",
+                            marginTop: "4px",
+                          }}
+                        >
+                          MJD: {ep.mjd_obs ? ep.mjd_obs.toFixed(3) : "—"} · Products:{" "}
+                          {ep.products.map((p) => p.band || p.detector || "Science").join(", ")}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="viewer-btn"
+                        style={{ fontSize: "0.75rem", minBlockSize: "28px" }}
+                        onClick={() => handleLoadEpoch(ep)}
+                      >
+                        Load Epoch
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

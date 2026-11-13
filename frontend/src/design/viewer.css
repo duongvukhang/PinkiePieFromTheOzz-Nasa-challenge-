@@ -834,3 +834,209 @@
   display: grid;
   place-items: center;
 }
+
+/* NASA Archive Search Modal */
+.archive-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 15, 0.78);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: var(--space-4);
+}
+
+.archive-modal-window {
+  background: var(--sky-1);
+  border: 1px solid var(--sky-rule);
+  border-radius: 12px;
+  inline-size: 100%;
+  max-inline-size: 42rem;
+  max-block-size: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  color: var(--sky-text);
+  overflow: hidden;
+}
+
+.archive-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: var(--space-4) var(--space-5);
+  border-block-end: 1px solid var(--sky-rule);
+  background: var(--sky-2);
+}
+
+.archive-modal-heading {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+}
+
+.archive-modal-subheading {
+  font-size: var(--text-xs);
+  color: var(--sky-muted);
+  margin-top: 4px;
+}
+
+.archive-modal-close {
+  background: transparent;
+  border: 0;
+  color: var(--sky-muted);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: var(--radius-btn);
+}
+
+.archive-modal-close:hover {
+  color: #fff;
+  background: var(--sky-3);
+}
+
+.archive-modal-body {
+  padding: var(--space-4) var(--space-5);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.archive-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+}
+
+.archive-presets-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.archive-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-3);
+}
+
+.archive-error-text {
+  color: #ff6b6b;
+  font-size: var(--text-xs);
+  margin-inline-start: var(--space-2);
+}
+
+.archive-results-container {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--sky-rule);
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.archive-results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.archive-status-tag {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  border: 1px solid var(--sky-rule);
+}
+
+.archive-status-tag[data-status="LIVE_ARCHIVE"] {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.archive-status-tag[data-status="CACHED_FALLBACK"] {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border-color: rgba(234, 179, 8, 0.4);
+}
+
+.archive-status-tag[data-status="SYNTHETIC_DEMO"] {
+  background: rgba(147, 51, 234, 0.15);
+  color: #c084fc;
+  border-color: rgba(147, 51, 234, 0.4);
+}
+
+.archive-notes-box {
+  background: var(--sky-2);
+  border-radius: var(--radius-btn);
+  padding: 8px 12px;
+  font-size: var(--text-xs);
+  color: var(--sky-muted);
+}
+
+.archive-epoch-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-block-size: 260px;
+  overflow-y: auto;
+}
+
+.archive-epoch-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--sky-2);
+  border: 1px solid var(--sky-rule);
+  border-radius: var(--radius-btn);
+}
+
+.archive-epoch-card-left {
+  display: flex;
+  flex-direction: column;
+}
+
+.archive-epoch-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--sky-3);
+  color: var(--sky-text);
+}
+
+.archive-delta-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+/* Field Status Display in Toolbar */
+.viewer-field-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--sky-2);
+  border: 1px solid var(--sky-rule);
+  border-radius: var(--radius-btn);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--sky-text);
+  white-space: nowrap;
+}

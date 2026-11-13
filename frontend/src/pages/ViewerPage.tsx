@@ -28,15 +28,7 @@ export function ViewerPage() {
         examples={v.examples}
         releases={v.releases}
         authenticated={Boolean(user)}
-        resolving={v.resolving}
         errorMsg={v.errorMsg ?? v.resolveError}
-        onResolveName={async (name) => {
-          try {
-            await v.resolveTargetDirect(name);
-          } catch {
-            setView({ target: name, ra: undefined, dec: undefined });
-          }
-        }}
       />
 
       {mode === "planetx" ? (

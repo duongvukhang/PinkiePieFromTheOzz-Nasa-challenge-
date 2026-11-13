@@ -22,6 +22,11 @@ from app.api.deps import (
     require_succeeded_job,
 )
 from app.providers import Provider
+from app.schemas.archive import (
+    ArchiveLoadRequest,
+    ArchiveSearchParams,
+    ArchiveSearchResponse,
+)
 from app.schemas.common import DecDeg, JobStatus, ProblemDetail, RaDeg
 from app.schemas.fields import (
     CutoutAcceptedResponse,
@@ -41,6 +46,7 @@ from app.services.fields import (
     list_releases_service,
     resolve_target_name,
 )
+from app.services.irsa_search import irsa_search_service
 from app.services.jobs import JobStore, compute_params_hash
 from app.services.storage import StorageBackend
 from app.workers.celery_app import dispatch_task, is_eager_mode
@@ -74,6 +80,42 @@ async def resolve_target(
             error_type="https://spherex.example/problems/target-not-found",
         )
     return resolved
+
+
+@router.get("/archive/search", tags=["archive"])
+async def search_nasa_archive(
+    ra: RaDeg,
+    dec: DecDeg,
+    radius: Annotated[float, Query(gt=0.0, le=300.0)] = 5.0,
+    radius_unit: Annotated[Literal["arcsec", "arcmin", "deg"], Query()] = "arcmin",
+    source: Annotated[Literal["spherex_irsa", "wise_irsa", "twomass_irsa", "skyview"], Query()] = "spherex_irsa",
+    start_date: Annotated[str | None, Query(alias="from")] = None,
+    end_date: Annotated[str | None, Query(alias="to")] = None,
+    band: Annotated[str | None, Query()] = None,
+    max_records: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ArchiveSearchResponse:
+    """Query NASA-affiliated archives (SPHEREx, WISE, 2MASS, SkyView) with spatial and temporal intervals."""
+    params = ArchiveSearchParams(
+        ra_deg=ra,
+        dec_deg=dec,
+        radius=radius,
+        radius_unit=radius_unit,
+        source=source,
+        start_date=start_date,
+        end_date=end_date,
+        band=band,
+        max_records=max_records,
+    )
+    return irsa_search_service.search_archive(params)
+
+
+@router.post("/archive/load", tags=["archive"])
+async def load_archive_product(
+    payload: ArchiveLoadRequest,
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+) -> dict[str, Any]:
+    """Stream download and register an authentic NASA archive FITS into the active workspace."""
+    return irsa_search_service.load_archive_product(payload, storage)
 
 
 @router.get("/fields/frames", tags=["fields"])

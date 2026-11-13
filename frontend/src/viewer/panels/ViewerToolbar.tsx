@@ -1,78 +1,52 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { DataReleaseRead, ExampleTargetSummary } from "../../api/client";
 import { formatSexagesimal, toGalacticAndEcliptic } from "../aladin/wcs";
-import { parseCoordsInput, useViewStore, type ViewerMode } from "../state/viewStore";
+import { useViewStore, type ViewerMode } from "../state/viewStore";
+import { ArchiveSearchModal } from "./ArchiveSearchModal";
 
 interface ViewerToolbarProps {
   examples: ExampleTargetSummary[];
   releases: DataReleaseRead[];
   authenticated: boolean;
-  onResolveName: (name: string) => Promise<void>;
-  resolving: boolean;
   errorMsg?: string;
 }
 
-export function ViewerToolbar({
-  examples,
-  releases,
-  authenticated,
-  onResolveName,
-  resolving,
-  errorMsg,
-}: ViewerToolbarProps) {
-  const { target, ra, dec, fov, release, mode, setView } = useViewStore();
-  const [input, setInput] = useState(
-    target ||
-      (ra !== undefined && dec !== undefined ? `${ra.toFixed(5)}, ${dec.toFixed(5)}` : "WISE 0855"),
-  );
-
-  useEffect(() => {
-    if (target) {
-      setInput(target);
-    } else if (ra !== undefined && dec !== undefined) {
-      setInput(`${ra.toFixed(5)}, ${dec.toFixed(5)}`);
-    }
-  }, [target, ra, dec]);
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed) return;
-    const parsed = parseCoordsInput(trimmed);
-    if (parsed) {
-      setView({ ra: parsed.ra, dec: parsed.dec, target: "", frame: 0 });
-      return;
-    }
-    await onResolveName(trimmed);
-  };
+export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: ViewerToolbarProps) {
+  const navigate = useNavigate();
+  const { target, ra, dec, fov, from, to, release, mode, setView } = useViewStore();
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
 
   const skyMeta = ra !== undefined && dec !== undefined ? toGalacticAndEcliptic(ra, dec) : null;
   const maxFov = authenticated ? 60 : 15;
 
   return (
     <header className="viewer-topbar">
-      <form
-        className="viewer-search-form"
-        onSubmit={handleSubmit}
-        role="search"
-        aria-label="Target or coordinate search"
-      >
-        <label htmlFor="viewer-coord-input" className="visually-hidden">
-          Target name or ICRS coordinates
-        </label>
-        <input
-          id="viewer-coord-input"
-          className="viewer-input"
-          type="search"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Target or RA, Dec (e.g. WISE 0855)"
-          spellCheck={false}
-        />
-        <button type="submit" className="viewer-btn viewer-btn-primary" disabled={resolving}>
-          {resolving ? "Resolving…" : "Go"}
+      <div className="viewer-control-group">
+        <button
+          type="button"
+          className="viewer-btn viewer-btn-primary"
+          onClick={() => setIsArchiveModalOpen(true)}
+          title="Search NASA astronomical archives (SPHEREx, WISE, 2MASS, SkyView)"
+        >
+          🔍 Search NASA Archives
         </button>
-      </form>
+
+        <div className="viewer-field-badge" title="Current sky field coordinates and target">
+          <span style={{ color: "var(--sky-muted)" }}>Field:</span>
+          <strong>
+            {target ||
+              (ra !== undefined && dec !== undefined
+                ? `${ra.toFixed(4)}°, ${dec.toFixed(4)}°`
+                : "WISE 0855")}
+          </strong>
+          {from && to && (
+            <span style={{ color: "var(--sky-muted)", fontSize: "0.7rem" }}>
+              ({from} → {to})
+            </span>
+          )}
+        </div>
+      </div>
 
       <div className="viewer-control-group">
         <label htmlFor="viewer-fov" className="viewer-label">
@@ -139,7 +113,6 @@ export function ViewerToolbar({
             className="viewer-chip"
             aria-pressed={target.toLowerCase() === ex.name.toLowerCase()}
             onClick={() => {
-              setInput(ex.name);
               setView({
                 target: ex.name,
                 ra: ex.ra_deg,
@@ -147,6 +120,7 @@ export function ViewerToolbar({
                 fov: Math.min(maxFov, ex.fov_arcmin),
                 frame: 0,
               });
+              navigate(`/v?target=${encodeURIComponent(ex.name)}`);
             }}
           >
             {ex.name}
@@ -159,6 +133,39 @@ export function ViewerToolbar({
         )}
         {errorMsg && <span className="viewer-error-text">{errorMsg}</span>}
       </div>
+
+      <ArchiveSearchModal
+        isOpen={isArchiveModalOpen}
+        onClose={() => setIsArchiveModalOpen(false)}
+        initialRa={ra ?? 133.79513}
+        initialDec={dec ?? -7.24515}
+        initialFrom={from || "2025-01-01"}
+        initialTo={to || "2025-12-31"}
+        onApplyInterval={({
+          ra: newRa,
+          dec: newDec,
+          from: newFrom,
+          to: newTo,
+          bands: newBands,
+        }) => {
+          setView({
+            ra: newRa,
+            dec: newDec,
+            from: newFrom || "",
+            to: newTo || "",
+            bands: newBands || "all",
+            target: "",
+            frame: 0,
+          });
+          const qs = new URLSearchParams();
+          qs.set("ra", newRa.toFixed(5));
+          qs.set("dec", newDec.toFixed(5));
+          if (newFrom) qs.set("from", newFrom);
+          if (newTo) qs.set("to", newTo);
+          if (newBands && newBands !== "all") qs.set("bands", newBands);
+          navigate(`/v?${qs.toString()}`);
+        }}
+      />
     </header>
   );
 }
