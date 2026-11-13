@@ -6,7 +6,7 @@ import io
 import json
 import os
 from collections.abc import Callable, Sequence
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -125,12 +125,21 @@ def _lookup_reference_target(
     )
 
 
-def parse_utc_query(value: str | None) -> Time | None:
+def parse_utc_query(value: str | datetime | None) -> Time | None:
     """Parse optional ISO-UTC or MJD query timestamp into `Time(..., scale='tdb')`."""
-    if value is None or not value.strip():
+    if value is None:
         return None
+    if isinstance(value, datetime):
+        return Time(value).tdb
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("+00:00") or text.endswith("-00:00"):
+        text = text[:-6]
+    elif text.endswith("Z") or text.endswith("z"):
+        text = text[:-1]
     try:
-        return parse_user_epoch(value.strip())
+        return parse_user_epoch(text)
     except Exception as exc:
         raise ProviderQueryError(f"Invalid timestamp {value!r}: {exc}") from exc
 

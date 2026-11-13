@@ -112,13 +112,15 @@ def _generate_synthetic_cutouts(
     t1: Time | None = None,
 ) -> tuple[list[CutoutFrame], dict[str, dict[str, str]]]:
     """Generate 3-epoch synthetic FITS cutouts for visualization when live IRSA has no coverage."""
-    from tests.science.synthetic_fits import InjectedSource, generate_synthetic_sequence
+    from app.services.synthetic_fits import InjectedSource, generate_synthetic_sequence
 
     if t0 is not None or t1 is not None:
         s = float(t0.mjd) if t0 is not None else (float(t1.mjd) - 365.0 if t1 is not None else 60400.0)
         e = float(t1.mjd) if t1 is not None else (s + 365.0)
+        if e <= s + 20.0:
+            e = s + 30.0
         step = max(10.0, (e - s) / 2.0)
-        epochs_mjd = [s, s + step, max(s + 20.0, min(e, s + 2 * step))]
+        epochs_mjd = [s, s + step, e]
     else:
         epochs_mjd = [60400.0, 60580.0, 60760.0]
 

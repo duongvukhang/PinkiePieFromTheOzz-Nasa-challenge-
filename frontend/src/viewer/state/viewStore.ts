@@ -16,6 +16,7 @@ export interface ViewState {
   to: string;
   release: string;
   bands: string;
+  source?: string;
   mode: ViewerMode;
   op: ImageOp;
   a?: string;
@@ -106,6 +107,7 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     to: q.get("to") ?? "",
     release: q.get("release") ?? "latest",
     bands: q.get("bands") ?? "all",
+    source: q.get("source") ?? undefined,
     mode: mode && MODES.has(mode) ? mode : "blink",
     op: op && OPS.has(op) ? op : "none",
     a: q.get("a") ?? undefined,
@@ -135,6 +137,7 @@ export function toViewQuery(s: ViewState): string {
   if (s.to) q.set("to", s.to);
   if (s.release && s.release !== "latest") q.set("release", s.release);
   if (s.bands && s.bands !== "all") q.set("bands", s.bands);
+  if (s.source && s.source !== "spherex_irsa") q.set("source", s.source);
   if (s.mode !== "blink") q.set("mode", s.mode);
   if (s.op !== "none") q.set("op", s.op);
   if (s.a) q.set("a", s.a);
@@ -157,6 +160,7 @@ const DEFAULT_STATE: ViewState = {
   to: "",
   release: "latest",
   bands: "all",
+  source: "spherex_irsa",
   mode: "blink",
   op: "none",
   frame: 0,

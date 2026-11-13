@@ -58,7 +58,12 @@ def parse_user_epoch(value: Time | str | float | int) -> Time:
         return value.tdb
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return Time(float(value), format="mjd", scale="tdb").tdb
-    return Time(str(value).strip(), scale="utc").tdb
+    text = str(value).strip()
+    if text.endswith("+00:00") or text.endswith("-00:00"):
+        text = text[:-6]
+    elif text.endswith("Z") or text.endswith("z"):
+        text = text[:-1]
+    return Time(text, scale="utc").tdb
 
 
 def parse_fits_epoch(

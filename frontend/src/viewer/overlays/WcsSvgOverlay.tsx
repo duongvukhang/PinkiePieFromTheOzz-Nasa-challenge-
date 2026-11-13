@@ -10,6 +10,20 @@ import { pixelToSky, skyToPixel } from "../aladin/wcs";
 
 const OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"];
 
+/** Computes shortest-arc RA bounds across the 0°/360° meridian. */
+export function computeShortestArcRaBounds(
+  ra1: number,
+  ra2: number,
+): { raMin: number; raMax: number } {
+  const n1 = ((ra1 % 360) + 360) % 360;
+  const n2 = ((ra2 % 360) + 360) % 360;
+  const diff = n2 - n1;
+  if (Math.abs(diff) <= 180) {
+    return { raMin: Math.min(n1, n2), raMax: Math.max(n1, n2) };
+  }
+  return { raMin: Math.max(n1, n2), raMax: Math.min(n1, n2) };
+}
+
 interface WcsSvgOverlayProps {
   wcs: WcsParams;
   gaiaSources: CatalogOverlaySource[];
@@ -21,6 +35,8 @@ interface WcsSvgOverlayProps {
   objectDetail?: TrackedObjectDetailResponse;
   onSelectCoord: (ra: number, dec: number) => void;
   onSelectBox?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
+  onSelectDetection?: (detection: DetectionRead) => void;
+  onSelectTrack?: (trackLabel: string) => void;
 }
 
 export function WcsSvgOverlay({
@@ -34,10 +50,11 @@ export function WcsSvgOverlay({
   objectDetail,
   onSelectCoord,
   onSelectBox,
+  onSelectDetection,
+  onSelectTrack,
 }: WcsSvgOverlayProps) {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurr, setDragCurr] = useState<{ x: number; y: number } | null>(null);
-  const [cursorInfo, setCursorInfo] = useState<{ ra: number; dec: number } | null>(null);
 
   const pxScale = wcs.naxis1 / 128;
   const toSvg = (e: PointerEvent<SVGSVGElement>) => {
@@ -64,9 +81,10 @@ export function WcsSvgOverlay({
         setDragCurr({ x: Math.min(wcs.naxis1, x + 10), y: Math.min(wcs.naxis2, y + 10) });
       } else {
         const [p1, p2] = [pixelToSky(dragStart.x, dragStart.y, wcs), pixelToSky(x, y, wcs)];
+        const { raMin, raMax } = computeShortestArcRaBounds(p1.ra, p2.ra);
         onSelectBox?.({
-          raMin: Math.min(p1.ra, p2.ra),
-          raMax: Math.max(p1.ra, p2.ra),
+          raMin,
+          raMax,
           decMin: Math.min(p1.dec, p2.dec),
           decMax: Math.max(p1.dec, p2.dec),
         });
@@ -78,7 +96,6 @@ export function WcsSvgOverlay({
     e.preventDefault();
     if (!dragStart && e.shiftKey) setDragStart({ x, y });
     setDragCurr({ x, y });
-    setCursorInfo(pixelToSky(x, y, wcs));
   };
 
   // Trajectory points & motion vectors for active object
@@ -125,7 +142,10 @@ export function WcsSvgOverlay({
             ? "Sky selection box tool (use arrows + Shift to select, Enter to confirm)"
             : undefined
         }
-        style={{ pointerEvents: "auto", cursor: selectBoxMode ? "crosshair" : "default" }}
+        style={{
+          pointerEvents: selectBoxMode ? "auto" : "none",
+          cursor: selectBoxMode ? "crosshair" : "default",
+        }}
         onKeyDown={onKeyDown}
         onPointerDown={(e) => {
           const pt = toSvg(e);
@@ -135,23 +155,29 @@ export function WcsSvgOverlay({
           }
         }}
         onPointerMove={(e) => {
-          const pt = toSvg(e);
-          setCursorInfo(pixelToSky(pt.x, pt.y, wcs));
-          if (dragStart) setDragCurr(pt);
+          if (dragStart) {
+            const pt = toSvg(e);
+            setDragCurr(pt);
+          }
         }}
         onPointerUp={(e) => {
           if (!dragStart) return;
           const pt = toSvg(e);
-          const p1 = pixelToSky(dragStart.x, dragStart.y, wcs);
-          const p2 = pixelToSky(pt.x, pt.y, wcs);
-          const raMin = Math.min(p1.ra, p2.ra);
-          const raMax = Math.max(p1.ra, p2.ra);
-          const decMin = Math.min(p1.dec, p2.dec);
-          const decMax = Math.max(p1.dec, p2.dec);
-          if (onSelectBox) {
-            onSelectBox({ raMin, raMax, decMin, decMax });
-          } else {
-            onSelectCoord(0.5 * (raMin + raMax), 0.5 * (decMin + decMax));
+          const dx = Math.abs(pt.x - dragStart.x);
+          const dy = Math.abs(pt.y - dragStart.y);
+          if (dx >= 2 || dy >= 2) {
+            const p1 = pixelToSky(dragStart.x, dragStart.y, wcs);
+            const p2 = pixelToSky(pt.x, pt.y, wcs);
+            const { raMin, raMax } = computeShortestArcRaBounds(p1.ra, p2.ra);
+            const decMin = Math.min(p1.dec, p2.dec);
+            const decMax = Math.max(p1.dec, p2.dec);
+            if (onSelectBox) {
+              onSelectBox({ raMin, raMax, decMin, decMax });
+            } else {
+              const midRa =
+                raMin <= raMax ? 0.5 * (raMin + raMax) : (0.5 * (raMin + raMax + 360.0)) % 360.0;
+              onSelectCoord(midRa, 0.5 * (decMin + decMax));
+            }
           }
           setDragStart(null);
           setDragCurr(null);
@@ -192,7 +218,24 @@ export function WcsSvgOverlay({
           const isSug = suggestions.some((s) => s.detection_id === d.id);
           if (!isSug && detections.length > 40) return null;
           return (
-            <g key={`det-${d.id}`} transform={`translate(${p.x},${p.y})`}>
+            <g
+              key={`det-${d.id}`}
+              transform={`translate(${p.x},${p.y})`}
+              style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Detection ${d.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectDetection?.(d);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  onSelectDetection?.(d);
+                }
+              }}
+            >
               <rect
                 x={-3.5 * pxScale}
                 y={-3.5 * pxScale}
@@ -270,7 +313,24 @@ export function WcsSvgOverlay({
           const p = skyToPixel(ra, dec, wcs);
           const col = OKABE_ITO[idx % OKABE_ITO.length] || "#faf9f5";
           return (
-            <g key={t} transform={`translate(${p.x},${p.y})`}>
+            <g
+              key={t}
+              transform={`translate(${p.x},${p.y})`}
+              style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Track ${label}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (label) onSelectTrack?.(label);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  if (label) onSelectTrack?.(label);
+                }
+              }}
+            >
               <circle r={5 * pxScale} fill="none" stroke={col} strokeWidth={1.2 * pxScale} />
               <rect
                 x={5.5 * pxScale}
@@ -308,13 +368,6 @@ export function WcsSvgOverlay({
           />
         )}
       </svg>
-
-      {cursorInfo && (
-        <div className="viewer-coord-hud">
-          ICRS {cursorInfo.ra.toFixed(5)}°, {cursorInfo.dec.toFixed(5)}°
-          {selectBoxMode && <span> · Box Drag active</span>}
-        </div>
-      )}
 
       {/* Accessible mirror table for screen readers (FRONTEND.md §5) */}
       <table className="visually-hidden" aria-label="Visible sky sources in field">

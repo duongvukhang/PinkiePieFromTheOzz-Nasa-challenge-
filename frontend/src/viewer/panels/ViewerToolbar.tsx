@@ -141,12 +141,14 @@ export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: V
         initialDec={dec ?? -7.24515}
         initialFrom={from || "2025-01-01"}
         initialTo={to || "2025-12-31"}
+        examples={examples}
         onApplyInterval={({
           ra: newRa,
           dec: newDec,
           from: newFrom,
           to: newTo,
           bands: newBands,
+          source: newSource,
         }) => {
           setView({
             ra: newRa,
@@ -154,6 +156,7 @@ export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: V
             from: newFrom || "",
             to: newTo || "",
             bands: newBands || "all",
+            source: newSource || "spherex_irsa",
             target: "",
             frame: 0,
           });
@@ -163,6 +166,7 @@ export function ViewerToolbar({ examples, releases, authenticated, errorMsg }: V
           if (newFrom) qs.set("from", newFrom);
           if (newTo) qs.set("to", newTo);
           if (newBands && newBands !== "all") qs.set("bands", newBands);
+          if (newSource && newSource !== "spherex_irsa") qs.set("source", newSource);
           navigate(`/v?${qs.toString()}`);
         }}
       />

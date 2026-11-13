@@ -7,6 +7,19 @@ interface FrameStripProps {
   compact?: boolean;
 }
 
+/** Formats time offset from baseline epoch t0 into human-readable hours or days. */
+export function formatTimeDelta(mjd: number, mjd0: number): string {
+  const diffDays = mjd - mjd0;
+  if (Math.abs(diffDays) < 1e-4) return "t₀";
+  const absDays = Math.abs(diffDays);
+  const sign = diffDays >= 0 ? "+" : "−";
+  if (absDays < 1.0) {
+    const hours = absDays * 24.0;
+    return hours >= 0.1 ? `${sign}${hours.toFixed(1)}h` : `${sign}${(hours * 60).toFixed(0)}m`;
+  }
+  return `${sign}${absDays.toFixed(1)}d`;
+}
+
 export function FrameStrip({ frames, compact = false }: FrameStripProps) {
   const { frame, fps, playing, op, swipe, setView } = useViewStore();
   const barRef = useRef<HTMLDivElement>(null);
@@ -61,12 +74,27 @@ export function FrameStrip({ frames, compact = false }: FrameStripProps) {
     el.style.setProperty("--control-value", String(fps));
   }, [fps]);
 
+  const mjd0 = frames[0]?.mjd_tdb_mid ?? active?.mjd_tdb_mid ?? 0;
+  const activeDt = active ? formatTimeDelta(active.mjd_tdb_mid, mjd0) : "t₀";
+
   const statusText = active
-    ? `Epoch ${safeIdx + 1} of ${count}: ${active.epoch}, ${active.utc_mid.slice(0, 10)}, MJD ${active.mjd_tdb_mid.toFixed(2)}`
+    ? `Epoch ${safeIdx + 1} of ${count}: ${active.epoch}, ${active.utc_mid.slice(0, 10)}, Δt ${activeDt}, MJD ${active.mjd_tdb_mid.toFixed(2)}`
     : "No sky frames loaded";
 
   return (
     <footer className="viewer-strip" aria-label="Epoch timeline and playback">
+      {active && (
+        <div className="viewer-epoch-status" aria-label="Active epoch details">
+          <span className="viewer-epoch-num">
+            Epoch {safeIdx + 1}/{count}
+          </span>
+          <span className="viewer-epoch-date">{active.utc_mid.slice(0, 10)}</span>
+          <span className="viewer-epoch-dt" title="Time delta from baseline epoch t₀">
+            Δt: {activeDt}
+          </span>
+          <span className="viewer-epoch-mjd">MJD {active.mjd_tdb_mid.toFixed(2)}</span>
+        </div>
+      )}
       <div
         ref={barRef}
         role="toolbar"
@@ -145,11 +173,7 @@ export function FrameStrip({ frames, compact = false }: FrameStripProps) {
 
       <div className="viewer-epoch-pills" role="group" aria-label="Loaded epochs">
         {frames.map((f, i) => {
-          const mjd0 = frames[0]?.mjd_tdb_mid ?? f.mjd_tdb_mid;
-          const dt =
-            i === 0
-              ? "t₀"
-              : `${f.mjd_tdb_mid - mjd0 >= 0 ? "+" : ""}${(f.mjd_tdb_mid - mjd0).toFixed(0)}d`;
+          const dt = formatTimeDelta(f.mjd_tdb_mid, mjd0);
 
           return (
             <button

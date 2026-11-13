@@ -580,3 +580,38 @@ def test_cutouts_synthetic_fallback_and_examples_guard(api_env: dict[str, Any]) 
 
     res = list_examples_service(reference_path=Path("/tmp/nonexistent_reference_file.json"))
     assert res.targets == []
+
+
+def test_celery_eager_default_and_zero_day_synthetic_sequence(api_env: dict[str, Any]) -> None:
+    from app.providers.spherex_irsa import IRSA_QUERY_TIMEOUT_S
+    from app.workers.celery_app import is_eager_mode
+
+    # 1. Verify eager default and IRSA query timeout
+    assert is_eager_mode() is True
+    assert IRSA_QUERY_TIMEOUT_S == 10
+
+    # 2. Verify synthetic fallback handles identical from_utc and to_utc without crashing or collapsing
+    client: TestClient = api_env["client"]
+    spherex: _FakeSpherexProvider = api_env["spherex"]
+    spherex.fail_with = ProviderUnavailableError("Simulated IRSA outage")
+
+    req = {
+        "ra": 210.0,
+        "dec": 15.0,
+        "fov_arcmin": 10.0,
+        "bands": ["all"],
+        "from_utc": "2025-02-14T00:00:00Z",
+        "to_utc": "2025-02-14T00:00:00Z",
+    }
+    post_res = client.post("/api/v1/cutouts", json=req)
+    assert post_res.status_code == 202
+    cutout_id = post_res.json()["cutout_id"]
+
+    cut_res = client.get(f"/api/v1/cutouts/{cutout_id}")
+    assert cut_res.status_code == 200
+    cut_body = cut_res.json()
+    assert len(cut_body["frames"]) == 3
+    # Epochs should be distinct
+    mjd_vals = [f["mjd_tdb_mid"] for f in cut_body["frames"]]
+    assert len(set(mjd_vals)) == 3
+    assert mjd_vals[0] < mjd_vals[1] < mjd_vals[2]

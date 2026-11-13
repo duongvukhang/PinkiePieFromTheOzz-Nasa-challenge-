@@ -13,6 +13,7 @@ import astropy.units as u
 import httpx
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
+from sphx_core.timeutil import parse_user_epoch
 
 from app.schemas.archive import (
     ArchiveLoadRequest,
@@ -23,6 +24,7 @@ from app.schemas.archive import (
     EpochProduct,
     ObservationEpoch,
 )
+from app.services.fits_validator import DEFAULT_UPLOAD_MAX_BYTES
 from app.services.storage import StorageBackend, get_storage_backend
 
 ALLOWED_DOMAINS = (
@@ -72,19 +74,18 @@ def convert_radius_to_deg(radius: float, unit: str) -> float:
 
 
 def parse_date_to_mjd(date_str: str) -> float:
-    """Parse ISO 8601 or YYYY-MM-DD date string to MJD (days)."""
+    """Parse ISO 8601 or YYYY-MM-DD date string to MJD TDB (days)."""
     clean = date_str.strip()
-    if len(clean) == 10 and clean.count("-") == 2:
-        clean += "T00:00:00"
-    return float(Time(clean, format="isot", scale="utc").mjd)
+    return float(parse_user_epoch(clean).tdb.mjd)
 
 
 def validate_url_security(url: str) -> str:
     """Ensure download target URL uses HTTPS and points to an authorized astronomical archive domain."""
     parsed = urlparse(url)
-    if parsed.scheme.lower() not in ("https", "http"):
-        raise ValueError(f"Security error: Invalid scheme '{parsed.scheme}'. HTTPS required.")
+    scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
+    if scheme != "https" and not (scheme == "http" and host in ("localhost", "127.0.0.1")):
+        raise ValueError(f"Security error: Invalid scheme '{parsed.scheme}'. HTTPS required.")
     if not host or not any(host == d or host.endswith("." + d) for d in ALLOWED_DOMAINS):
         raise ValueError(f"Security error: Host '{host}' is not an authorized NASA archive domain.")
     return url
@@ -102,9 +103,12 @@ def _make_archive_rec(
     center_um: float | None = None,
     w_range: list[float] | None = None,
     cached: bool = False,
+    source_origin: str | None = None,
 ) -> ArchiveRecord:
     """Helper constructing validated ArchiveRecord with standard units."""
-    dt_iso = Time(mjd, format="mjd").isot if mjd else None
+    dt_iso = Time(mjd, format="mjd", scale="tdb").isot if mjd else None
+    origin = source_origin or ("local_cache" if cached else "live_archive")
+    is_fallback = cached or origin in ("synthetic_demo", "local_cache")
     return ArchiveRecord(
         obs_id=obs_id,
         filename=f"{obs_id}.fits",
@@ -118,8 +122,8 @@ def _make_archive_rec(
         wavelength_range_um=w_range,
         access_url=access_url,
         service_source=source,
-        is_cached_fallback=cached,
-        source_origin="local_cache" if cached else "live_archive",
+        is_cached_fallback=is_fallback,
+        source_origin=origin,
     )
 
 
@@ -340,6 +344,36 @@ class IRSASearchService:
         max_records: int,
     ) -> tuple[list[ArchiveRecord], str, list[str]]:
         """Query NASA IRSA WISE/NEOWISE multi-epoch infrared archives."""
+        try:
+            from app.providers.base import default_registry
+            wise_prov = default_registry.get("wise")
+            c = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+            t0 = Time(start_mjd, format="mjd", scale="tdb") if start_mjd is not None else None
+            t1 = Time(end_mjd, format="mjd", scale="tdb") if end_mjd is not None else None
+            band_filter = [band.upper()] if band and band.upper() in WISE_BANDS else None
+            frames = wise_prov.frames(c, radius_deg * u.deg, t0=t0, t1=t1, band_filter=band_filter)
+            if frames:
+                records = [
+                    _make_archive_rec(
+                        obs_id=f.obs_id,
+                        ra=f.ra_deg if f.ra_deg is not None else ra,
+                        dec=f.dec_deg if f.dec_deg is not None else dec,
+                        mjd=f.mjd_tdb,
+                        band=f.band_id or "WISE",
+                        access_url=f.access_url,
+                        source="NASA/IPAC IRSA WISE/NEOWISE",
+                        detector=f.band_id,
+                        w_range=list(f.wavelength_um) if f.wavelength_um else None,
+                        cached=False,
+                        source_origin="live_archive",
+                    )
+                    for f in frames[:max_records]
+                ]
+                return records, "LIVE_ARCHIVE", [f"Indexed {len(records)} live NEOWISE products from IRSA."]
+        except Exception:
+            pass
+
+        # Offline / fallback mode
         bands_to_use = [band.upper()] if band and band.upper() in WISE_BANDS else ["W1", "W2"]
         base_mjds = [56800.0, 57165.0, 57530.0, 57895.0, 58260.0, 58625.0]
         if start_mjd is not None:
@@ -352,7 +386,7 @@ class IRSASearchService:
         records: list[ArchiveRecord] = []
         for b_name in bands_to_use:
             b_info = WISE_BANDS.get(b_name, WISE_BANDS["W1"])
-            for idx, mjd_val in enumerate(base_mjds[:max_records]):
+            for mjd_val in base_mjds[:max_records]:
                 obs_ident = f"wise_neo_{int(mjd_val)}_{b_name}_{int(ra * 10):04d}"
                 records.append(
                     _make_archive_rec(
@@ -361,10 +395,14 @@ class IRSASearchService:
                         "NASA/IPAC IRSA WISE/NEOWISE",
                         detector=b_name, center_um=b_info["center_um"],
                         w_range=[b_info["min_um"], b_info["max_um"]],
+                        cached=True,
+                        source_origin="synthetic_demo",
                     )
                 )
 
-        return records, "LIVE_ARCHIVE", [f"Indexed {len(records)} NEOWISE infrared multi-epoch products from IRSA."]
+        return records, "SYNTHETIC_DEMO", [
+            f"IRSA WISE live query unavailable; generated {len(records)} synthetic demo products for spatial validation."
+        ]
 
     def _search_twomass(
         self,
@@ -387,9 +425,11 @@ class IRSASearchService:
                     "NASA/IPAC IRSA 2MASS All-Sky",
                     detector=b_name, center_um=b_info["center_um"],
                     w_range=[b_info["min_um"], b_info["max_um"]],
+                    cached=True,
+                    source_origin="synthetic_demo",
                 )
             )
-        return records, "LIVE_ARCHIVE", ["Retrieved 2MASS Near-Infrared baseline epoch from NASA IRSA."]
+        return records, "SYNTHETIC_DEMO", ["2MASS live archive provider pending; generated synthetic demo baseline epoch."]
 
     def _search_skyview(
         self,
@@ -405,8 +445,10 @@ class IRSASearchService:
             obs_ident, ra, dec, 53000.0, "SkyView Multi-Mission",
             f"https://skyview.gsfc.nasa.gov/cgi-bin/images?Position={ra},{dec}",
             "NASA SkyView Virtual Observatory (GSFC)",
+            cached=True,
+            source_origin="synthetic_demo",
         )
-        return [rec], "LIVE_ARCHIVE", ["NASA SkyView virtual observatory survey query prepared."]
+        return [rec], "SYNTHETIC_DEMO", ["NASA SkyView live provider pending; generated synthetic demo cutout record."]
 
     def load_archive_product(self, req: ArchiveLoadRequest, storage: StorageBackend) -> dict[str, Any]:
         """Fetch or register an authentic external archive FITS into active session storage."""
@@ -416,7 +458,6 @@ class IRSASearchService:
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", req.obs_id)
         storage_key = f"archive/{req.source}/{safe_id}.fits"
 
-        # If already cached in storage, return existing key
         if storage.exists(storage_key):
             return {
                 "obs_id": req.obs_id,
@@ -425,23 +466,36 @@ class IRSASearchService:
                 "source": req.source,
             }
 
-        # If access URL provided, stream download with size cap
+        # If access URL provided, stream download with size cap and re-validate redirects
         if req.access_url:
             try:
                 with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                    resp = client.get(req.access_url)
-                    if resp.status_code == 200 and resp.content.startswith(b"SIMPLE"):
-                        storage.put_bytes(storage_key, resp.content, content_type="application/fits")
-                        return {
-                            "obs_id": req.obs_id,
-                            "storage_key": storage_key,
-                            "status": "loaded_live",
-                            "source": req.source,
-                        }
+                    with client.stream("GET", req.access_url) as resp:
+                        validate_url_security(str(resp.url))
+                        if resp.status_code == 200:
+                            chunks = []
+                            total_bytes = 0
+                            for chunk in resp.iter_bytes(chunk_size=65536):
+                                total_bytes += len(chunk)
+                                if total_bytes > DEFAULT_UPLOAD_MAX_BYTES:
+                                    raise ValueError(
+                                        f"Archive payload exceeds max allowed size of {DEFAULT_UPLOAD_MAX_BYTES} bytes."
+                                    )
+                                chunks.append(chunk)
+                            content = b"".join(chunks)
+                            if content.startswith(b"SIMPLE"):
+                                storage.put_bytes(storage_key, content, content_type="application/fits")
+                                return {
+                                    "obs_id": req.obs_id,
+                                    "storage_key": storage_key,
+                                    "status": "loaded_live",
+                                    "source": req.source,
+                                }
+            except ValueError:
+                raise
             except Exception:
                 pass
 
-        # Fallback: store empty descriptor or synthetic marker
         return {
             "obs_id": req.obs_id,
             "storage_key": storage_key,

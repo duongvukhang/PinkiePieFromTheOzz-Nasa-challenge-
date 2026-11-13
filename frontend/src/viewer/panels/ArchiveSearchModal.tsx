@@ -4,8 +4,18 @@ import {
   type ArchiveSearchParams,
   type ArchiveSearchResponse,
   type ArchiveSourceId,
+  type ExampleTargetSummary,
   type ObservationEpoch,
 } from "../../api/client";
+
+export interface ArchiveSearchApplyParams {
+  ra: number;
+  dec: number;
+  from?: string;
+  to?: string;
+  bands?: string;
+  source: ArchiveSourceId;
+}
 
 interface ArchiveSearchModalProps {
   isOpen: boolean;
@@ -14,14 +24,8 @@ interface ArchiveSearchModalProps {
   initialDec?: number;
   initialFrom?: string;
   initialTo?: string;
-  onApplyInterval: (params: {
-    ra: number;
-    dec: number;
-    from?: string;
-    to?: string;
-    bands?: string;
-    source: ArchiveSourceId;
-  }) => void;
+  examples?: ExampleTargetSummary[];
+  onApplyInterval: (params: ArchiveSearchApplyParams) => void;
 }
 
 const ARCHIVE_SOURCES: { id: ArchiveSourceId; label: string; desc: string }[] = [
@@ -47,13 +51,6 @@ const ARCHIVE_SOURCES: { id: ArchiveSourceId; label: string; desc: string }[] = 
   },
 ];
 
-const PRESETS = [
-  { name: "WISE 0855", ra: 133.79513, dec: -7.24515 },
-  { name: "Barnard's Star", ra: 269.45208, dec: 4.69339 },
-  { name: "ε Indi B", ra: 330.84042, dec: -56.78608 },
-  { name: "RW Aurigae", ra: 76.95375, dec: 30.40139 },
-];
-
 export function ArchiveSearchModal({
   isOpen,
   onClose,
@@ -61,6 +58,7 @@ export function ArchiveSearchModal({
   initialDec = -7.24515,
   initialFrom = "2025-01-01",
   initialTo = "2025-12-31",
+  examples,
   onApplyInterval,
 }: ArchiveSearchModalProps) {
   const [source, setSource] = useState<ArchiveSourceId>("spherex_irsa");
@@ -145,12 +143,39 @@ export function ArchiveSearchModal({
   const handleLoadEpoch = (ep: ObservationEpoch) => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
-    const dateStr = ep.date_obs ? ep.date_obs.slice(0, 10) : startDate;
+    let fromVal = startDate || undefined;
+    let toVal = endDate || undefined;
+    if (!fromVal || !toVal || fromVal === toVal) {
+      const dateStr = ep.date_obs
+        ? ep.date_obs.slice(0, 10)
+        : startDate || new Date().toISOString().slice(0, 10);
+      const base = new Date(`${dateStr}T12:00:00Z`);
+      const prevDay = new Date(base.getTime() - 86400000).toISOString().slice(0, 10);
+      const nextDay = new Date(base.getTime() + 86400000).toISOString().slice(0, 10);
+      fromVal = prevDay;
+      toVal = nextDay;
+    }
+    const activeProd =
+      (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ??
+      (ep.products ?? [])[0];
+    if (activeProd) {
+      api
+        .loadArchiveProduct({
+          obs_id: activeProd.obs_id,
+          access_url: activeProd.access_url || undefined,
+          source,
+          band: activeProd.band || undefined,
+          ra_deg: raNum,
+          dec_deg: decNum,
+        })
+        .catch(() => {});
+    }
+
     onApplyInterval({
       ra: raNum,
       dec: decNum,
-      from: dateStr,
-      to: dateStr,
+      from: fromVal,
+      to: toVal,
       bands: band === "ALL" ? "all" : band.toLowerCase(),
       source,
     });
@@ -160,6 +185,25 @@ export function ArchiveSearchModal({
   const handleLoadAllInterval = () => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
+
+    for (const ep of searchResult?.epochs ?? []) {
+      const activeProd =
+        (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ??
+        (ep.products ?? [])[0];
+      if (activeProd) {
+        api
+          .loadArchiveProduct({
+            obs_id: activeProd.obs_id,
+            access_url: activeProd.access_url || undefined,
+            source,
+            band: activeProd.band || undefined,
+            ra_deg: raNum,
+            dec_deg: decNum,
+          })
+          .catch(() => {});
+      }
+    }
+
     onApplyInterval({
       ra: raNum,
       dec: decNum,
@@ -231,25 +275,27 @@ export function ArchiveSearchModal({
             </span>
           </div>
 
-          {/* Quick Presets */}
-          <div className="archive-presets-row">
-            <span className="viewer-muted" style={{ fontSize: "0.75rem" }}>
-              Presets:
-            </span>
-            {PRESETS.map((p) => (
-              <button
-                key={p.name}
-                type="button"
-                className="viewer-chip"
-                onClick={() => {
-                  setRa(p.ra.toFixed(5));
-                  setDec(p.dec.toFixed(5));
-                }}
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
+          {/* Quick Presets from dynamic examples */}
+          {examples && examples.length > 0 && (
+            <div className="archive-presets-row">
+              <span className="viewer-muted" style={{ fontSize: "0.75rem" }}>
+                Presets:
+              </span>
+              {examples.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  className="viewer-chip"
+                  onClick={() => {
+                    setRa(p.ra_deg.toFixed(5));
+                    setDec(p.dec_deg.toFixed(5));
+                  }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Coordinates & Radius Row */}
           <div className="archive-form-grid">
@@ -419,10 +465,11 @@ export function ArchiveSearchModal({
                         : "◆ Synthetic Survey Demo"}
                   </span>
                   <span style={{ fontSize: "0.8rem", color: "var(--sky-muted)" }}>
-                    Found {searchResult.total_epochs} epochs ({searchResult.total_found} products)
+                    Found {searchResult.total_epochs ?? 0} epochs ({searchResult.total_found ?? 0}{" "}
+                    products)
                   </span>
                 </div>
-                {searchResult.total_epochs > 0 && (
+                {(searchResult.total_epochs ?? 0) > 0 && (
                   <button
                     type="button"
                     className="viewer-btn viewer-btn-primary"
@@ -434,9 +481,9 @@ export function ArchiveSearchModal({
                 )}
               </div>
 
-              {searchResult.notes.length > 0 && (
+              {(searchResult.notes ?? []).length > 0 && (
                 <div className="archive-notes-box">
-                  {searchResult.notes.map((n, i) => (
+                  {(searchResult.notes ?? []).map((n, i) => (
                     <div key={i}>{n}</div>
                   ))}
                 </div>
@@ -444,7 +491,7 @@ export function ArchiveSearchModal({
 
               {/* Epoch List */}
               <div className="archive-epoch-list">
-                {searchResult.epochs.map((ep) => {
+                {(searchResult.epochs ?? []).map((ep) => {
                   const deltaText =
                     ep.time_delta_days === 0
                       ? "Reference Epoch (t₀)"
@@ -470,7 +517,9 @@ export function ArchiveSearchModal({
                           }}
                         >
                           MJD: {ep.mjd_obs ? ep.mjd_obs.toFixed(3) : "—"} · Products:{" "}
-                          {ep.products.map((p) => p.band || p.detector || "Science").join(", ")}
+                          {(ep.products ?? [])
+                            .map((p) => p.band || p.detector || "Science")
+                            .join(", ")}
                         </div>
                       </div>
                       <button

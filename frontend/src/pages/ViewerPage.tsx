@@ -83,6 +83,9 @@ export function ViewerPage() {
               objectDetail={v.objectDetail}
               onBoxSelect={v.onBoxSelect}
               onVisibilityPause={v.setPausedByVis}
+              loading={v.loadingCutouts}
+              errorMsg={v.errorMsg}
+              emptyWarning={v.warnings[0]}
             />
             <FrameStrip frames={v.frames} />
           </div>

@@ -21,7 +21,12 @@ export type EpochMeasurementRead = Schema<"EpochMeasurementRead">;
 export type MotionFitRead = Schema<"MotionFitRead">;
 export type ClassificationSummary = Schema<"ClassificationSummary">;
 
-export type ArchiveSourceId = "spherex_irsa" | "wise_irsa" | "twomass_irsa" | "skyview";
+export type ArchiveLoadRequest = Schema<"ArchiveLoadRequest">;
+export type ArchiveSourceId = NonNullable<ArchiveLoadRequest["source"]>;
+export type EpochProduct = Schema<"EpochProduct">;
+export type ObservationEpoch = Schema<"ObservationEpoch">;
+export type ArchiveRecord = Schema<"ArchiveRecord">;
+export type ArchiveSearchResponse = Schema<"ArchiveSearchResponse">;
 
 export interface ArchiveSearchParams {
   ra: number;
@@ -33,61 +38,6 @@ export interface ArchiveSearchParams {
   to?: string;
   band?: string;
   max_records?: number;
-}
-
-export interface EpochProduct {
-  obs_id: string;
-  filename: string;
-  band?: string;
-  detector?: string;
-  wavelength_range_um?: [number, number];
-  access_url?: string;
-  is_loaded: boolean;
-  is_cached_fallback: boolean;
-}
-
-export interface ObservationEpoch {
-  epoch_id: string;
-  epoch_index: number;
-  date_obs?: string;
-  mjd_obs?: number;
-  time_delta_days?: number;
-  source: string;
-  pointing_ra_deg?: number;
-  pointing_dec_deg?: number;
-  products: EpochProduct[];
-  selected_product_id?: string;
-  is_loaded: boolean;
-  is_cached_fallback: boolean;
-}
-
-export interface ArchiveRecord {
-  obs_id: string;
-  filename: string;
-  ra_deg?: number;
-  dec_deg?: number;
-  date_obs?: string;
-  mjd_obs?: number;
-  band?: string;
-  detector?: string;
-  wavelength_center_um?: number;
-  wavelength_range_um?: [number, number];
-  access_url?: string;
-  service_source: string;
-  retrieval_status?: string;
-  is_cached_fallback?: boolean;
-}
-
-export interface ArchiveSearchResponse {
-  query_params: Record<string, unknown>;
-  service_status: "LIVE_ARCHIVE" | "CACHED_FALLBACK" | "SYNTHETIC_DEMO" | "EMPTY" | "ERROR";
-  is_offline_fallback: boolean;
-  total_found: number;
-  total_epochs: number;
-  records: ArchiveRecord[];
-  epochs: ObservationEpoch[];
-  notes: string[];
-  error_detail?: string;
 }
 
 export interface ScienceBuffer {
@@ -234,13 +184,9 @@ export const api = {
         max_records: params.max_records,
       }),
     ),
-  loadArchiveProduct: (body: {
-    obs_id: string;
-    access_url?: string;
-    source?: ArchiveSourceId;
-    band?: string;
-    ra_deg?: number;
-    dec_deg?: number;
-  }) =>
-    postJson<{ obs_id: string; storage_key: string; status: string }>("/api/v1/archive/load", body),
+  loadArchiveProduct: (body: ArchiveLoadRequest) =>
+    postJson<{ obs_id: string; storage_key: string; status: string; source: string }>(
+      "/api/v1/archive/load",
+      body,
+    ),
 };

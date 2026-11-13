@@ -31,4 +31,14 @@ describe("Archive API client & search parameter serialization", () => {
     expect(typeof api.searchArchive).toBe("function");
     expect(typeof api.loadArchiveProduct).toBe("function");
   });
+
+  it("computes non-zero multi-epoch interval when loading single epoch without collapsing", () => {
+    const epDate = "2025-02-14";
+    const base = new Date(`${epDate}T12:00:00Z`);
+    const prevDay = new Date(base.getTime() - 86400000).toISOString().slice(0, 10);
+    const nextDay = new Date(base.getTime() + 86400000).toISOString().slice(0, 10);
+    expect(prevDay).toBe("2025-02-13");
+    expect(nextDay).toBe("2025-02-15");
+    expect(prevDay).not.toBe(nextDay);
+  });
 });

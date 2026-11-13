@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { parseCoordsInput } from "../viewer/state/viewStore";
 import {
   ArchivalCard,
   EpochPager,
@@ -110,6 +111,7 @@ export function Home() {
   const [query, setQuery] = useState("");
   const [fromDate, setFromDate] = useState("2025-01-01");
   const [toDate, setToDate] = useState("2025-12-31");
+  const [dateError, setDateError] = useState<string | null>(null);
   const [epochIdx, setEpochIdx] = useState(0);
   const [mode, setMode] = useState<"mover" | "variable">("mover");
 
@@ -120,6 +122,11 @@ export function Home() {
 
   const handleSearch = (e: FormEvent) => {
     e.preventDefault();
+    if (fromDate && toDate && fromDate > toDate) {
+      setDateError("Start date cannot be after end date.");
+      return;
+    }
+    setDateError(null);
     const q = query.trim();
     const qs = new URLSearchParams();
     if (fromDate) qs.set("from", fromDate);
@@ -130,10 +137,10 @@ export function Home() {
       navigate(`/v?${qs.toString()}`);
       return;
     }
-    const coords = q.match(/^(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)$/);
+    const coords = parseCoordsInput(q);
     if (coords) {
-      qs.set("ra", Number(coords[1]).toFixed(5));
-      qs.set("dec", Number(coords[2]).toFixed(5));
+      qs.set("ra", coords.ra.toFixed(5));
+      qs.set("dec", coords.dec.toFixed(5));
     } else {
       qs.set("target", q);
     }
@@ -247,6 +254,19 @@ export function Home() {
                         All Time
                       </button>
                     </div>
+                    {dateError && (
+                      <span
+                        className="viewer-error-text"
+                        style={{
+                          display: "block",
+                          marginTop: "6px",
+                          fontSize: "0.8rem",
+                          color: "#f87171",
+                        }}
+                      >
+                        {dateError}
+                      </span>
+                    )}
                   </div>
                 </form>
               </search>

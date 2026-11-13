@@ -22,8 +22,13 @@ from astropy.io import fits
 from astropy.nddata import Cutout2D
 from astropy.time import Time
 from astropy.wcs import WCS
-from astroquery.ipac.irsa.core import IrsaClass
+from astroquery.ipac.irsa import Irsa
+from astroquery.ipac.irsa.core import IrsaClass, conf as irsa_conf
 from numpy.typing import NDArray
+
+IRSA_QUERY_TIMEOUT_S = 10
+irsa_conf.timeout = IRSA_QUERY_TIMEOUT_S
+Irsa.TIMEOUT = IRSA_QUERY_TIMEOUT_S
 
 from app.db.flags import DetectionFlag
 from app.providers.base import (
@@ -295,10 +300,13 @@ class SpherexIrsaProvider(Provider):
             client = IrsaClass()
             client.sia_url = self.profile.sia_url
             client.tap_url = self.profile.tap_url
+            client.TIMEOUT = IRSA_QUERY_TIMEOUT_S
             self._irsa: Any = client
         else:
             self._irsa = irsa
-        self._http = http_client or httpx.Client(timeout=30.0, follow_redirects=True)
+            if hasattr(self._irsa, "TIMEOUT"):
+                self._irsa.TIMEOUT = IRSA_QUERY_TIMEOUT_S
+        self._http = http_client or httpx.Client(timeout=10.0, follow_redirects=True)
         self._rate_limiter = rate_limiter or RateLimiter(
             max_concurrent=self.profile.max_concurrent,
             rate_per_sec=self.profile.requests_per_sec,

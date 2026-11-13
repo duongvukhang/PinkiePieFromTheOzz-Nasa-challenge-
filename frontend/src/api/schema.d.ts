@@ -1053,6 +1053,202 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * ArchiveLoadRequest
+         * @description Request payload to download/register an authentic archive product into active session.
+         */
+        ArchiveLoadRequest: {
+            /** Obs Id */
+            obs_id: string;
+            /** Access Url */
+            access_url?: string | null;
+            /**
+             * Source
+             * @default spherex_irsa
+             * @enum {string}
+             */
+            source?: "spherex_irsa" | "wise_irsa" | "twomass_irsa" | "skyview";
+            /** Band */
+            band?: string | null;
+            /** Ra Deg */
+            ra_deg?: number | null;
+            /** Dec Deg */
+            dec_deg?: number | null;
+        };
+        /**
+         * ArchiveRecord
+         * @description Individual archive discovery record.
+         */
+        ArchiveRecord: {
+            /** Obs Id */
+            obs_id: string;
+            /** Filename */
+            filename: string;
+            /** Ra Deg */
+            ra_deg?: number | null;
+            /** Dec Deg */
+            dec_deg?: number | null;
+            /** Date Obs */
+            date_obs?: string | null;
+            /** Mjd Obs */
+            mjd_obs?: number | null;
+            /** Band */
+            band?: string | null;
+            /** Detector */
+            detector?: string | null;
+            /** Wavelength Center Um */
+            wavelength_center_um?: number | null;
+            /** Wavelength Range Um */
+            wavelength_range_um?: number[] | null;
+            /** Access Url */
+            access_url?: string | null;
+            /** Filesize Bytes */
+            filesize_bytes?: number | null;
+            /** Data Release */
+            data_release?: string | null;
+            /**
+             * Product Type
+             * @default Level 2 Science Image
+             */
+            product_type?: string;
+            /**
+             * Spatial Coverage
+             * @default
+             */
+            spatial_coverage?: string;
+            /**
+             * Retrieval Status
+             * @default available
+             */
+            retrieval_status?: string;
+            /**
+             * Instrument
+             * @default SPHEREx
+             */
+            instrument?: string;
+            /**
+             * Service Source
+             * @default NASA/IPAC IRSA
+             */
+            service_source?: string;
+            /** Observation Group Id */
+            observation_group_id?: string | null;
+            /**
+             * Is Cached Fallback
+             * @default false
+             */
+            is_cached_fallback?: boolean;
+            /**
+             * Source Origin
+             * @default live_archive
+             */
+            source_origin?: string;
+        };
+        /**
+         * ArchiveSearchResponse
+         * @description Response payload for multi-archive spatial/temporal search.
+         */
+        ArchiveSearchResponse: {
+            /** Query Params */
+            query_params: Record<string, unknown>;
+            /**
+             * Service Status
+             * @enum {string}
+             */
+            service_status: "LIVE_ARCHIVE" | "CACHED_FALLBACK" | "SYNTHETIC_DEMO" | "EMPTY" | "ERROR";
+            /**
+             * Is Offline Fallback
+             * @default false
+             */
+            is_offline_fallback?: boolean;
+            /**
+             * Total Found
+             * @default 0
+             */
+            total_found?: number;
+            /**
+             * Total Epochs
+             * @default 0
+             */
+            total_epochs?: number;
+            /** Records */
+            records?: components["schemas"]["ArchiveRecord"][];
+            /** Epochs */
+            epochs?: components["schemas"]["ObservationEpoch"][];
+            /** Notes */
+            notes?: string[];
+            /** Error Detail */
+            error_detail?: string | null;
+        };
+        /**
+         * EpochProduct
+         * @description Single science data product within an observation epoch.
+         */
+        EpochProduct: {
+            /** Obs Id */
+            obs_id: string;
+            /** Filename */
+            filename: string;
+            /** Band */
+            band?: string | null;
+            /** Detector */
+            detector?: string | null;
+            /** Wavelength Range Um */
+            wavelength_range_um?: number[] | null;
+            /** Access Url */
+            access_url?: string | null;
+            /** Filesize Bytes */
+            filesize_bytes?: number | null;
+            /**
+             * Is Loaded
+             * @default false
+             */
+            is_loaded?: boolean;
+            /**
+             * Is Cached Fallback
+             * @default false
+             */
+            is_cached_fallback?: boolean;
+        };
+        /**
+         * ObservationEpoch
+         * @description Grouped observation epoch representing a distinct temporal visit.
+         */
+        ObservationEpoch: {
+            /** Epoch Id */
+            epoch_id: string;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Date Obs */
+            date_obs?: string | null;
+            /** Mjd Obs */
+            mjd_obs?: number | null;
+            /** Time Delta Days */
+            time_delta_days?: number | null;
+            /**
+             * Source
+             * @default NASA IRSA
+             */
+            source?: string;
+            /** Pointing Ra Deg */
+            pointing_ra_deg?: number | null;
+            /** Pointing Dec Deg */
+            pointing_dec_deg?: number | null;
+            /** Products */
+            products?: components["schemas"]["EpochProduct"][];
+            /** Selected Product Id */
+            selected_product_id?: string | null;
+            /**
+             * Is Loaded
+             * @default false
+             */
+            is_loaded?: boolean;
+            /**
+             * Is Cached Fallback
+             * @default false
+             */
+            is_cached_fallback?: boolean;
+        };
+        /**
          * AnalysisAcceptedResponse
          * @description 202 response for asynchronous frame analysis.
          */

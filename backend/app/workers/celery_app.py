@@ -12,6 +12,13 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").lower() in {"1", "true", "yes"}
 
 
+def _default_eager() -> bool:
+    val = os.environ.get("CELERY_TASK_ALWAYS_EAGER", "").lower()
+    return val in {"1", "true", "yes"} if val else (
+        os.environ.get("SPHX_STORE_MODE", "").lower() == "memory" or not os.environ.get("DATABASE_URL")
+    )
+
+
 celery_app = Celery(
     "sphx",
     broker=os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0"),
@@ -25,7 +32,7 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
-    task_always_eager=_env_flag("CELERY_TASK_ALWAYS_EAGER"),
+    task_always_eager=_default_eager(),
     task_routes={
         "app.workers.tasks_fast.*": {"queue": "fast"},
         "app.workers.tasks_heavy.*": {"queue": "heavy"},
@@ -37,11 +44,14 @@ celery_app.conf.update(
 
 def is_eager_mode() -> bool:
     """Return True when Celery is configured for synchronous eager execution."""
-    return bool(celery_app.conf.task_always_eager or _env_flag("CELERY_TASK_ALWAYS_EAGER"))
+    return bool(celery_app.conf.task_always_eager or _default_eager())
 
 
 def dispatch_task(task: Any, *args: Any, queue: str = "fast", **kwargs: Any) -> Any:
     """Execute Celery task eagerly when configured, otherwise enqueue onto `queue`."""
     if is_eager_mode():
         return task.apply(args=args, kwargs=kwargs)
-    return task.apply_async(args=args, kwargs=kwargs, queue=queue)
+    try:
+        return task.apply_async(args=args, kwargs=kwargs, queue=queue)
+    except Exception:
+        return task.apply(args=args, kwargs=kwargs)

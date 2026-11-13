@@ -53,9 +53,13 @@ describe("viewer WCS & URL state", () => {
     const parsedFlags = parseViewParams("?inspectorTab=flags", false);
     expect(parsedFlags.inspectorTab).toBe("flags");
 
-    const parsedInterval = parseViewParams("?from=2025-01-01&to=2025-12-31", false);
+    const parsedInterval = parseViewParams(
+      "?from=2025-01-01&to=2025-12-31&source=wise_irsa",
+      false,
+    );
     expect(parsedInterval.from).toBe("2025-01-01");
     expect(parsedInterval.to).toBe("2025-12-31");
+    expect(parsedInterval.source).toBe("wise_irsa");
 
     const qs = toViewQuery({
       target: "WISE 0855",
@@ -66,6 +70,7 @@ describe("viewer WCS & URL state", () => {
       to: "2025-12-31",
       release: "latest",
       bands: "arr6",
+      source: "wise_irsa",
       mode: "compare",
       op: "diff",
       frame: 2,
@@ -82,6 +87,7 @@ describe("viewer WCS & URL state", () => {
     });
     expect(qs).toContain("from=2025-01-01");
     expect(qs).toContain("to=2025-12-31");
+    expect(qs).toContain("source=wise_irsa");
     expect(qs).toContain("bands=arr6");
     expect(qs).toContain("op=diff");
     expect(qs).toContain("overlay=gaia%2Ccatwise");

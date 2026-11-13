@@ -95,18 +95,21 @@ async def search_nasa_archive(
     max_records: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> ArchiveSearchResponse:
     """Query NASA-affiliated archives (SPHEREx, WISE, 2MASS, SkyView) with spatial and temporal intervals."""
-    params = ArchiveSearchParams(
-        ra_deg=ra,
-        dec_deg=dec,
-        radius=radius,
-        radius_unit=radius_unit,
-        source=source,
-        start_date=start_date,
-        end_date=end_date,
-        band=band,
-        max_records=max_records,
-    )
-    return irsa_search_service.search_archive(params)
+    try:
+        params = ArchiveSearchParams(
+            ra_deg=ra,
+            dec_deg=dec,
+            radius=radius,
+            radius_unit=radius_unit,
+            source=source,
+            start_date=start_date,
+            end_date=end_date,
+            band=band,
+            max_records=max_records,
+        )
+        return irsa_search_service.search_archive(params)
+    except ValueError as exc:
+        raise APIProblemError(status.HTTP_400_BAD_REQUEST, "Invalid Archive Request", str(exc)) from exc
 
 
 @router.post("/archive/load", tags=["archive"])
@@ -115,7 +118,10 @@ async def load_archive_product(
     storage: Annotated[StorageBackend, Depends(get_storage)],
 ) -> dict[str, Any]:
     """Stream download and register an authentic NASA archive FITS into the active workspace."""
-    return irsa_search_service.load_archive_product(payload, storage)
+    try:
+        return irsa_search_service.load_archive_product(payload, storage)
+    except ValueError as exc:
+        raise APIProblemError(status.HTTP_400_BAD_REQUEST, "Invalid Archive Request", str(exc)) from exc
 
 
 @router.get("/fields/frames", tags=["fields"])
@@ -187,7 +193,13 @@ async def create_cutouts(
                     job.id, job_params, store=store, storage=storage, provider=provider
                 )
         else:
-            dispatch_task(build_cutouts, str(job.id), job_params, queue="fast")
+            try:
+                dispatch_task(build_cutouts, str(job.id), job_params, queue="fast")
+            except Exception:
+                with contextlib.suppress(Exception):
+                    execute_build_cutouts(
+                        job.id, job_params, store=store, storage=storage, provider=provider
+                    )
         latest = store.get_job(job.id)
         job_status: JobStatus = latest.status if latest else job.status
     else:

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   ApiError,
@@ -34,6 +34,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     to,
     release,
     bands,
+    source,
     frame,
     fps,
     playing,
@@ -94,7 +95,7 @@ export function useViewerData(search: string, skipSecondary = false) {
   const hasCoords = activeRa !== undefined && activeDec !== undefined;
 
   const fieldsQ = useQuery({
-    queryKey: ["fields", activeRa, activeDec, fov, bands, release, from, to],
+    queryKey: ["fields", activeRa, activeDec, fov, bands, release, from, to, source],
     queryFn: () =>
       api.getFieldFrames({
         ra: activeRa!,
@@ -109,7 +110,7 @@ export function useViewerData(search: string, skipSecondary = false) {
   });
 
   const cutoutQ = useQuery({
-    queryKey: ["cutout", activeRa, activeDec, fov, bands, release, from, to],
+    queryKey: ["cutout", activeRa, activeDec, fov, bands, release, from, to, source],
     queryFn: async () => {
       const accepted = await api.createCutouts({
         ra: activeRa!,
@@ -142,7 +143,10 @@ export function useViewerData(search: string, skipSecondary = false) {
     enabled: hasCoords,
   });
 
-  const frames: CutoutFrame[] = cutoutQ.data?.frames ?? [];
+  const frames: CutoutFrame[] = useMemo(() => {
+    const raw = cutoutQ.data?.frames ?? [];
+    return [...raw].sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
+  }, [cutoutQ.data?.frames]);
   const safeIdx = frames.length ? ((frame % frames.length) + frames.length) % frames.length : 0;
   const frameA = frames.find((f) => f.frame_id === a) ?? frames[safeIdx];
   const frameB =
@@ -274,24 +278,42 @@ export function useViewerData(search: string, skipSecondary = false) {
         ? dec >= box.decMin && dec <= box.decMax
         : dec >= box.decMax && dec <= box.decMin;
 
-    const inBox = (analysisQ.data?.detections ?? []).filter((d) => inRa(d.ra) && inDec(d.dec));
-    if (inBox.length > 0) {
+    const inBoxDetections = (analysisQ.data?.detections ?? []).filter(
+      (d) => inRa(d.ra) && inDec(d.dec),
+    );
+    const inBoxGaia = (gaiaQ.data?.sources ?? []).filter((s) => inRa(s.ra) && inDec(s.dec));
+    const inBoxCatwise = (catwiseQ.data?.sources ?? []).filter((s) => inRa(s.ra) && inDec(s.dec));
+
+    if (inBoxDetections.length > 0) {
       let cur = track;
-      inBox.forEach((d) => {
+      inBoxDetections.forEach((d) => {
         const lbl = nextTrackLabel(cur);
         cur = [...cur, `${lbl}:${d.ra.toFixed(5)},${d.dec.toFixed(5)}`];
         addTrack(lbl, d.ra, d.dec);
       });
-      const first = inBox[0];
-      if (first) setView({ obj: String(first.id), inspectorTab: "object" });
+      const first = inBoxDetections[0];
+      setView({
+        obj: first ? String(first.id) : undefined,
+        inspectorTab: "object",
+        selectBoxMode: false,
+      });
+    } else if (inBoxGaia.length > 0 || inBoxCatwise.length > 0) {
+      const catSources = [...inBoxGaia, ...inBoxCatwise];
+      let cur = track;
+      catSources.forEach((s) => {
+        const lbl = nextTrackLabel(cur);
+        cur = [...cur, `${lbl}:${s.ra.toFixed(5)},${s.dec.toFixed(5)}`];
+        addTrack(lbl, s.ra, s.dec);
+      });
+      const firstLbl = cur[track.length]?.split(":")[0];
+      setView({
+        obj: firstLbl,
+        inspectorTab: "object",
+        selectBoxMode: false,
+      });
     } else {
-      const midRa =
-        box.raMin <= box.raMax
-          ? 0.5 * (box.raMin + box.raMax)
-          : (0.5 * (box.raMin + box.raMax + 360.0)) % 360.0;
-      const midDec = 0.5 * (box.decMin + box.decMax);
-      addTrack(nextTrackLabel(track), midRa, midDec);
-      setView({ inspectorTab: "object" });
+      // Empty box: no detections or catalog sources; do not create empty track
+      setView({ selectBoxMode: false });
     }
   };
 
@@ -323,6 +345,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     spectrum: spectrumQ.data,
     resolveTargetDirect,
     resolving: resolveQ.isFetching,
+    loadingCutouts: cutoutQ.isFetching,
     errorMsg: (() => {
       const err = resolveQ.error ?? cutoutQ.error ?? fieldsQ.error ?? bufAQ.error ?? null;
       return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
