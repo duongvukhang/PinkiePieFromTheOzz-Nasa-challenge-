@@ -270,7 +270,7 @@ class IRSASearchService:
     ) -> tuple[list[ArchiveRecord], str, list[str]]:
         """Query official NASA IRSA SPHEREx ObsCore TAP table or synthesize sequence if unreleased."""
         where_clauses = [
-            f"INTERSECTS(CIRCLE('ICRS', {ra:.6f}, {dec:.6f}, {radius_deg:.6f}), s_region) = 1"
+            f"1=CONTAINS(POINT('ICRS', {ra:.6f}, {dec:.6f}), s_region)"
         ]
         if start_mjd is not None:
             where_clauses.append(f"t_max >= {start_mjd:.4f}")
@@ -281,18 +281,25 @@ class IRSASearchService:
             det_digit = clean_b[-1] if clean_b[-1].isdigit() else clean_b
             where_clauses.append(f"(energy_bandpassname LIKE '%D{det_digit}%' OR energy_bandpassname LIKE '%LVF{det_digit}%')")
 
-        query = f"SELECT TOP {max_records} obs_id, s_ra, s_dec, energy_bandpassname, em_min, em_max, t_min, t_max, access_url FROM spherex.obscore WHERE {' AND '.join(where_clauses)} ORDER BY t_min ASC"
+        query = f"SELECT TOP {max_records} obs_id, s_ra, s_dec, energy_bandpassname, em_min, em_max, t_min, t_max, access_url FROM spherex.obscore WHERE {' AND '.join(where_clauses)}"
 
         records: list[ArchiveRecord] = []
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=30.0) as client:
                 res = client.post(
                     f"{self.tap_url}/sync",
                     data={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query, "FORMAT": "json"},
                 )
                 if res.status_code == 200:
                     data = res.json()
-                    rows = data.get("data", [])
+                    rows: list[Any] = []
+                    if "VOTABLE" in data:
+                        try:
+                            rows = data["VOTABLE"]["RESOURCE_ARRAY"][0]["TABLE"]["DATA"]["TABLEDATA"]
+                        except (KeyError, IndexError, TypeError):
+                            pass
+                    if not rows and "data" in data:
+                        rows = data["data"]
                     for r in rows:
                         t_min = float(r[6]) if r[6] is not None else None
                         records.append(
