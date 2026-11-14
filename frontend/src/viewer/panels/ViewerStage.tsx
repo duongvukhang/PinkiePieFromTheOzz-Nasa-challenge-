@@ -44,6 +44,8 @@ interface ViewerStageProps {
   onBoxSelect?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onVisibilityPause?: (paused: boolean) => void;
   onSelectEpoch?: (epoch: string) => void;
+  onTrackDetection?: (d: DetectionRead) => void;
+  onRemoveTrack?: (label: string) => void;
   loading?: boolean;
   loadingText?: string;
   errorMsg?: string;
@@ -69,6 +71,8 @@ export function ViewerStage({
   onBoxSelect,
   onVisibilityPause,
   onSelectEpoch,
+  onTrackDetection,
+  onRemoveTrack,
   loading,
   loadingText,
   errorMsg,
@@ -425,6 +429,7 @@ export function ViewerStage({
                       : `src_${d.id}`;
                   setView({ obj: dLabel, inspectorTab: "object" });
                 }}
+                onTrackDetection={onTrackDetection}
                 onSelectTrack={(lbl) => {
                   setView({ obj: lbl, inspectorTab: "object" });
                 }}

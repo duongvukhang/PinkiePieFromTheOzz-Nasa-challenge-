@@ -422,7 +422,7 @@ export function useViewerData(search: string, skipSecondary = false) {
         if (created) {
           setTrackedUuid(created.id);
           addTrack(created.label, d.ra, d.dec);
-          setView({ obj: created.id, inspectorTab: "object" });
+          setView({ obj: created.id, inspectorTab: "object", isTimelineOpen: true });
           return;
         }
       } catch {
@@ -431,7 +431,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     }
     const lbl = nextTrackLabel(track);
     addTrack(lbl, d.ra, d.dec);
-    setView({ obj: String(d.id), inspectorTab: "object" });
+    setView({ obj: String(d.id), inspectorTab: "object", isTimelineOpen: true });
   };
 
   const onBoxSelect = async (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {

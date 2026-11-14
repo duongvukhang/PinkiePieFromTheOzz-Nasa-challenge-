@@ -136,6 +136,8 @@ export function ViewerPage() {
             objectDetail={v.objectDetail}
             predictionData={v.ephemerisResult ? { trajectory_points: v.ephemerisResult.trajectory } : undefined}
             onBoxSelect={v.onBoxSelect}
+            onTrackDetection={v.onTrackDetection}
+            onRemoveTrack={v.removeTrack}
             onVisibilityPause={v.setPausedByVis}
             loading={v.loadingCutouts}
             loadingText={v.loadingText}

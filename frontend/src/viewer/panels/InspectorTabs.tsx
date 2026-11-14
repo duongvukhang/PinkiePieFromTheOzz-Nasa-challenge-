@@ -408,9 +408,36 @@ export function InspectorTabs({
                           </div>
                           <div style={{ marginTop: "6px" }}>
                             {isTracked ? (
-                              <span className="viewer-chip" style={{ color: "var(--oi-green)" }}>
-                                Tracked
-                              </span>
+                              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                                <span className="viewer-chip" style={{ color: "var(--oi-green)" }}>
+                                  Tracked
+                                </span>
+                                {onRemoveTrack && (
+                                  <button
+                                    type="button"
+                                    className="viewer-btn viewer-btn-secondary"
+                                    style={{ fontSize: "0.72rem", padding: "2px 6px" }}
+                                    title="Untrack this object"
+                                    onClick={() => {
+                                      const match = tracks.find((t) => {
+                                        const [, coords] = t.split(":");
+                                        const [r, dec] = (coords ?? "").split(",").map(Number);
+                                        return (
+                                          r != null &&
+                                          dec != null &&
+                                          Math.abs(r - d.ra) < 0.001 &&
+                                          Math.abs(dec - d.dec) < 0.001
+                                        );
+                                      });
+                                      if (match) {
+                                        onRemoveTrack(match.split(":")[0]);
+                                      }
+                                    }}
+                                  >
+                                    Untrack
+                                  </button>
+                                )}
+                              </div>
                             ) : (
                               <button
                                 type="button"

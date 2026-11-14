@@ -66,6 +66,7 @@ interface WcsSvgOverlayProps {
   onSelectCoord: (ra: number, dec: number) => void;
   onSelectBox?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onSelectDetection?: (detection: DetectionRead) => void;
+  onTrackDetection?: (detection: DetectionRead) => void;
   onSelectTrack?: (trackLabel: string) => void;
   onSelectEpoch?: (epoch: string) => void;
 }
@@ -90,12 +91,14 @@ export function WcsSvgOverlay({
   onSelectCoord,
   onSelectBox,
   onSelectDetection,
+  onTrackDetection,
   onSelectTrack,
   onSelectEpoch,
 }: WcsSvgOverlayProps) {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurr, setDragCurr] = useState<{ x: number; y: number } | null>(null);
-  const { activeBox, setActiveBox } = useViewStore();
+  const [capNotice, setCapNotice] = useState<string | null>(null);
+  const { activeBox, setActiveBox, playing, frame } = useViewStore();
 
   const isInActiveBox = (ra: number, dec: number) => {
     if (!activeBox) return false;
@@ -157,13 +160,20 @@ export function WcsSvgOverlay({
     .filter((m) => m.ra != null && m.dec != null)
     .sort((a, b) => a.mjd_tdb - b.mjd_tdb);
 
-  const trajPoints = measurements.map((m) => {
+  const trajPoints = measurements.map((m, mIdx) => {
     const p = skyToPixel(m.ra!, m.dec!, wcs);
     const degPerPx = Math.abs(wcs.cd11) || 0.0026;
     const rx = Math.max(1.8 * pxScale, ((m.sig_ra_mas ?? 50) / 3.6e6 / degPerPx) * pxScale);
     const ry = Math.max(1.8 * pxScale, ((m.sig_dec_mas ?? 50) / 3.6e6 / degPerPx) * pxScale);
-    return { ...p, epoch: m.epoch, flags: m.flags, rx, ry };
+    return { ...p, epoch: m.epoch ?? `E${mIdx + 1}`, flags: m.flags, rx, ry, mjd: m.mjd_tdb, idx: mIdx };
   });
+
+  const activeEpochIndex = (() => {
+    if (!currentEpoch || trajPoints.length === 0) return trajPoints.length - 1;
+    const found = trajPoints.findIndex((p) => p.epoch === currentEpoch);
+    if (found >= 0) return found;
+    return Math.min(Math.max(0, frame), trajPoints.length - 1);
+  })();
 
   const motion = objectDetail?.motion_fit;
   const pmVector =
@@ -386,7 +396,11 @@ export function WcsSvgOverlay({
               selectedTarget?.label === dLabel ||
               String(d.id) === selectedTarget?.label ||
               selectedTarget?.label === `DET #${d.id}`;
-            const size = (isSelected ? 14 : 8) * pxScale;
+            const degPerPx = Math.abs(wcs.cd11) || 0.0026;
+            const fwhmArcsec = d.fwhm_arcsec != null && d.fwhm_arcsec > 0 ? d.fwhm_arcsec : degPerPx * 3600 * 2.2;
+            const fwhmPx = fwhmArcsec / (3600 * degPerPx);
+            const baseFitPx = Math.max(7, Math.min(26, fwhmPx * 1.4));
+            const size = (isSelected ? Math.max(baseFitPx * 1.25, 12) : baseFitPx) * pxScale;
             const half = size / 2;
 
             const matchedTrack = tracks.find((t) => {
@@ -409,12 +423,13 @@ export function WcsSvgOverlay({
             }
             const isConflict = Boolean(trackLabel && matchedTrack?.includes("CONFLICT"));
             const isAmbiguous = Boolean((d.flags && d.flags & 4) || (d.confidence != null && d.confidence < 0.90));
+            const targetColor = trackLabel === "B" ? "#f97316" : trackLabel === "A" ? "#38bdf8" : "#22c55e";
             const detStroke = isConflict
               ? "#f59e0b"
               : isAmbiguous
                 ? "#fbbf24"
                 : isConfirmed
-                  ? "#38bdf8"
+                  ? targetColor
                   : isSelected
                     ? "#4ade80"
                     : "#22c55e";
@@ -431,12 +446,30 @@ export function WcsSvgOverlay({
                 aria-label={`Detection ${displayLabel}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectDetection?.(d);
+                  if (isConfirmed) {
+                    onSelectTrack?.(trackLabel!);
+                  } else if (inBox && onTrackDetection) {
+                    if (tracks.length >= 2) {
+                      setCapNotice("Tracking cap reached: Max 2 targets (Target A, Target B). Untrack one first.");
+                      setTimeout(() => setCapNotice(null), 3500);
+                      onSelectDetection?.(d);
+                    } else {
+                      onTrackDetection(d);
+                    }
+                  } else {
+                    onSelectDetection?.(d);
+                  }
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.stopPropagation();
-                    onSelectDetection?.(d);
+                    if (isConfirmed) {
+                      onSelectTrack?.(trackLabel!);
+                    } else if (inBox && onTrackDetection && tracks.length < 2) {
+                      onTrackDetection(d);
+                    } else {
+                      onSelectDetection?.(d);
+                    }
                   }
                 }}
               >
@@ -445,12 +478,35 @@ export function WcsSvgOverlay({
                   y={screenY - half}
                   width={size}
                   height={size}
-                  fill={isSelected ? "rgba(34, 197, 94, 0.15)" : "none"}
+                  fill={isSelected ? "rgba(34, 197, 94, 0.15)" : isConfirmed ? (trackLabel === "B" ? "rgba(249, 115, 22, 0.15)" : "rgba(56, 189, 248, 0.15)") : inBox ? "rgba(34, 197, 94, 0.06)" : "none"}
                   stroke={detStroke}
                   strokeWidth={isSelected ? 1.5 : 1}
                   strokeDasharray={isAmbiguous ? "3,2" : undefined}
                   vectorEffect="non-scaling-stroke"
                 />
+                {trackLabel && (
+                  <g transform={`translate(${screenX - half}, ${screenY - half - 12 * pxScale})`}>
+                    <rect
+                      x={0}
+                      y={0}
+                      width={18 * pxScale}
+                      height={10 * pxScale}
+                      rx={2}
+                      fill={trackLabel === "B" ? "#ea580c" : "#0284c7"}
+                    />
+                    <text
+                      x={9 * pxScale}
+                      y={7.5 * pxScale}
+                      fill="#ffffff"
+                      fontSize={7.5 * pxScale}
+                      fontWeight="bold"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                    >
+                      {trackLabel}
+                    </text>
+                  </g>
+                )}
                 {isAmbiguous && (
                   <text
                     x={screenX + half + 2 * pxScale}
@@ -529,18 +585,23 @@ export function WcsSvgOverlay({
           trajPoints.map((pt, idx) => {
             if (idx === 0) return null;
             const prev = trajPoints[idx - 1]!;
+            const isDrawn = !playing || idx <= activeEpochIndex;
+            const isLeading = playing && idx === activeEpochIndex;
+
             return (
               <g key={`traj-seg-${idx}`} className="pointer-events-none">
                 {/* Atmospheric glow beneath active trajectory */}
-                <line
-                  x1={prev.x}
-                  y1={prev.y}
-                  x2={pt.x}
-                  y2={pt.y}
-                  stroke="var(--oi-orange)"
-                  strokeWidth={3.5 * pxScale}
-                  strokeOpacity={0.25}
-                />
+                {isDrawn && (
+                  <line
+                    x1={prev.x}
+                    y1={prev.y}
+                    x2={pt.x}
+                    y2={pt.y}
+                    stroke="var(--oi-orange)"
+                    strokeWidth={(isLeading ? 4.5 : 3.5) * pxScale}
+                    strokeOpacity={isLeading ? 0.45 : 0.25}
+                  />
+                )}
                 {/* Directional trajectory vector line with arrowhead */}
                 <line
                   x1={prev.x}
@@ -548,9 +609,10 @@ export function WcsSvgOverlay({
                   x2={pt.x}
                   y2={pt.y}
                   stroke="var(--oi-orange)"
-                  strokeWidth={1.4 * pxScale}
-                  strokeOpacity={0.9}
-                  markerEnd="url(#trajArrow)"
+                  strokeWidth={(isLeading ? 1.8 : 1.4) * pxScale}
+                  strokeOpacity={isDrawn ? 0.95 : 0.15}
+                  strokeDasharray={isDrawn ? undefined : "3,3"}
+                  markerEnd={isDrawn ? "url(#trajArrow)" : undefined}
                 />
               </g>
             );
@@ -558,7 +620,8 @@ export function WcsSvgOverlay({
 
         {/* 3. Clickable Waypoint Badges along Trajectory (E1, E2, E3...) */}
         {trajPoints.map((pt, idx) => {
-          const isCurrent = pt.epoch === currentEpoch;
+          const isReached = !playing || idx <= activeEpochIndex;
+          const isCurrent = idx === activeEpochIndex;
           return (
             <g
               key={`traj-wpt-${idx}`}
@@ -566,6 +629,7 @@ export function WcsSvgOverlay({
               style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
               role="button"
               tabIndex={0}
+              opacity={isReached ? 1 : 0.35}
               onClick={(e) => {
                 e.stopPropagation();
                 if (pt.epoch) onSelectEpoch?.(pt.epoch);
@@ -579,14 +643,14 @@ export function WcsSvgOverlay({
               aria-label={`Jump to Epoch ${pt.epoch ?? idx + 1}`}
             >
               <circle
-                r={(isCurrent ? 6 : 4) * pxScale}
-                fill="rgba(245, 158, 11, 0.15)"
-                stroke="var(--oi-orange)"
-                strokeWidth={0.9 * pxScale}
-                strokeDasharray={`${2 * pxScale},${2 * pxScale}`}
+                r={(isCurrent ? 6.5 : 4) * pxScale}
+                fill={isCurrent ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.15)"}
+                stroke={isCurrent ? "#ffffff" : "var(--oi-orange)"}
+                strokeWidth={(isCurrent ? 1.4 : 0.9) * pxScale}
+                strokeDasharray={isCurrent ? undefined : `${2 * pxScale},${2 * pxScale}`}
               />
               <circle
-                r={(isCurrent ? 3 : 2) * pxScale}
+                r={(isCurrent ? 3.5 : 2) * pxScale}
                 fill={isCurrent ? "#ffffff" : "var(--oi-orange)"}
                 stroke="var(--oi-orange)"
                 strokeWidth={0.8 * pxScale}
@@ -913,6 +977,32 @@ export function WcsSvgOverlay({
             />
           );
         })()}
+
+        {capNotice && (
+          <g transform={`translate(${wcs.naxis1 / 2}, ${24 * pxScale})`} className="pointer-events-none">
+            <rect
+              x={-140 * pxScale}
+              y={-12 * pxScale}
+              width={280 * pxScale}
+              height={24 * pxScale}
+              rx={6 * pxScale}
+              fill="rgba(15, 23, 42, 0.92)"
+              stroke="#f59e0b"
+              strokeWidth={1 * pxScale}
+            />
+            <text
+              x={0}
+              y={4 * pxScale}
+              fill="#fcd34d"
+              fontSize={8.5 * pxScale}
+              fontFamily="sans-serif"
+              textAnchor="middle"
+              fontWeight="bold"
+            >
+              {capNotice}
+            </text>
+          </g>
+        )}
       </svg>
 
       {/* Accessible mirror table for screen readers (FRONTEND.md §5) */}
