@@ -56,13 +56,17 @@ export function clientToSkyCoords(
   pan: { x: number; y: number },
   zoom: number,
   wcs: WcsParams,
+  imgWidth?: number,
+  imgHeight?: number,
 ): { ra: number; dec: number } | null {
+  const w = imgWidth ?? rect.width;
+  const h = imgHeight ?? rect.height;
   const canvasX = (clientX - rect.left - pan.x) / zoom;
   const canvasY = (clientY - rect.top - pan.y) / zoom;
-  if (canvasX < 0 || canvasX > rect.width || canvasY < 0 || canvasY > rect.height) {
+  if (canvasX < 0 || canvasX > w || canvasY < 0 || canvasY > h) {
     return null;
   }
-  const px = (canvasX / rect.width) * wcs.naxis1;
-  const py = (canvasY / rect.height) * wcs.naxis2;
+  const px = (canvasX / w) * wcs.naxis1;
+  const py = wcs.naxis2 - (canvasY / h) * wcs.naxis2;
   return pixelToSky(px, py, wcs);
 }

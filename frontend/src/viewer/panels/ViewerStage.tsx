@@ -14,7 +14,6 @@ import { WcsSvgOverlay, type SelectedSourceData } from "../overlays/WcsSvgOverla
 import { useViewStore } from "../state/viewStore";
 import { nextTrackLabel } from "../state/useViewerData";
 import {
-  clampZoom,
   clientToSkyCoords,
   computeZoomAtPoint,
 } from "./viewerTransform";
@@ -114,20 +113,40 @@ export function ViewerStage({
     initPanY: number;
   } | null>(null);
 
+  const getCenterPan = useCallback(
+    (targetZoom = 1) => {
+      const vp = viewportRef.current;
+      if (!vp) return { x: 0, y: 0 };
+      const rect = vp.getBoundingClientRect();
+      const dim = Math.min(rect.width * 0.9, rect.height * 0.9, 768);
+      const w = dim;
+      const h = dim * ((wcs.naxis2 || 128) / (wcs.naxis1 || 128));
+      return {
+        x: (rect.width - w * targetZoom) / 2,
+        y: (rect.height - h * targetZoom) / 2,
+      };
+    },
+    [wcs.naxis1, wcs.naxis2],
+  );
+
   // Reset view on coordinate target change; preserve zoom/pan across blink epochs
   const prevCoordsRef = useRef({ ra, dec });
   useEffect(() => {
     if (prevCoordsRef.current.ra !== ra || prevCoordsRef.current.dec !== dec) {
       prevCoordsRef.current = { ra, dec };
-      setPan({ x: 0, y: 0 });
+      setPan(getCenterPan(1));
       setZoom(1);
     }
-  }, [ra, dec]);
+  }, [ra, dec, getCenterPan]);
+
+  useEffect(() => {
+    setPan(getCenterPan(1));
+  }, [getCenterPan]);
 
   const resetView = useCallback(() => {
-    setPan({ x: 0, y: 0 });
+    setPan(getCenterPan(1));
     setZoom(1);
-  }, []);
+  }, [getCenterPan]);
 
   const onWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
@@ -141,6 +160,29 @@ export function ViewerStage({
         factor,
         e.clientX,
         e.clientY,
+        pan.x,
+        pan.y,
+        rect.left,
+        rect.top,
+      );
+      setZoom(res.zoom);
+      setPan({ x: res.panX, y: res.panY });
+    },
+    [zoom, pan],
+  );
+
+  const handleZoomButton = useCallback(
+    (factor: number) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const rect = vp.getBoundingClientRect();
+      const cx = rect.left + rect.width * 0.5;
+      const cy = rect.top + rect.height * 0.5;
+      const res = computeZoomAtPoint(
+        zoom,
+        factor,
+        cx,
+        cy,
         pan.x,
         pan.y,
         rect.left,
@@ -172,12 +214,15 @@ export function ViewerStage({
       const vp = viewportRef.current;
       if (vp) {
         const rect = vp.getBoundingClientRect();
-        const sky = clientToSkyCoords(e.clientX, e.clientY, rect, pan, zoom, wcs);
+        const dim = Math.min(rect.width * 0.9, rect.height * 0.9, 768);
+        const w = dim;
+        const h = dim * ((wcs.naxis2 || 128) / (wcs.naxis1 || 128));
+        const sky = clientToSkyCoords(e.clientX, e.clientY, rect, pan, zoom, wcs, w, h);
         if (sky) {
           const canvasX = (e.clientX - rect.left - pan.x) / zoom;
           const canvasY = (e.clientY - rect.top - pan.y) / zoom;
-          const px = (canvasX / rect.width) * wcs.naxis1;
-          const py = wcs.naxis2 - (canvasY / rect.height) * wcs.naxis2;
+          const px = (canvasX / w) * wcs.naxis1;
+          const py = wcs.naxis2 - (canvasY / h) * wcs.naxis2;
           setCursorInfo({ ra: sky.ra, dec: sky.dec, px, py });
         } else {
           setCursorInfo(null);
@@ -303,15 +348,22 @@ export function ViewerStage({
         <AladinBase wcs={wcs} ra={ra} dec={dec} fov={fov} enabled={hips} />
 
         <div
-          className="viewer-transform-layer relative flex items-center justify-center w-full h-full"
+          className="viewer-transform-layer absolute inset-0 pointer-events-none"
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "center center",
+            transformOrigin: "0 0",
             transition: isPanning ? "none" : "transform 0.05s ease-out",
           }}
         >
           {frameA && (
-            <div className="relative inline-block select-none shadow-2xl">
+            <div
+              className="relative inline-block select-none shadow-2xl pointer-events-auto"
+              style={{
+                width: `min(90vw, 90vh, 768px)`,
+                height: `min(90vw, 90vh, 768px)`,
+                aspectRatio: `${wcs.naxis1 || 1} / ${wcs.naxis2 || 1}`,
+              }}
+            >
               {op !== "none" && bufA ? (
                 <WebGL2SkyCanvas
                   frameA={bufA}
@@ -329,7 +381,8 @@ export function ViewerStage({
                   src={displayUrl}
                   alt={frameA.epoch}
                   draggable={false}
-                  className="block max-w-[85vw] max-h-[85vh] object-contain select-none pointer-events-none"
+                  className="block w-full h-full object-contain select-none pointer-events-none"
+                  style={{ imageRendering: "pixelated" }}
                 />
               )}
               <WcsSvgOverlay
@@ -431,7 +484,7 @@ export function ViewerStage({
           <button
             type="button"
             className="viewer-zoom-btn"
-            onClick={() => setZoom((z) => clampZoom(z * 1.25))}
+            onClick={() => handleZoomButton(1.25)}
             title="Zoom In (+)"
             aria-label="Zoom In"
           >
@@ -440,7 +493,7 @@ export function ViewerStage({
           <button
             type="button"
             className="viewer-zoom-btn"
-            onClick={() => setZoom((z) => clampZoom(z / 1.25))}
+            onClick={() => handleZoomButton(1 / 1.25)}
             title="Zoom Out (−)"
             aria-label="Zoom Out"
           >

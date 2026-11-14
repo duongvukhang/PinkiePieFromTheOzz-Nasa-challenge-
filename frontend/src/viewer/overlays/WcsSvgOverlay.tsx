@@ -352,11 +352,16 @@ export function WcsSvgOverlay({
           );
         })}
 
-        {/* 4. Detected Sources Overlay — thin green squares with persistent track labels */}
+        {/* 4. Detected Sources Overlay — aligned green bounding squares with persistent track labels */}
         {showSources &&
           detections.map((d) => {
-            const screenX = d.x_pix != null ? d.x_pix : skyToPixel(d.ra, d.dec, wcs).x;
-            const screenY = d.y_pix != null ? wcs.naxis2 - d.y_pix : skyToPixel(d.ra, d.dec, wcs).y;
+            const p = skyToPixel(d.ra, d.dec, wcs);
+            if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+            if (p.x < -10 || p.x > wcs.naxis1 + 10 || p.y < -10 || p.y > wcs.naxis2 + 10) {
+              return null;
+            }
+            const screenX = p.x;
+            const screenY = p.y;
             const dLabel =
               d.x_pix != null && d.y_pix != null
                 ? `src_${d.id.toString(16).padStart(8, "0")}_${Math.round(d.x_pix)}_${Math.round(d.y_pix)}`
@@ -365,7 +370,7 @@ export function WcsSvgOverlay({
               selectedTarget?.label === dLabel ||
               String(d.id) === selectedTarget?.label ||
               selectedTarget?.label === `DET #${d.id}`;
-            const size = isSelected ? 18 : 10;
+            const size = (isSelected ? 14 : 8) * pxScale;
             const half = size / 2;
 
             const matchedTrack = tracks.find((t) => {
