@@ -148,12 +148,12 @@ export function ViewerStage({
     setZoom(1);
   }, [getCenterPan]);
 
-  const onWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>) => {
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const vp = viewportRef.current;
-      if (!vp) return;
-      const rect = vp.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
       const res = computeZoomAtPoint(
         zoom,
@@ -167,9 +167,10 @@ export function ViewerStage({
       );
       setZoom(res.zoom);
       setPan({ x: res.panX, y: res.panY });
-    },
-    [zoom, pan],
-  );
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [zoom, pan]);
 
   const handleZoomButton = useCallback(
     (factor: number) => {
@@ -339,7 +340,6 @@ export function ViewerStage({
         style={{
           cursor: selectBoxMode ? "crosshair" : isPanning ? "grabbing" : "crosshair",
         }}
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime
 import math
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
@@ -115,6 +116,40 @@ def _parse_bbox(raw: str) -> tuple[float, float, float, float]:
     return ra_min, dec_min, ra_max, dec_max
 
 
+async def _dispatch_or_run_job(
+    job_id: UUID,
+    task: Any,
+    execute_fn: Any,
+    params: dict[str, Any],
+    store: JobStore,
+    queue: str = "heavy",
+    **exec_kwargs: Any,
+) -> None:
+    if is_eager_mode():
+        try:
+            await asyncio.to_thread(execute_fn, job_id, params, store=store, **exec_kwargs)
+        except Exception as exc:
+            store.update_job(
+                job_id,
+                status="failed",
+                error={"type": type(exc).__name__, "detail": str(exc)},
+                finished_at=datetime.now(UTC),
+            )
+    else:
+        try:
+            dispatch_task(task, str(job_id), params, queue=queue)
+        except Exception:
+            try:
+                await asyncio.to_thread(execute_fn, job_id, params, store=store, **exec_kwargs)
+            except Exception as exc:
+                store.update_job(
+                    job_id,
+                    status="failed",
+                    error={"type": type(exc).__name__, "detail": str(exc)},
+                    finished_at=datetime.now(UTC),
+                )
+
+
 @router.post(
     "/analyses",
     status_code=status.HTTP_202_ACCEPTED,
@@ -217,25 +252,30 @@ async def create_analysis(
                 (job.outputs or {}).get("analysis_id") or existing.get("analysis_id") or analysis_id
             )
         )
-        job_status: JobStatus = job.status
+        run_params = {**job_params, **existing, "analysis_id": str(analysis_id)}
+        should_run = job.status == "queued" and is_eager_mode()
     else:
-        if is_eager_mode():
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(
-                    execute_run_analysis,
-                    job.id,
-                    job_params,
-                    store=store,
-                    storage=storage,
-                    spherex_provider=spherex,
-                    gaia_provider=gaia,
-                    wise_provider=wise,
-                    mpc_provider=mpc,
-                )
-        else:
-            dispatch_task(run_analysis, str(job.id), job_params, queue="heavy")
+        run_params = job_params
+        should_run = True
+
+    if should_run:
+        await _dispatch_or_run_job(
+            job.id,
+            run_analysis,
+            execute_run_analysis,
+            run_params,
+            store=store,
+            queue="heavy",
+            storage=storage,
+            spherex_provider=spherex,
+            gaia_provider=gaia,
+            wise_provider=wise,
+            mpc_provider=mpc,
+        )
         latest = store.get_job(job.id)
         job_status = latest.status if latest else job.status
+    else:
+        job_status = job.status
 
     return AnalysisAcceptedResponse(job_id=job.id, status=job_status, analysis_id=analysis_id)
 
@@ -374,22 +414,21 @@ async def _enqueue_tracks_job(
         user_id=user_id,
         project_id=project_id,
     )
-    if deduplicated:
+    if deduplicated and (job.status != "queued" or not is_eager_mode()):
         return job.id, job.status
-    if is_eager_mode():
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(
-                execute_run_tracks,
-                job.id,
-                job_params,
-                store=store,
-                storage=storage,
-                gaia_provider=gaia,
-                wise_provider=wise,
-                mpc_provider=mpc,
-            )
-    else:
-        dispatch_task(run_tracks, str(job.id), job_params, queue="heavy")
+    run_params = (store.get_job_params(job.id) or job_params) if deduplicated else job_params
+    await _dispatch_or_run_job(
+        job.id,
+        run_tracks,
+        execute_run_tracks,
+        run_params,
+        store=store,
+        queue="heavy",
+        storage=storage,
+        gaia_provider=gaia,
+        wise_provider=wise,
+        mpc_provider=mpc,
+    )
     latest = store.get_job(job.id)
     return job.id, (latest.status if latest else job.status)
 

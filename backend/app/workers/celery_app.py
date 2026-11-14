@@ -32,6 +32,7 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    broker_connection_retry_on_startup=False,
     task_always_eager=_default_eager(),
     task_routes={
         "app.workers.tasks_fast.*": {"queue": "fast"},
@@ -52,6 +53,6 @@ def dispatch_task(task: Any, *args: Any, queue: str = "fast", **kwargs: Any) -> 
     if is_eager_mode():
         return task.apply(args=args, kwargs=kwargs)
     try:
-        return task.apply_async(args=args, kwargs=kwargs, queue=queue)
+        return task.apply_async(args=args, kwargs=kwargs, queue=queue, retry=False)
     except Exception:
         return task.apply(args=args, kwargs=kwargs)

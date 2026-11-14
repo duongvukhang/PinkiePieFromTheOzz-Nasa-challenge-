@@ -209,6 +209,23 @@ export function useViewerData(search: string, skipSecondary = false) {
             fov_arcmin: fov,
             release,
           });
+      let status = acc.status;
+      let delay = 150;
+      for (let i = 0; i < 30 && status !== "succeeded" && status !== "failed"; i++) {
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(1000, Math.round(delay * 1.25));
+        status = (await api.getJob(acc.job_id)).status;
+      }
+      if (status === "failed") {
+        throw new ApiError(500, `Analysis job ${acc.job_id} failed`, "Analysis processing failed");
+      }
+      if (status !== "succeeded") {
+        throw new ApiError(
+          504,
+          `Analysis job ${acc.job_id} timed out`,
+          "Analysis processing timed out",
+        );
+      }
       const [sources, suggestions] = await Promise.all([
         api.getAnalysisSources(acc.analysis_id),
         api.getAnalysisSuggestions(acc.analysis_id),

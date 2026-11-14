@@ -7,7 +7,7 @@ from collections.abc import Iterator, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import astropy.units as u
 import numpy as np
@@ -518,3 +518,55 @@ def test_analysis_validation_and_error_states(analysis_env: dict[str, Any]) -> N
     )
     assert client.get(f"/api/v1/analyses/{aid_ok}/sources?bbox=bad").status_code == 422
     assert client.get(f"/api/v1/analyses/{aid_ok}/sources?bbox=10,20,30,10").status_code == 422
+
+
+def test_deduplicated_analysis_runs_in_eager_mode(analysis_env: dict[str, Any]) -> None:
+    client: TestClient = analysis_env["client"]
+    store: InMemoryJobStore = analysis_env["store"]
+
+    aid = uuid4()
+    norm_params = {"mode": "sky_field", "ra": 10.0, "dec": 20.0, "fov_arcmin": 10.0, "release": "latest"}
+    job_params = {**norm_params, "analysis_id": str(aid)}
+    job, _ = store.create_or_get_job(
+        task=ANALYSIS_TASK_NAME,
+        queue="heavy",
+        params=job_params,
+        params_hash=compute_params_hash(ANALYSIS_TASK_NAME, norm_params, "latest"),
+    )
+    assert job.status == "queued"
+
+    res = client.post("/api/v1/analyses", json={"ra": 10.0, "dec": 20.0, "fov_arcmin": 10.0, "release": "latest"})
+    assert res.status_code == 202
+    body = res.json()
+    assert body["job_id"] == str(job.id)
+    assert body["status"] == "succeeded"
+
+    latest = store.get_job(job.id)
+    assert latest is not None
+    assert latest.status == "succeeded"
+
+
+def test_analysis_failure_marks_job_failed(
+    analysis_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client: TestClient = analysis_env["client"]
+    store: InMemoryJobStore = analysis_env["store"]
+
+    import app.api.v1.objects as objects_mod
+
+    def fail_execute(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Simulated analysis pipeline failure")
+
+    monkeypatch.setattr(objects_mod, "execute_run_analysis", fail_execute)
+
+    res = client.post("/api/v1/analyses", json={"ra": 12.0, "dec": -15.0, "fov_arcmin": 5.0})
+    assert res.status_code == 202
+    body = res.json()
+    assert body["status"] == "failed"
+
+    latest = store.get_job(UUID(body["job_id"]))
+    assert latest is not None
+    assert latest.status == "failed"
+    assert latest.error is not None
+    assert "Simulated analysis pipeline failure" in str(latest.error)
+
