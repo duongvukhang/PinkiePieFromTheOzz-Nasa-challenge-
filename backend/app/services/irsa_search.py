@@ -284,8 +284,9 @@ class IRSASearchService:
         query = f"SELECT TOP {max_records} obs_id, s_ra, s_dec, energy_bandpassname, em_min, em_max, t_min, t_max, access_url FROM spherex.obscore WHERE {' AND '.join(where_clauses)}"
 
         records: list[ArchiveRecord] = []
+        failure_reason: str | None = None
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=45.0) as client:
                 res = client.post(
                     f"{self.tap_url}/sync",
                     data={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query, "FORMAT": "json"},
@@ -310,8 +311,12 @@ class IRSASearchService:
                         )
                     if records:
                         return records, "LIVE_ARCHIVE", ["Retrieved live SPHEREx ObsCore metadata from NASA IRSA."]
-        except Exception:
-            pass
+                else:
+                    failure_reason = f"NASA IRSA TAP responded with HTTP {res.status_code}."
+        except httpx.ReadTimeout:
+            failure_reason = "NASA IRSA server timed out (>45s latency) under heavy public load."
+        except Exception as exc:
+            failure_reason = f"NASA IRSA connection note: {exc}"
 
         # Check bundled authentic SPHEREx products in samples directory
         samples_dir = Path(__file__).resolve().parents[2] / "data" / "samples"
@@ -368,9 +373,19 @@ class IRSASearchService:
                 )
             )
 
-        return records, "SYNTHETIC_DEMO", [
-            "SPHEREx public release coverage pending; generated standard 6-month survey interval epochs for spatial validation."
-        ]
+        fallback_notes: list[str] = []
+        if start_mjd is not None and start_mjd < 60750.0:  # Prior to March 2025 launch
+            fallback_notes.append(
+                "SPHEREx launched in March 2025; science observations begin in mid-2025. The selected start date pre-dates satellite operations."
+            )
+        elif failure_reason:
+            fallback_notes.append(f"{failure_reason} Generated standard 6-month survey interval epochs for spatial validation.")
+        else:
+            fallback_notes.append(
+                "No matching SPHEREx observations found for these coordinates in this date range. Generated standard survey interval epochs for spatial validation."
+            )
+
+        return records, "SYNTHETIC_DEMO", fallback_notes
 
     def _search_wise(
         self,

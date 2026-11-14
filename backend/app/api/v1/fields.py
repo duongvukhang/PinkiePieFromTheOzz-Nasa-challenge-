@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 from typing import Annotated, Any, Literal
@@ -112,7 +113,7 @@ async def search_nasa_archive(
             band=band,
             max_records=max_records,
         )
-        return irsa_search_service.search_archive(params)
+        return await asyncio.to_thread(irsa_search_service.search_archive, params)
     except ValueError as exc:
         raise APIProblemError(status.HTTP_400_BAD_REQUEST, "Invalid Archive Request", str(exc)) from exc
 
@@ -124,7 +125,7 @@ async def load_archive_product(
 ) -> dict[str, Any]:
     """Stream download and register an authentic NASA archive FITS into the active workspace."""
     try:
-        return irsa_search_service.load_archive_product(payload, storage)
+        return await asyncio.to_thread(irsa_search_service.load_archive_product, payload, storage)
     except ValueError as exc:
         raise APIProblemError(status.HTTP_400_BAD_REQUEST, "Invalid Archive Request", str(exc)) from exc
 
