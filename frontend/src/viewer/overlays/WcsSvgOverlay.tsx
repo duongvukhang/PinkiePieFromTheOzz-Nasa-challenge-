@@ -7,7 +7,20 @@ import type {
 } from "../../api/client";
 import type { WcsParams } from "../aladin/wcs";
 import { pixelToSky, skyToPixel } from "../aladin/wcs";
-import type { SelectedSourceData } from "../panels/SourceInfoCard";
+export interface SelectedSourceData {
+  id: string;
+  label: string;
+  ra: number;
+  dec: number;
+  pixel_x?: number;
+  pixel_y?: number;
+  pos_err_arcsec?: number;
+  peak_flux?: number;
+  flux_unit?: string;
+  snr?: number | null;
+  fwhm_pixels?: number;
+  isTrack: boolean;
+}
 
 const OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"];
 

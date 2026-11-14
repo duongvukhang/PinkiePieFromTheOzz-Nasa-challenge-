@@ -9,19 +9,13 @@ import type {
 } from "../../api/client";
 import { AladinBase } from "../aladin/AladinBase";
 import type { WcsParams } from "../aladin/wcs";
-import { skyToPixel } from "../aladin/wcs";
 import { WebGL2SkyCanvas } from "../gl/WebGL2SkyCanvas";
-import { WcsSvgOverlay } from "../overlays/WcsSvgOverlay";
+import { WcsSvgOverlay, type SelectedSourceData } from "../overlays/WcsSvgOverlay";
 import { useViewStore } from "../state/viewStore";
 import { nextTrackLabel } from "../state/useViewerData";
-import { BottomDock } from "./BottomDock";
-import { SelectedObjectBar } from "./SelectedObjectBar";
-import { SourceInfoCard, type SelectedSourceData } from "./SourceInfoCard";
-import { TimeController } from "./TimeController";
 import {
   clampZoom,
   clientToSkyCoords,
-  computeCenterPan,
   computeZoomAtPoint,
 } from "./viewerTransform";
 
@@ -82,21 +76,12 @@ export function ViewerStage({
     hips,
     track,
     obj,
-    fps,
-    playing,
     addTrack,
     setView,
     stretch,
     colormap,
     op,
     swipe,
-    isLayersOpen,
-    isInspectorOpen,
-    isTimelineOpen,
-    toggleLayers,
-    toggleTimeline,
-    openInspector,
-    inspectorTab,
   } = useViewStore();
 
   const displayUrl = useMemo(() => {
@@ -108,11 +93,11 @@ export function ViewerStage({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
-  const [showSources, setShowSources] = useState(true);
-  const [showLabels, setShowLabels] = useState(true);
-  const [showGrid, setShowGrid] = useState(false);
-  const [showTrajectories, setShowTrajectories] = useState(true);
-  const [showUncertainty, setShowUncertainty] = useState(false);
+  const showSources = true;
+  const showLabels = true;
+  const showGrid = false;
+  const showTrajectories = true;
+  const showUncertainty = false;
 
   const [cursorInfo, setCursorInfo] = useState<{
     ra: number;
@@ -143,28 +128,6 @@ export function ViewerStage({
     setPan({ x: 0, y: 0 });
     setZoom(1);
   }, []);
-
-  const centerTarget = useCallback(
-    (targetRa: number, targetDec: number) => {
-      const vp = viewportRef.current;
-      if (!vp) return;
-      const rect = vp.getBoundingClientRect();
-      const px = skyToPixel(targetRa, targetDec, wcs);
-      const targetZoom = Math.max(zoom, 2.5);
-      const nextPan = computeCenterPan(
-        px.x,
-        px.y,
-        wcs.naxis1,
-        wcs.naxis2,
-        rect.width,
-        rect.height,
-        targetZoom,
-      );
-      setZoom(targetZoom);
-      setPan(nextPan);
-    },
-    [wcs, zoom],
-  );
 
   const onWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
@@ -414,80 +377,6 @@ export function ViewerStage({
             </div>
           )}
         </div>
-
-        {/* Top-Right Floating Source Info HUD */}
-        {selectedObjInfo && (
-          <SourceInfoCard
-            source={selectedObjInfo}
-            wcs={wcs}
-            onClose={() => setView({ obj: undefined })}
-            onInspect={() => openInspector("object")}
-            onCenter={() => centerTarget(selectedObjInfo.ra, selectedObjInfo.dec)}
-            onOpenSpectrum={() => openInspector("spectrum")}
-            onPredictMotion={() => openInspector("object")}
-            onTrack={() => {
-              const nextLbl = nextTrackLabel(track);
-              addTrack(nextLbl, selectedObjInfo.ra, selectedObjInfo.dec);
-              setView({ obj: nextLbl });
-            }}
-          />
-        )}
-
-        {/* Bottom-Right Floating Observation Epoch Controller */}
-        {isTimelineOpen && frames && frames.length > 0 && frameA && (
-          <TimeController
-            frames={frames}
-            currentFrame={frameA}
-            currentIndex={frames.findIndex((f) => f.frame_id === frameA.frame_id)}
-            playing={playing}
-            fps={fps}
-            onSelectFrame={(idx) => setView({ frame: idx })}
-            onTogglePlay={() => setView({ playing: !playing })}
-            onChangeSpeed={(newFps) => setView({ fps: newFps })}
-          />
-        )}
-
-        {/* Bottom-Center Floating Action Bar */}
-        {selectedObjInfo && (
-          <SelectedObjectBar
-            label={selectedObjInfo.label}
-            ra={selectedObjInfo.ra}
-            dec={selectedObjInfo.dec}
-            snr={selectedObjInfo.snr}
-            isTrack={selectedObjInfo.isTrack}
-            onCenter={() => centerTarget(selectedObjInfo.ra, selectedObjInfo.dec)}
-            onInspect={() => openInspector("object")}
-            onOpenSpectrum={() => openInspector("spectrum")}
-            onTrack={() => {
-              const nextLbl = nextTrackLabel(track);
-              addTrack(nextLbl, selectedObjInfo.ra, selectedObjInfo.dec);
-              setView({ obj: nextLbl });
-            }}
-            onDeselect={() => setView({ obj: undefined })}
-          />
-        )}
-
-        {/* Bottom-Center Pill Dock for Viewing Toggles */}
-        <BottomDock
-          showSources={showSources}
-          onToggleSources={() => setShowSources((s) => !s)}
-          showLabels={showLabels}
-          onToggleLabels={() => setShowLabels((s) => !s)}
-          showGrid={showGrid}
-          onToggleGrid={() => setShowGrid((s) => !s)}
-          showTrajectories={showTrajectories}
-          onToggleTrajectories={() => setShowTrajectories((s) => !s)}
-          showUncertainty={showUncertainty}
-          onToggleUncertainty={() => setShowUncertainty((s) => !s)}
-          tracksCount={track.length}
-          onToggleTracks={() => openInspector("object")}
-          isSpectrumOpen={isInspectorOpen && inspectorTab === "spectrum"}
-          onToggleSpectrum={() => openInspector("spectrum")}
-          isTimelineOpen={isTimelineOpen}
-          onToggleTimeline={toggleTimeline}
-          isSettingsOpen={isLayersOpen}
-          onToggleSettings={toggleLayers}
-        />
 
         {/* Bottom-Left Focal Plane Coordinate HUD */}
         <div className="viewer-coord-hud stellarium-glass" role="status" aria-live="off">
