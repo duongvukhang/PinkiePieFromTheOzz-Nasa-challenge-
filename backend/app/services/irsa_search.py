@@ -323,7 +323,7 @@ class IRSASearchService:
                 else:
                     failure_reason = f"NASA IRSA TAP responded with HTTP {res.status_code}."
         except httpx.ReadTimeout:
-            failure_reason = "NASA IRSA server timed out (>45s latency) under heavy public load."
+            failure_reason = "NASA IRSA server timed out (>10s latency) under heavy public load."
         except Exception as exc:
             failure_reason = f"NASA IRSA connection note: {exc}"
 
