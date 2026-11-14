@@ -56,6 +56,10 @@ def test_multi_archive_search_spherex():
     res = irsa_search_service.search_archive(params)
     assert res.total_found > 0
     assert res.total_epochs > 0
+    assert res.service_status in ("LIVE_ARCHIVE", "SYNTHETIC_DEMO")
+    if res.service_status == "LIVE_ARCHIVE":
+        assert res.is_offline_fallback is False
+        assert any("SIAv2" in n for n in res.notes)
     assert res.epochs[0].epoch_index == 0
     assert res.epochs[0].time_delta_days == 0.0
     assert len(res.epochs) >= 2
@@ -180,3 +184,48 @@ def test_synthetic_demo_tagging():
     assert res.is_offline_fallback is True
     assert all(r.is_cached_fallback is True for r in res.records)
     assert all(r.source_origin == "synthetic_demo" for r in res.records)
+
+
+def test_search_spherex_siv2_parsing_and_fallback(monkeypatch: pytest.MonkeyPatch):
+    """Test SIAv2 VOTable parsing, column extraction, band/time filtering, and fallback in _search_spherex."""
+    from pathlib import Path
+    import httpx
+    from app.services.irsa_search import IRSASearchService
+
+    xml_path = Path(__file__).resolve().parents[1] / "fixtures" / "cassettes" / "spherex_sia_wise0855.xml"
+    content = xml_path.read_bytes()
+
+    def mock_handler_ok(request: httpx.Request) -> httpx.Response:
+        assert "COLLECTION=spherex_dr1" in str(request.url)
+        assert "POS=CIRCLE" in str(request.url)
+        return httpx.Response(200, content=content)
+
+    orig_client = httpx.Client
+    service = IRSASearchService()
+
+    # 1. Matching D5 band within MJD range
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: orig_client(transport=httpx.MockTransport(mock_handler_ok)))
+    recs, status, notes = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D5", 10)
+    assert status == "LIVE_ARCHIVE"
+    assert len(recs) == 1
+    assert recs[0].obs_id == "sphx_l2_2025_172_arr5_001"
+    assert recs[0].detector == "D5"
+    assert recs[0].mjd_obs == pytest.approx(60850.409, abs=1e-3)
+    assert recs[0].wavelength_range_um == [3.82, 4.42]
+    assert recs[0].is_cached_fallback is False
+
+    # 2. Band filter exclusion fallback
+    recs_d1, _, _ = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D1", 10)
+    assert len(recs_d1) > 0
+    assert recs_d1[0].is_cached_fallback is True
+
+    # 3. HTTP error fallback to synthetic demo
+    def mock_handler_err(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"Server error")
+
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: orig_client(transport=httpx.MockTransport(mock_handler_err)))
+    recs_err, status_err, notes_err = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D5", 10)
+    assert status_err == "SYNTHETIC_DEMO"
+    assert len(recs_err) > 0
+    assert any("500" in n for n in notes_err)
+

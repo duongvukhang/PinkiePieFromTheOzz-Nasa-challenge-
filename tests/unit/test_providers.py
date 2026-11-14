@@ -215,7 +215,7 @@ def test_search_frames_metadata_date_and_band_filters() -> None:
 
     sia_reqs = [r for r in adapter.requests_seen if "/SIA?" in (r.url or "")]
     assert len(sia_reqs) == 1
-    assert "COLLECTION=spherex_qr" in (sia_reqs[0].url or "")
+    assert "COLLECTION=spherex_dr1" in (sia_reqs[0].url or "")
     assert "POS=CIRCLE" in (sia_reqs[0].url or "")
 
     f0, f1, f2 = all_frames
@@ -517,7 +517,7 @@ def test_new_release_detection() -> None:
     assert [r.release_id for r in live] == ["spherex_dr1", "spherex_qr"]
     assert live[1].release_date == date(2026, 10, 15)
     assert live[1].n_frames == 124500
-    assert live[1].profile_name == "spherex_qr_v1"
+    assert live[0].profile_name == "spherex_qr_v1"
 
     # Case 1: Only spherex_qr known -> detects spherex_dr1 new + spherex_qr updated
     report = provider.check_new_releases(

@@ -203,10 +203,15 @@ def group_records_into_epochs(records: list[ArchiveRecord], source_name: str) ->
 
 
 class IRSASearchService:
-    """Service querying NASA IRSA TAP, WISE, 2MASS, and SkyView services."""
+    """Service querying NASA IRSA SIAv2, TAP, WISE, 2MASS, and SkyView services."""
 
-    def __init__(self, tap_url: str = "https://irsa.ipac.caltech.edu/TAP") -> None:
+    def __init__(
+        self,
+        tap_url: str = "https://irsa.ipac.caltech.edu/TAP",
+        sia_url: str = "https://irsa.ipac.caltech.edu/SIA",
+    ) -> None:
         self.tap_url = tap_url
+        self.sia_url = sia_url
 
     def search_archive(self, params: ArchiveSearchParams) -> ArchiveSearchResponse:
         """Search requested NASA archive provider with spatial coordinates and date interval."""
@@ -277,51 +282,99 @@ class IRSASearchService:
         band: str | None,
         max_records: int,
     ) -> tuple[list[ArchiveRecord], str, list[str]]:
-        """Query official NASA IRSA SPHEREx ObsCore TAP table or synthesize sequence if unreleased."""
-        where_clauses = [
-            f"1=CONTAINS(POINT('ICRS', {ra:.6f}, {dec:.6f}), s_region)"
-        ]
-        if start_mjd is not None:
-            where_clauses.append(f"t_max >= {start_mjd:.4f}")
-        if end_mjd is not None:
-            where_clauses.append(f"t_min <= {end_mjd:.4f}")
-        if band and band.upper() != "ALL":
-            clean_b = band.strip().upper()
-            det_digit = clean_b[-1] if clean_b[-1].isdigit() else clean_b
-            where_clauses.append(f"(energy_bandpassname LIKE '%D{det_digit}%' OR energy_bandpassname LIKE '%LVF{det_digit}%')")
-
-        query = f"SELECT TOP {max_records} obs_id, s_ra, s_dec, energy_bandpassname, em_min, em_max, t_min, t_max, access_url FROM spherex.obscore WHERE {' AND '.join(where_clauses)}"
-
+        """Query official NASA IRSA SPHEREx SIAv2 service or fallback to samples/synthetic."""
         records: list[ArchiveRecord] = []
         failure_reason: str | None = None
         try:
-            with httpx.Client(timeout=10.0) as client:
-                res = client.post(
-                    f"{self.tap_url}/sync",
-                    data={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query, "FORMAT": "json"},
+            with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+                res = client.get(
+                    self.sia_url,
+                    params=[
+                        ("POS", f"CIRCLE {ra:.6f} {dec:.6f} {radius_deg:.6f}"),
+                        ("COLLECTION", "spherex_dr1"),
+                        ("COLLECTION", "spherex_qr3"),
+                        ("RESPONSEFORMAT", "votable"),
+                    ],
                 )
                 if res.status_code == 200:
-                    data = res.json()
-                    rows: list[Any] = []
-                    if "VOTABLE" in data:
-                        try:
-                            rows = data["VOTABLE"]["RESOURCE_ARRAY"][0]["TABLE"]["DATA"]["TABLEDATA"]
-                        except (KeyError, IndexError, TypeError):
-                            pass
-                    if not rows and "data" in data:
-                        rows = data["data"]
-                    for r in rows:
-                        t_min = float(r[6]) if r[6] is not None else None
+                    from astropy.io.votable import parse_single_table
+
+                    vtable = parse_single_table(io.BytesIO(res.content))
+                    field_map = {
+                        str(f.name or getattr(f, "ID", "")).lower(): idx
+                        for idx, f in enumerate(vtable.fields)
+                    }
+
+                    def _val(row: Any, *cols: str) -> Any:
+                        for c in cols:
+                            idx = field_map.get(c.lower())
+                            if idx is not None:
+                                v = row[idx]
+                                if v is not None and v != "" and not (isinstance(v, float) and (v != v)):
+                                    return v
+                        return None
+
+                    for r in vtable.array:
+                        bp = str(_val(r, "energy_bandpassname", "instrument_name", "band") or "")
+                        m = re.search(r"(?:D|LVF|ARR|ARRAY)?([1-6])\b", bp, re.IGNORECASE)
+                        det = f"D{m.group(1)}" if m else "D1"
+                        if band and band.strip().upper() != "ALL":
+                            b_req = band.strip().upper()
+                            b_dig = b_req[-1] if b_req[-1].isdigit() else b_req
+                            if b_dig.isdigit() and det != f"D{b_dig}":
+                                continue
+                            if not b_dig.isdigit() and b_req not in bp.upper():
+                                continue
+
+                        t_min_v, t_max_v = _val(r, "t_min"), _val(r, "t_max")
+                        t_min = float(t_min_v) if t_min_v is not None else None
+                        t_max = float(t_max_v) if t_max_v is not None else t_min
+                        if start_mjd is not None and t_max is not None and t_max < start_mjd:
+                            continue
+                        if end_mjd is not None and t_min is not None and t_min > end_mjd:
+                            continue
+
+                        raw_id = _val(r, "obs_id", "obs_publisher_did")
+                        if not raw_id:
+                            continue
+                        obs_id = str(raw_id.decode("utf-8") if isinstance(raw_id, bytes) else raw_id).strip()
+                        s_ra = float(_val(r, "s_ra") or ra)
+                        s_dec = float(_val(r, "s_dec") or dec)
+                        raw_url = _val(r, "access_url")
+                        url_str = str(raw_url.decode("utf-8") if isinstance(raw_url, bytes) else raw_url).strip() if raw_url else None
+
+                        b_info = SPHEREX_BANDS.get(det, SPHEREX_BANDS["D1"])
+                        em0, em1 = _val(r, "em_min"), _val(r, "em_max")
+                        if em0 is not None and em1 is not None:
+                            l0 = float(em0) * (1e6 if float(em0) < 0.01 else 1.0)
+                            l1 = float(em1) * (1e6 if float(em1) < 0.01 else 1.0)
+                            w_rng, c_um = [round(l0, 4), round(l1, 4)], round(0.5 * (l0 + l1), 4)
+                        else:
+                            w_rng, c_um = [b_info["min_um"], b_info["max_um"]], b_info["center_um"]
+
                         records.append(
                             _make_archive_rec(
-                                str(r[0]), float(r[1]), float(r[2]), t_min, str(r[3]),
-                                str(r[8]) if r[8] else None, "NASA/IPAC IRSA TAP (spherex.obscore)",
+                                obs_id=obs_id,
+                                ra=s_ra,
+                                dec=s_dec,
+                                mjd=t_min,
+                                band=b_info["name"],
+                                access_url=url_str,
+                                source="NASA/IPAC IRSA SIAv2 (SPHEREx)",
+                                detector=det,
+                                center_um=c_um,
+                                w_range=w_rng,
+                                cached=False,
+                                source_origin="live_archive",
                             )
                         )
+                        if len(records) >= max_records:
+                            break
+
                     if records:
-                        return records, "LIVE_ARCHIVE", ["Retrieved live SPHEREx ObsCore metadata from NASA IRSA."]
+                        return records, "LIVE_ARCHIVE", ["Retrieved live SPHEREx Level-2 products from NASA IRSA SIAv2."]
                 else:
-                    failure_reason = f"NASA IRSA TAP responded with HTTP {res.status_code}."
+                    failure_reason = f"NASA IRSA SIA responded with HTTP {res.status_code}."
         except httpx.ReadTimeout:
             failure_reason = "NASA IRSA server timed out (>10s latency) under heavy public load."
         except Exception as exc:
