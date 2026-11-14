@@ -3,10 +3,9 @@ import { api, type ArchiveSearchParams, type ArchiveSourceId } from "../../src/a
 
 describe("Archive API client & search parameter serialization", () => {
   it("defines supported NASA archive sources", () => {
-    const sources: ArchiveSourceId[] = ["spherex_irsa", "wise_irsa", "twomass_irsa", "skyview"];
-    expect(sources).toHaveLength(4);
+    const sources: ArchiveSourceId[] = ["spherex_irsa"];
+    expect(sources).toHaveLength(1);
     expect(sources).toContain("spherex_irsa");
-    expect(sources).toContain("wise_irsa");
   });
 
   it("constructs proper search parameters for multi-mission queries", () => {

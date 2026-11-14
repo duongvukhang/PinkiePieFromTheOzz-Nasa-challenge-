@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
-ArchiveSourceId = Literal["spherex_irsa", "wise_irsa", "twomass_irsa", "skyview"]
+ArchiveSourceId = Literal["spherex_irsa"]
 
 
 class ArchiveSearchParams(BaseModel):

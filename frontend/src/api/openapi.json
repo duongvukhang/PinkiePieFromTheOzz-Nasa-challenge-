@@ -720,10 +720,7 @@
             "required": false,
             "schema": {
               "enum": [
-                "spherex_irsa",
-                "wise_irsa",
-                "twomass_irsa",
-                "skyview"
+                "spherex_irsa"
               ],
               "type": "string",
               "default": "spherex_irsa",
@@ -6624,10 +6621,7 @@
           "source": {
             "type": "string",
             "enum": [
-              "spherex_irsa",
-              "wise_irsa",
-              "twomass_irsa",
-              "skyview"
+              "spherex_irsa"
             ],
             "title": "Source",
             "default": "spherex_irsa"

@@ -1066,7 +1066,7 @@ export interface components {
              * @default spherex_irsa
              * @enum {string}
              */
-            source?: "spherex_irsa" | "wise_irsa" | "twomass_irsa" | "skyview";
+            source?: "spherex_irsa";
             /** Band */
             band?: string | null;
             /** Ra Deg */

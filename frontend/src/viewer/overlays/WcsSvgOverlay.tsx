@@ -381,7 +381,10 @@ export function WcsSvgOverlay({
         {/* 4. Detected Sources Overlay — aligned green bounding squares with persistent track labels */}
         {showSources &&
           detections.map((d) => {
-            const p = skyToPixel(d.ra, d.dec, wcs);
+            const hasPix = d.x_pix != null && d.y_pix != null;
+            const p = hasPix
+              ? { x: d.x_pix!, y: wcs.naxis2 - d.y_pix! }
+              : skyToPixel(d.ra, d.dec, wcs);
             if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
             if (p.x < -10 || p.x > wcs.naxis1 + 10 || p.y < -10 || p.y > wcs.naxis2 + 10) {
               return null;
@@ -973,7 +976,10 @@ export function WcsSvgOverlay({
               width={bw}
               height={bh}
               fill="rgba(46, 125, 166, 0.25)"
-              stroke="none"
+              stroke="#38bdf8"
+              strokeWidth={1.2}
+              strokeDasharray="4 2"
+              vectorEffect="non-scaling-stroke"
             />
           );
         })()}

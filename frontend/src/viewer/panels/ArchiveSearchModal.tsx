@@ -43,21 +43,6 @@ const ARCHIVE_SOURCES: { id: ArchiveSourceId; label: string; desc: string }[] = 
     label: "NASA / IPAC IRSA — SPHEREx (ObsCore)",
     desc: "Primary all-sky spectral survey (Bands D1–D6, 0.75–5.0 µm)",
   },
-  {
-    id: "wise_irsa",
-    label: "NASA / IPAC IRSA — AllWISE / NEOWISE",
-    desc: "Mid-infrared sky survey (W1–W4, 3.4–22 µm)",
-  },
-  {
-    id: "twomass_irsa",
-    label: "NASA / IPAC IRSA — 2MASS All-Sky",
-    desc: "Near-infrared Point Source & Image Atlas (J, H, Ks)",
-  },
-  {
-    id: "skyview",
-    label: "NASA / GSFC — SkyView Virtual Observatory",
-    desc: "Multi-wavelength Virtual Telescope spanning gamma to radio",
-  },
 ];
 
 export function ArchiveSearchModal({
@@ -214,17 +199,34 @@ export function ArchiveSearchModal({
     const epochs = searchResult?.epochs ?? [];
 
     setLoadingAll(true);
+    let resolvedBand = band === "ALL" ? "all" : band.toLowerCase();
     try {
+      const refEpoch = epochs[0];
+      const refProd =
+        (refEpoch?.products ?? []).find((p) => p.obs_id === refEpoch.selected_product_id) ??
+        (refEpoch?.products ?? [])[0];
+      const refBand = refProd?.detector || refProd?.band;
+      if (refBand) {
+        resolvedBand = refBand.toLowerCase();
+      }
+
       const prodsToLoad = epochs
-        .map((ep) => ({
-          prod: (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ?? (ep.products ?? [])[0],
-          mjd_obs: ep.mjd_obs,
-        }))
+        .map((ep) => {
+          const prods = ep.products ?? [];
+          const matched =
+            prods.find(
+              (p) =>
+                (refBand && (p.detector === refBand || p.band === refBand)) ||
+                p.obs_id === ep.selected_product_id,
+            ) ?? prods[0];
+          return { prod: matched, mjd_obs: ep.mjd_obs };
+        })
         .filter((item): item is { prod: EpochProduct; mjd_obs: number | null | undefined } => Boolean(item.prod));
 
-      const results = await Promise.allSettled(
-        prodsToLoad.map(({ prod, mjd_obs }) =>
-          api.loadArchiveProduct({
+      // Limit concurrency: sequential load and immediate store update before navigation
+      for (const { prod, mjd_obs } of prodsToLoad) {
+        try {
+          const res = await api.loadArchiveProduct({
             obs_id: prod.obs_id,
             access_url: prod.access_url || undefined,
             source,
@@ -233,13 +235,12 @@ export function ArchiveSearchModal({
             dec_deg: decNum,
             mjd_obs: mjd_obs ?? undefined,
             fov_arcmin: fovArcmin,
-          }),
-        ),
-      );
-
-      for (const res of results) {
-        if (res.status === "fulfilled" && res.value?.fits_file_id) {
-          useViewStore.getState().addFitsId(res.value.fits_file_id);
+          });
+          if (res?.fits_file_id) {
+            useViewStore.getState().addFitsId(res.fits_file_id);
+          }
+        } catch {
+          // Continue loading remaining products
         }
       }
     } finally {
@@ -252,7 +253,7 @@ export function ArchiveSearchModal({
       fov: fovArcmin,
       from: startDate || undefined,
       to: endDate || undefined,
-      bands: band === "ALL" ? "all" : band.toLowerCase(),
+      bands: resolvedBand,
       source,
     });
     onClose();
@@ -437,31 +438,12 @@ export function ArchiveSearchModal({
                 onChange={(e) => setBand(e.target.value)}
               >
                 <option value="ALL">ALL Bands</option>
-                {source === "spherex_irsa" && (
-                  <>
-                    <option value="D1">Band 1 (LVF1 0.75–1.11 µm)</option>
-                    <option value="D2">Band 2 (LVF2 1.11–1.64 µm)</option>
-                    <option value="D3">Band 3 (LVF3 1.64–2.42 µm)</option>
-                    <option value="D4">Band 4 (LVF4 2.42–3.82 µm)</option>
-                    <option value="D5">Band 5 (LVF5 3.82–4.42 µm)</option>
-                    <option value="D6">Band 6 (LVF6 4.42–5.00 µm)</option>
-                  </>
-                )}
-                {source === "wise_irsa" && (
-                  <>
-                    <option value="W1">WISE W1 (3.4 µm)</option>
-                    <option value="W2">WISE W2 (4.6 µm)</option>
-                    <option value="W3">WISE W3 (12.0 µm)</option>
-                    <option value="W4">WISE W4 (22.0 µm)</option>
-                  </>
-                )}
-                {source === "twomass_irsa" && (
-                  <>
-                    <option value="J">2MASS J (1.25 µm)</option>
-                    <option value="H">2MASS H (1.65 µm)</option>
-                    <option value="Ks">2MASS Ks (2.17 µm)</option>
-                  </>
-                )}
+                <option value="D1">Band 1 (LVF1 0.75–1.11 µm)</option>
+                <option value="D2">Band 2 (LVF2 1.11–1.64 µm)</option>
+                <option value="D3">Band 3 (LVF3 1.64–2.42 µm)</option>
+                <option value="D4">Band 4 (LVF4 2.42–3.82 µm)</option>
+                <option value="D5">Band 5 (LVF5 3.82–4.42 µm)</option>
+                <option value="D6">Band 6 (LVF6 4.42–5.00 µm)</option>
               </select>
             </div>
           </div>

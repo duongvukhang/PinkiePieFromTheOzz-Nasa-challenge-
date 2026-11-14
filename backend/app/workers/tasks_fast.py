@@ -289,13 +289,39 @@ def execute_build_cutouts(
         # Select candidate frames per epoch (1 frame per epoch, max 6 epochs)
         params_hex = compute_params_hash("build_cutouts", params, release).hex()[:16]
 
+        # Select a single canonical array_id / band_id across epochs for consistent infrared light
+        from collections import Counter
+        canonical_band: str | None = None
+        if bands and any(b != "all" for b in bands):
+            canonical_band = next(b for b in bands if b != "all")
+        elif epoch_groups:
+            band_counter: Counter[str] = Counter()
+            for _, grp in epoch_groups[:6]:
+                for b in {getattr(r, "array_id", None) or getattr(r, "band_id", None) for r in grp}:
+                    if b:
+                        band_counter[str(b)] += 1
+            if band_counter:
+                canonical_band = max(
+                    band_counter.items(),
+                    key=lambda x: (x[1], x[0] == "D1" or "D1" in x[0]),
+                )[0]
+
         out_frames: list[CutoutFrame] = []
         used_refs: list[Any] = []
         artifact_keys: dict[str, dict[str, str]] = {}
         seen_paths: set[str] = set()
         total_epochs = max(len(epoch_groups[:6]), 1)
         for ep_idx, (ep, grp) in enumerate(epoch_groups[:6]):
-            for ref in grp:
+            if canonical_band:
+                matching_grp = [
+                    r for r in grp
+                    if (getattr(r, "array_id", None) == canonical_band or getattr(r, "band_id", None) == canonical_band)
+                ]
+                candidate_refs = matching_grp if matching_grp else grp
+            else:
+                candidate_refs = grp
+
+            for ref in candidate_refs:
                 try:
                     stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
                     if stored.storage_path in seen_paths:

@@ -1,12 +1,12 @@
 ## Current phase: 1 (FITS Display Pipeline & Observatory Features)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Persistent Identity Canvas Click-to-Track & Timeline Trajectory
+## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | IRSA ObsCore TAP Optimization, Single Provider & Selection Box Fixes
 Done:
-- Scaled bounding box squares dynamically to source profile FWHM (`d.fwhm_arcsec`) clamped between 7px and 26px, tightly fitting in-box objects.
-- Wired direct canvas click on green bounded objects to track as Target A or Target B (`MAX_TRACKED_OBJECTS = 2`), rendering persistent badges (`A` in Cyan, `B` in Orange).
-- Added an SVG HUD cap alert when attempting to track more than 2 objects and added 1-click Untrack in the box candidate list.
-- Implemented progressive trajectory vector drawing and active waypoint halo illumination synchronized with timeline playback.
-Files touched: frontend/src/viewer/overlays/WcsSvgOverlay.tsx, frontend/src/viewer/panels/ViewerStage.tsx, frontend/src/pages/ViewerPage.tsx, frontend/src/viewer/state/useViewerData.ts, frontend/src/viewer/panels/InspectorTabs.tsx, frontend/tests/unit/boxSelectAndRegimes.test.ts, docs/STATUS.md
-Verified by: vitest (8 test files, 38 passed), pytest tests/science/test_identity_regimes_and_box.py (5 passed)   Lines before -> after: WcsSvgOverlay.tsx 941 -> 1053 (+112 lines)
+- Switched IRSA query in `irsa_search.py` to direct indexed ADQL TAP query on `ivoa.obscore` with server-side time/band gating, a 12s timeout shared httpx connection pool, and healpix9 TTL cache.
+- Restricted archive source exclusively to `spherex_irsa` (ObsCore), removing `wise_irsa`, `twomass_irsa`, and `skyview` routing and synthetic stubs across backend schemas, frontend UI, and openapi contracts.
+- Fixed selection box rendering: destructured `setActiveBox` in `useViewerData.ts`, prevented URL query sync wipes on box creation, passed `allFitsIds` to analysis, projected native pixel coordinates, and styled active box dashed border.
+- Enforced consistent infrared bandpass across epochs: `group_records_into_epochs` locks `selected_product_id` to dominant band, `handleLoadAllInterval` loads sequentially to prevent queue clogging, and blinking video frames filter to the reference bandpass.
+Files touched: backend/app/schemas/archive.py, backend/app/services/irsa_search.py, backend/app/workers/tasks_fast.py, frontend/src/api/openapi.json, frontend/src/api/schema.d.ts, frontend/src/viewer/overlays/WcsSvgOverlay.tsx, frontend/src/viewer/panels/ArchiveSearchModal.tsx, frontend/src/viewer/state/useViewerData.ts, frontend/src/viewer/state/viewStore.ts, frontend/tests/unit/archiveModal.test.ts, frontend/tests/unit/boxSelectAndRegimes.test.ts, tests/unit/test_api_archive_search.py, docs/STATUS.md
+Verified by: vitest (8 test files, 40 passed), pytest tests/unit/test_api_archive_search.py (14 passed), test_identity_regimes_and_box.py (5 passed)   Lines before -> after: irsa_search.py 740 -> 623 (-117 lines)
 ## Next task: Live backend E2E Playwright verification across the 5 mandatory benchmark targets (WISE 0855, Barnard's Star, eps Ind B, RW Aurigae, R Draconis)
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).

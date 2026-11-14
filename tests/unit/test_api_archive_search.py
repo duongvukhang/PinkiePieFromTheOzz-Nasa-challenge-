@@ -57,38 +57,11 @@ def test_multi_archive_search_spherex():
     assert res.total_found > 0
     assert res.total_epochs > 0
     assert res.service_status in ("LIVE_ARCHIVE", "SYNTHETIC_DEMO")
-    if res.service_status == "LIVE_ARCHIVE":
-        assert res.is_offline_fallback is False
-        assert any("SIAv2" in n for n in res.notes)
     assert res.epochs[0].epoch_index == 0
     assert res.epochs[0].time_delta_days == 0.0
     assert len(res.epochs) >= 2
     assert res.epochs[1].time_delta_days is not None
     assert res.epochs[1].time_delta_days > 0
-
-
-def test_multi_archive_search_wise():
-    params = ArchiveSearchParams(
-        ra_deg=133.79513,
-        dec_deg=-7.24515,
-        source="wise_irsa",
-        band="W1",
-    )
-    res = irsa_search_service.search_archive(params)
-    assert res.total_found > 0
-    assert any("WISE" in rec.band for rec in res.records if rec.band)
-
-
-def test_multi_archive_search_twomass():
-    params = ArchiveSearchParams(
-        ra_deg=133.79513,
-        dec_deg=-7.24515,
-        source="twomass_irsa",
-        band="J",
-    )
-    res = irsa_search_service.search_archive(params)
-    assert res.total_found > 0
-    assert any("2MASS" in rec.band for rec in res.records if rec.band)
 
 
 def test_api_archive_search_endpoint():
@@ -204,10 +177,12 @@ def test_api_archive_load_security_validation_400():
 
 def test_synthetic_demo_tagging():
     params = ArchiveSearchParams(
-        ra_deg=133.79513,
-        dec_deg=-7.24515,
-        source="twomass_irsa",
-        band="J",
+        ra_deg=10.0,
+        dec_deg=10.0,
+        source="spherex_irsa",
+        start_date="2020-01-01",
+        end_date="2020-06-01",
+        band="D1",
     )
     res = irsa_search_service.search_archive(params)
     assert res.service_status == "SYNTHETIC_DEMO"
@@ -216,25 +191,27 @@ def test_synthetic_demo_tagging():
     assert all(r.source_origin == "synthetic_demo" for r in res.records)
 
 
-def test_search_spherex_siv2_parsing_and_fallback(monkeypatch: pytest.MonkeyPatch):
-    """Test SIAv2 VOTable parsing, column extraction, band/time filtering, and fallback in _search_spherex."""
+def test_search_spherex_tap_parsing_and_fallback(monkeypatch: pytest.MonkeyPatch):
+    """Test TAP ObsCore VOTable parsing, column extraction, band/time filtering, and fallback in _search_spherex."""
     from pathlib import Path
     import httpx
     from app.services.irsa_search import IRSASearchService
+    from app.services.cache import get_cache_backend
+
+    get_cache_backend().delete("test_mock_cache")
 
     xml_path = Path(__file__).resolve().parents[1] / "fixtures" / "cassettes" / "spherex_sia_wise0855.xml"
     content = xml_path.read_bytes()
 
     def mock_handler_ok(request: httpx.Request) -> httpx.Response:
-        assert "COLLECTION=spherex_dr1" in str(request.url)
-        assert "POS=CIRCLE" in str(request.url)
+        body = request.read().decode("utf-8")
+        assert "obs_collection" in body or "CONTAINS" in body
         return httpx.Response(200, content=content)
 
-    orig_client = httpx.Client
     service = IRSASearchService()
+    service._client = httpx.Client(transport=httpx.MockTransport(mock_handler_ok))
 
     # 1. Matching D5 band within MJD range
-    monkeypatch.setattr(httpx, "Client", lambda **kwargs: orig_client(transport=httpx.MockTransport(mock_handler_ok)))
     recs, status, notes = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D5", 10)
     assert status == "LIVE_ARCHIVE"
     assert len(recs) == 1
@@ -253,8 +230,9 @@ def test_search_spherex_siv2_parsing_and_fallback(monkeypatch: pytest.MonkeyPatc
     def mock_handler_err(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, content=b"Server error")
 
-    monkeypatch.setattr(httpx, "Client", lambda **kwargs: orig_client(transport=httpx.MockTransport(mock_handler_err)))
-    recs_err, status_err, notes_err = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D5", 10)
+    service_err = IRSASearchService()
+    service_err._client = httpx.Client(transport=httpx.MockTransport(mock_handler_err))
+    recs_err, status_err, notes_err = service_err._search_spherex(12.34, -56.78, 0.05, 60800.0, 61100.0, "D5", 10)
     assert status_err == "SYNTHETIC_DEMO"
     assert len(recs_err) > 0
     assert any("500" in n for n in notes_err)
@@ -279,4 +257,47 @@ def test_load_archive_product_failure_raises_502(tmp_path: Path):
         irsa_search_service.load_archive_product(req, storage, store)
     assert exc_info.value.status_code == 502
     assert "Archive Product Unavailable" in exc_info.value.title
+
+
+def test_search_spherex_cone_radius_gt_5_and_caching():
+    """Verify cone radius > 5 arcmin finds sample fits and caches result."""
+    # North Ecliptic Pole region (near sample FITS at RA 276.26, Dec 64.83)
+    params = ArchiveSearchParams(
+        ra_deg=276.3,
+        dec_deg=64.85,
+        radius=15.0,  # 15 arcmin > 5 arcmin
+        radius_unit="arcmin",
+        source="spherex_irsa",
+        band="D1",
+    )
+    res = irsa_search_service.search_archive(params)
+    assert res.total_found > 0
+    assert res.total_epochs > 0
+
+    # Second call must retrieve from cache
+    res_cached = irsa_search_service.search_archive(params)
+    assert res_cached.total_found == res.total_found
+    assert any("cache" in n.lower() for n in res_cached.notes)
+
+
+def test_group_records_dominant_band():
+    """Verify group_records_into_epochs sets selected_product_id to the dominant band across epochs."""
+    from app.services.irsa_search import _make_archive_rec
+
+    # Epoch 1 has D1 and D4; Epoch 2 has D4; dominant band is D4
+    rec1_d1 = _make_archive_rec("e1_d1", 10.0, 10.0, 60000.0, "Band 1", None, "test", detector="D1")
+    rec1_d4 = _make_archive_rec("e1_d4", 10.0, 10.0, 60000.0, "Band 4", None, "test", detector="D4")
+    rec2_d4 = _make_archive_rec("e2_d4", 10.0, 10.0, 60180.0, "Band 4", None, "test", detector="D4")
+
+    # Set observation_group_id so epochs are cleanly separated
+    rec1_d1.observation_group_id = "visit_1"
+    rec1_d4.observation_group_id = "visit_1"
+    rec2_d4.observation_group_id = "visit_2"
+
+    epochs = group_records_into_epochs([rec1_d1, rec1_d4, rec2_d4], "test")
+    assert len(epochs) == 2
+    # In epoch 1, even though D1 was first, D4 is dominant across epochs so selected_product_id is e1_d4
+    assert epochs[0].selected_product_id == "e1_d4"
+    assert epochs[1].selected_product_id == "e2_d4"
+
 

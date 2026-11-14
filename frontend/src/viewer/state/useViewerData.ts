@@ -47,6 +47,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     track,
     selectBoxMode,
     toggleSelectBox,
+    setActiveBox,
     addTrack,
     removeTrack,
     syncFromSearch,
@@ -205,8 +206,20 @@ export function useViewerData(search: string, skipSecondary = false) {
     }
 
     if (userFrames.length > 0) {
+      let filteredUserFrames = userFrames;
+      if (bands === "all" && userFrames.length > 1) {
+        const bandCounts = new Map<string, number>();
+        for (const uf of userFrames) {
+          const b = uf.band_label || "";
+          if (b) bandCounts.set(b, (bandCounts.get(b) ?? 0) + 1);
+        }
+        if (bandCounts.size > 1) {
+          const dominantUserBand = [...bandCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+          filteredUserFrames = userFrames.filter((uf) => !uf.band_label || uf.band_label === dominantUserBand);
+        }
+      }
       const seen = new Set<string>();
-      return userFrames
+      return filteredUserFrames
         .filter((uf) => !excluded.has(uf.frame_id) && !seen.has(uf.frame_id) && seen.add(uf.frame_id))
         .sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
     }
@@ -216,8 +229,24 @@ export function useViewerData(search: string, skipSecondary = false) {
     const seenEpochs = new Set<string>();
     const combined: CutoutFrame[] = [];
 
+    // Consistent infrared band filtering when bands === "all"
+    let targetBand: string | null = null;
+    if (bands === "all" && rawCutouts.length > 0) {
+      const bandCounts = new Map<string, number>();
+      for (const cf of rawCutouts) {
+        const b = cf.array_id || cf.band_label || "";
+        if (b) bandCounts.set(b, (bandCounts.get(b) ?? 0) + 1);
+      }
+      if (bandCounts.size > 0) {
+        targetBand = [...bandCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      }
+    }
+
     for (const cf of rawCutouts) {
       if (excluded.has(cf.frame_id) || seenFrameIds.has(cf.frame_id)) continue;
+      if (targetBand && (cf.array_id || cf.band_label) && (cf.array_id || cf.band_label) !== targetBand) {
+        continue;
+      }
       if (!seenEpochs.has(cf.epoch.toLowerCase())) {
         combined.push(cf);
         seenFrameIds.add(cf.frame_id);
@@ -255,10 +284,10 @@ export function useViewerData(search: string, skipSecondary = false) {
   const catwiseQ = useCatOverlay("catwise");
 
   const analysisQ = useQuery({
-    queryKey: ["analysis", cutoutQ.data?.cutout_id, fitsId, activeRa, activeDec, fov, release],
+    queryKey: ["analysis", cutoutQ.data?.cutout_id, allFitsIds.join(","), activeRa, activeDec, fov, release],
     queryFn: async () => {
-      const acc = fitsId
-        ? await api.createAnalysis({ fits_file_ids: [fitsId] })
+      const acc = allFitsIds.length > 0
+        ? await api.createAnalysis({ fits_file_ids: allFitsIds })
         : await api.createAnalysis({
             cutout_id: cutoutQ.data?.cutout_id,
             ra: cutoutQ.data ? undefined : activeRa,
@@ -293,7 +322,7 @@ export function useViewerData(search: string, skipSecondary = false) {
         suggestions: suggestions.suggestions,
       };
     },
-    enabled: !skipSecondary && (Boolean(cutoutQ.data?.cutout_id) || Boolean(fitsId)),
+    enabled: !skipSecondary && (Boolean(cutoutQ.data?.cutout_id) || allFitsIds.length > 0),
   });
 
   const activeObjId = (obj && isUuid(obj)) ? obj : (trackedUuid ?? undefined);
@@ -358,8 +387,8 @@ export function useViewerData(search: string, skipSecondary = false) {
   }, [playing, pausedByVis, fps, frames.length, setView]);
 
   const frameShape = frameA?.stretch?.shape as [number, number] | undefined;
-  const imgW = frameShape?.[1] ?? bufAQ.data?.width ?? 2040;
-  const imgH = frameShape?.[0] ?? bufAQ.data?.height ?? 2040;
+  const imgW = frameShape?.[1] ?? bufAQ.data?.width ?? 128;
+  const imgH = frameShape?.[0] ?? bufAQ.data?.height ?? 128;
 
   const wcs = parseFitsWcs(
     frameA?.wcs_header,
@@ -436,12 +465,54 @@ export function useViewerData(search: string, skipSecondary = false) {
 
   const onBoxSelect = async (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
     setActiveBox(box);
-    setView({
-      activeBox: box,
-      inspectorTab: "object",
-      selectBoxMode: false,
-    });
+    setView(
+      {
+        activeBox: box,
+        inspectorTab: "object",
+        selectBoxMode: false,
+      },
+      false,
+    );
   };
+
+  const rawDetections = analysisQ.data?.detections ?? [];
+  const detections: DetectionRead[] = useMemo(() => {
+    if (rawDetections.length > 0) {
+      if (frameA?.frame_id) {
+        const frameMatches = rawDetections.filter(
+          (d) => String(d.fits_file_id) === String(frameA.frame_id),
+        );
+        if (frameMatches.length > 0) return frameMatches;
+      }
+      const seen = new Set<number>();
+      const deduped: DetectionRead[] = [];
+      for (const d of rawDetections) {
+        if (!seen.has(d.id)) {
+          seen.add(d.id);
+          deduped.push(d);
+        }
+      }
+      return deduped;
+    }
+    const gaiaList = gaiaQ.data?.sources ?? [];
+    if (gaiaList.length > 0) {
+      return gaiaList.map((g, idx) => ({
+        id: idx + 1,
+        fits_file_id: frameA?.frame_id || "",
+        ra: g.ra_deg,
+        dec: g.dec_deg,
+        x_pix: null,
+        y_pix: null,
+        flux_ujy: g.g_mag ? Math.pow(10, (23.9 - g.g_mag) / 2.5) : 1000,
+        mag_ab: g.g_mag,
+        fwhm_arcsec: 6.2,
+        flags: 0,
+        real_bogus: 0.99,
+        is_difference: false,
+      }));
+    }
+    return [];
+  }, [rawDetections, frameA?.frame_id, gaiaQ.data?.sources]);
 
   return {
     activeRa: activeRa ?? 133.79513,
@@ -457,7 +528,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     warnings: [...(fieldsQ.data?.warnings ?? []), ...(cutoutQ.data?.warnings ?? [])],
     gaiaSources: gaiaQ.data?.sources ?? [],
     catwiseSources: catwiseQ.data?.sources ?? [],
-    detections: analysisQ.data?.detections ?? [],
+    detections,
     suggestions: analysisQ.data?.suggestions ?? [],
     objectDetail: objectQ.data,
     associations: associationsQ.data?.associations ?? [],

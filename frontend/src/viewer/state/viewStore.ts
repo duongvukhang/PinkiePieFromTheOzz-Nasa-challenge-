@@ -254,12 +254,21 @@ function syncReplaceUrl(next: ViewState) {
 export const useViewStore = create<ViewStore>((set) => ({
   ...DEFAULT_STATE,
   syncFromSearch: (search, authenticated) =>
-    set(() => {
+    set((prev) => {
       const parsed = parseViewParams(search, authenticated);
+      const sameCoords =
+        (parsed.ra === undefined && prev.ra === undefined) ||
+        (parsed.ra !== undefined &&
+          prev.ra !== undefined &&
+          Math.abs(parsed.ra - prev.ra) < 1e-6 &&
+          parsed.dec !== undefined &&
+          prev.dec !== undefined &&
+          Math.abs(parsed.dec - prev.dec) < 1e-6);
       return {
         ...DEFAULT_STATE,
         ...parsed,
         target: parsed.target || (parsed.ra === undefined ? "WISE 0855" : ""),
+        activeBox: sameCoords ? prev.activeBox : null,
       };
     }),
   setView: (patch, syncUrl = true) =>

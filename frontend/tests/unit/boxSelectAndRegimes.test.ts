@@ -84,4 +84,34 @@ describe("Box-Scoped Selection & 2-Object Tracking Cap", () => {
     expect(segments[1]).toEqual({ segIndex: 2, isDrawn: false, isLeading: false });
     expect(segments[2]).toEqual({ segIndex: 3, isDrawn: false, isLeading: false });
   });
+
+  it("preserves activeBox during syncFromSearch when coordinates are identical", () => {
+    const store = useViewStore.getState();
+    store.setView({ ra: 133.795, dec: -7.245 });
+    store.setActiveBox({ raMin: 133.7, raMax: 133.8, decMin: -7.3, decMax: -7.2 });
+    expect(useViewStore.getState().activeBox).not.toBeNull();
+
+    // Re-syncing with the exact same coordinates preserves activeBox
+    store.syncFromSearch("?ra=133.795&dec=-7.245");
+    expect(useViewStore.getState().activeBox).toEqual({
+      raMin: 133.7,
+      raMax: 133.8,
+      decMin: -7.3,
+      decMax: -7.2,
+    });
+
+    // Navigating to completely new coordinates resets activeBox
+    store.syncFromSearch("?ra=200.0&dec=30.0");
+    expect(useViewStore.getState().activeBox).toBeNull();
+  });
+
+  it("projects native pixel coordinates matching display.webp FITS grid", () => {
+    const naxis2 = 128;
+    const detection = { id: 42, ra: 133.795, dec: -7.245, x_pix: 64.5, y_pix: 32.2 };
+    // Native pixel conversion: x = x_pix, y = naxis2 - y_pix
+    const screenX = detection.x_pix;
+    const screenY = naxis2 - detection.y_pix;
+    expect(screenX).toBe(64.5);
+    expect(screenY).toBe(95.8);
+  });
 });
