@@ -235,31 +235,38 @@ def execute_build_cutouts(
         store.update_job(job_id, progress=0.20)
 
         epoch_groups = group_frames_into_epochs(frames)
-        flat = [(ep, ref) for ep, grp in epoch_groups for ref in grp]
+        # Select candidate frames per epoch (trying top overlapping frames per epoch, max 6 epochs)
+        flat: list[tuple[Any, Any]] = []
+        for ep, grp in epoch_groups[:6]:
+            flat.extend([(ep, ref) for ref in grp[:2]])
         params_hex = compute_params_hash("build_cutouts", params, release).hex()[:16]
 
         out_frames: list[CutoutFrame] = []
         artifact_keys: dict[str, dict[str, str]] = {}
         total = max(len(flat), 1)
         for idx, (ep, ref) in enumerate(flat):
-            stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
-            fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
-            frame_uuid = uuid5(
-                _FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}"
-            )
-            rendered = render_cutout_products(
-                fits_bytes,
-                storage,
-                f"products/{hpx}/{params_hex}/{frame_uuid}",
-            )
-            cframe = _build_cutout_frame(cutout_id, ep, stored, rendered)
-            out_frames.append(cframe)
-            artifact_keys[str(cframe.frame_id)] = {
-                "display": str(rendered["display_key"]),
-                "science": str(rendered["science_key"]),
-                "fits": stored.storage_path,
-            }
-            store.update_job(job_id, progress=0.20 + 0.75 * ((idx + 1) / total))
+            try:
+                stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
+                fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
+                frame_uuid = uuid5(
+                    _FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}"
+                )
+                rendered = render_cutout_products(
+                    fits_bytes,
+                    storage,
+                    f"products/{hpx}/{params_hex}/{frame_uuid}",
+                )
+                cframe = _build_cutout_frame(cutout_id, ep, stored, rendered)
+                out_frames.append(cframe)
+                artifact_keys[str(cframe.frame_id)] = {
+                    "display": str(rendered["display_key"]),
+                    "science": str(rendered["science_key"]),
+                    "fits": stored.storage_path,
+                }
+            except Exception:
+                continue
+            finally:
+                store.update_job(job_id, progress=0.20 + 0.75 * ((idx + 1) / total))
 
         warnings: list[str] = []
         if not out_frames:
