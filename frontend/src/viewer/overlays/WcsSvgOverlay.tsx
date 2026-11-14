@@ -882,28 +882,15 @@ export function WcsSvgOverlay({
         })}
 
         {dragStart && dragCurr && (
-          <g className="selection-box-group">
-            <rect
-              className="selection-box-outer"
-              x={Math.min(dragStart.x, dragCurr.x)}
-              y={Math.min(dragStart.y, dragCurr.y)}
-              width={Math.abs(dragCurr.x - dragStart.x)}
-              height={Math.abs(dragCurr.y - dragStart.y)}
-              fill="rgba(255, 255, 255, 0.04)"
-              stroke="#ffffff"
-              strokeWidth={1 * pxScale}
-            />
-            <rect
-              className="selection-box-inner"
-              x={Math.min(dragStart.x, dragCurr.x) + 1 * pxScale}
-              y={Math.min(dragStart.y, dragCurr.y) + 1 * pxScale}
-              width={Math.max(0, Math.abs(dragCurr.x - dragStart.x) - 2 * pxScale)}
-              height={Math.max(0, Math.abs(dragCurr.y - dragStart.y) - 2 * pxScale)}
-              fill="none"
-              stroke="#000000"
-              strokeWidth={1 * pxScale}
-            />
-          </g>
+          <rect
+            className="selection-box"
+            x={Math.min(dragStart.x, dragCurr.x)}
+            y={Math.min(dragStart.y, dragCurr.y)}
+            width={Math.abs(dragCurr.x - dragStart.x)}
+            height={Math.abs(dragCurr.y - dragStart.y)}
+            fill="rgba(46, 125, 166, 0.25)"
+            stroke="none"
+          />
         )}
 
         {!dragStart && activeBox && (() => {
@@ -915,30 +902,15 @@ export function WcsSvgOverlay({
           const bh = Math.abs(p2.y - p1.y);
           if (bw < 1 || bh < 1) return null;
           return (
-            <g className="active-selection-box-group">
-              <rect
-                className="selection-box-outer"
-                x={bx}
-                y={by}
-                width={bw}
-                height={bh}
-                fill="rgba(255, 255, 255, 0.03)"
-                stroke="#ffffff"
-                strokeWidth={1 * pxScale}
-                strokeDasharray={`${3 * pxScale} ${2 * pxScale}`}
-              />
-              <rect
-                className="selection-box-inner"
-                x={bx + 1 * pxScale}
-                y={by + 1 * pxScale}
-                width={Math.max(0, bw - 2 * pxScale)}
-                height={Math.max(0, bh - 2 * pxScale)}
-                fill="none"
-                stroke="#000000"
-                strokeWidth={1 * pxScale}
-                strokeDasharray={`${3 * pxScale} ${2 * pxScale}`}
-              />
-            </g>
+            <rect
+              className="selection-box active-selection-box"
+              x={bx}
+              y={by}
+              width={bw}
+              height={bh}
+              fill="rgba(46, 125, 166, 0.25)"
+              stroke="none"
+            />
           );
         })()}
       </svg>
