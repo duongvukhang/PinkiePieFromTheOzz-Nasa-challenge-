@@ -510,9 +510,10 @@ def fit_motion(
     target_dec_deg: float | None = None,
     match_radius_arcsec: float = 15.0,
     outlier_sigma: float = 4.0,
-    min_parallax_dt_yr: float = 0.8,
-    min_parallax_span_au: float = 1.0,
+    min_parallax_dt_yr: float = 0.5,
+    min_parallax_span_au: float = 0.5,
     prior_parallax_mas: float | None = None,
+    corroborated: bool = False,
 ) -> MotionFitResult:
     """Fit 2/4/5-parameter astrometric motion in ICRS tangent plane (§C.3-C.4, §B.8).
 
@@ -657,7 +658,9 @@ def fit_motion(
         a_chk = fit["a5"] if use_5 else fit["a5"][:, :4]
         th_chk = fit["th5"] if use_5 else fit["th4"]
         cov_chk = fit["cov5"] if use_5 else fit["cov4"]
-        rs = _leave_one_out_r(a_chk, fit["y"] - a_chk @ th_chk, fit["covs"], cov_chk)
+        plx_fix = (prior_parallax_mas * 1e-3) if (prior_parallax_mas and not use_5) else 0.0
+        y_chk = fit["y"] - plx_fix * fit["a5"][:, 4] if plx_fix != 0.0 else fit["y"]
+        rs = _leave_one_out_r(a_chk, y_chk - a_chk @ th_chk, fit["covs"], cov_chk)
         worst_local = int(np.argmax(rs))
         if rs[worst_local] <= outlier_sigma:
             break
@@ -738,6 +741,18 @@ def fit_motion(
     delta_bic = float(fit["bic2"] - bic_use)
     dof = max(2 * len(active) - k_use, 1)
     is_mover = (chi2_mu > 25.0) and (delta_bic > 10.0) and (not vim_flagged)
+    if len(active) == 2 and is_mover:
+        has_cat = (
+            bool(
+                getattr(source, "catalog_id", None)
+                or getattr(source, "gaia_id", None)
+                or getattr(source, "catalog_matches", None)
+            )
+            or all(active_meas[i].source != "spherex" for i in range(len(active_meas)))
+        )
+        if not (corroborated or has_cat):
+            is_mover = False
+            notes.append("unvalidated: N=2 epochs (dof=0, chi2=0) without corroboration")
 
     return MotionFitResult(
         model_type=chosen,

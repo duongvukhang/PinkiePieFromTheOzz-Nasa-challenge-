@@ -447,8 +447,6 @@ def execute_run_analysis(
                 if len(idxs) >= 2
                 and (max(mjds[i] for i in idxs) - min(mjds[i] for i in idxs)) > 1e-4
             ]
-            if not diff_groups:
-                diff_groups = [list(range(len(loaded)))]
 
             mean_sig_reg = float(np.median(reg_sigmas)) if reg_sigmas else 0.05
             for grp_idxs in diff_groups:
@@ -456,7 +454,7 @@ def execute_run_analysis(
                     diff_res = difference_frames(
                         [loaded[i].frame for i in grp_idxs],
                         sigma_reg_arcsec=mean_sig_reg,
-                        require_band_match=False,
+                        require_band_match=True,
                     )
                 except Exception as exc:
                     warnings_out.append(f"ZOGY differencing skipped: {exc}")

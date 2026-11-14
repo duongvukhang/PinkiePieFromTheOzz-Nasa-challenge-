@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import math
-from pathlib import Path
 from typing import Any, Sequence
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-from astropy.time import Time
 import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import minimize_scalar
 
 from sphx_core.calib import FrameData, load_frame
 from sphx_core.extraction import extract_sources
 from sphx_core.motion import observer_barycentric_au, parallax_factors
+from sphx_core.wcs import sky_to_tangent_arcsec
 
-_REF_PATH = Path(__file__).resolve().parents[3] / "tests" / "science" / "reference_values.json"
+_RAD_TO_ARCSEC = 206264.806247
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,72 @@ class PlanetXCandidate:
     n_epochs: int = 0
 
 
+def _fit_candidate_parallax(
+    detections: list[tuple[float, Any]],
+) -> tuple[float, float, float] | None:
+    """Fit parallactic offset pi [arcsec = 1/delta] and proper motion for linked candidate epochs.
+
+    Model: Delta r(t) = Delta r_0 + mu * (t - t0) + pi * P(t).
+    Returns (pi_arcsec, sigma_pi, loss) if physical outer Solar System distance (delta >= 15 AU), else None.
+    """
+    if len(detections) < 2:
+        return None
+
+    t_ref, d_ref = detections[-1]
+    b_ref = observer_barycentric_au(t_ref)
+
+    c = SkyCoord(d_ref.ra_deg * u.deg, d_ref.dec_deg * u.deg, frame="icrs")
+    c_ecl = c.geocentricmeanecliptic
+    cos_d = max(math.cos(math.radians(d_ref.dec_deg)), 1e-4)
+
+    def _ecl_unit(d_lon: float, d_lat: float) -> NDArray[np.float64]:
+        c2 = SkyCoord(
+            lon=c_ecl.lon + d_lon * u.deg, lat=c_ecl.lat + d_lat * u.deg, frame="geocentricmeanecliptic"
+        ).icrs
+        v = np.array([(c2.ra.deg - d_ref.ra_deg) * cos_d, c2.dec.deg - d_ref.dec_deg], dtype=np.float64)
+        norm = float(np.linalg.norm(v))
+        return v / norm if norm > 0 else v
+
+    e_lam, e_bet = _ecl_unit(0.01, 0.0), _ecl_unit(0.0, 0.01)
+
+    t0, d0 = detections[0]
+    b0 = observer_barycentric_au(t0)
+    p0 = np.array(parallax_factors(b0, d_ref.ra_deg, d_ref.dec_deg))
+    p_ref = np.array(parallax_factors(b_ref, d_ref.ra_deg, d_ref.dec_deg))
+    dp = p_ref - p0
+    P = dp * _RAD_TO_ARCSEC
+    dt = (t_ref - t0) / 365.25
+
+    if abs(dt) < 1e-4 or np.linalg.norm(P) < 1e-2:
+        return None
+
+    xi, eta = sky_to_tangent_arcsec(d_ref.ra_deg, d_ref.dec_deg, d0.ra_deg, d0.dec_deg)
+    dr = np.array([float(xi), float(eta)])
+
+    def _obj(pi_val: float) -> float:
+        mu = (dr - pi_val * P) / dt
+        mu_mag = np.linalg.norm(mu)
+        mu_lam = np.dot(mu, e_lam)
+        mu_bet = np.dot(mu, e_bet)
+        mu_kepler = 1296000.0 * (pi_val**1.5)
+        return float(
+            (mu_mag - mu_kepler) ** 2
+            + min(0.0, mu_lam) ** 2 * 1e4
+            + max(0.0, abs(mu_bet) - 0.5 * mu_kepler) ** 2
+        )
+
+    res = minimize_scalar(_obj, bounds=(0.002, 0.08), method="bounded")
+    if not res.success:
+        return None
+
+    pi_fit = float(res.x)
+    if not (0.001 <= pi_fit <= 0.07):
+        return None
+
+    sig_pi = max(0.005, 0.15 * pi_fit)
+    return pi_fit, sig_pi, float(res.fun)
+
+
 def search_planetx(
     frames: Sequence[Any],
     *,
@@ -45,10 +111,9 @@ def search_planetx(
     """Search multi-epoch frames for Planet X / slow trans-Neptunian outer Solar System candidates (§I).
 
     Recovers candidate positions at the latest epoch and determines topocentric parallactic
-    distance (parallactic offset 1 / delta [arcsec]) via Keplerian/barycentric constraint or
-    cross-match against verified JPL Horizons reference ephemerides.
+    distance (parallactic offset 1 / delta [arcsec]) via Keplerian/barycentric constraint.
     """
-    if not frames:
+    if not frames or len(frames) < 2:
         return PlanetXCandidate(
             recovered=False,
             ra_deg=0.0,
@@ -61,95 +126,58 @@ def search_planetx(
     loaded_frames = [f if isinstance(f, FrameData) else load_frame(f) for f in frames]
     sorted_frames = sorted(loaded_frames, key=lambda f: float(f.epoch.mjd_tdb_mid))
 
-    # Extract detections from each frame
-    frame_detections = []
-    for f in sorted_frames:
-        ext = extract_sources(f, detect_thresh_sigma=detect_thresh_sigma)
-        frame_detections.append(ext.detections)
+    frame_dets = [
+        extract_sources(f, detect_thresh_sigma=detect_thresh_sigma).detections
+        for f in sorted_frames
+    ]
 
-    # Latest epoch frame is the reference target frame (epoch B)
-    last_frame = sorted_frames[-1]
-    last_dets = frame_detections[-1]
+    last_dets = frame_dets[-1]
+    first_dets = frame_dets[0]
+    if not last_dets or not first_dets:
+        return PlanetXCandidate(
+            recovered=False,
+            ra_deg=0.0,
+            dec_deg=0.0,
+            sigma_pos_arcsec=1.0,
+            parallactic_offset_arcsec=0.0,
+            sigma_parallax_arcsec=1.0,
+            n_epochs=len(sorted_frames),
+        )
 
-    if not last_dets:
-        # Fallback to frame center
-        ra_b = float(last_frame.wcs.wcs.crval[0])
-        dec_b = float(last_frame.wcs.wcs.crval[1])
-        sig_pos = 0.5
-        flux = 0.0
-        snr = 0.0
-    else:
-        # Select best detection closest to center of cutout or highest SNR
-        crval = (float(last_frame.wcs.wcs.crval[0]), float(last_frame.wcs.wcs.crval[1]))
-        c_cen = SkyCoord(crval[0] * u.deg, crval[1] * u.deg, frame="icrs")
-        coords = [SkyCoord(d.ra_deg * u.deg, d.dec_deg * u.deg, frame="icrs") for d in last_dets]
-        seps = [float(c_cen.separation(c).arcsec) for c in coords]
-        best_idx = int(np.argmin(seps))
-        best_det = last_dets[best_idx]
-        ra_b = float(best_det.ra_deg)
-        dec_b = float(best_det.dec_deg)
-        sig_pos = max(float(best_det.sig_ra_arcsec), float(best_det.sig_dec_arcsec), 0.05)
-        flux = float(best_det.flux)
-        snr = float(best_det.snr)
+    t_first = float(sorted_frames[0].epoch.mjd_tdb_mid)
+    t_last = float(sorted_frames[-1].epoch.mjd_tdb_mid)
 
-    # Check for known reference target from reference_values.json
-    parallactic_offset = 0.02
-    sigma_plx = 0.005
-    target_name = None
-    dist_au = None
+    best_cand: tuple[float, Any, tuple[float, float, float]] | None = None
+    for d_last in last_dets:
+        for d_first in first_dets:
+            fit = _fit_candidate_parallax([(t_first, d_first), (t_last, d_last)])
+            if fit is not None:
+                loss = fit[2]
+                if best_cand is None or loss < best_cand[0]:
+                    best_cand = (loss, d_last, fit)
 
-    if _REF_PATH.exists():
-        try:
-            raw = json.loads(_REF_PATH.read_text(encoding="utf-8"))
-            px_targets = raw.get("planetx", {})
-            c_cand = SkyCoord(ra_b * u.deg, dec_b * u.deg, frame="icrs")
-            mjd_last = float(last_frame.epoch.mjd_tdb_mid)
+    if best_cand is None:
+        return PlanetXCandidate(
+            recovered=False,
+            ra_deg=float(last_dets[0].ra_deg),
+            dec_deg=float(last_dets[0].dec_deg),
+            sigma_pos_arcsec=1.0,
+            parallactic_offset_arcsec=0.0,
+            sigma_parallax_arcsec=1.0,
+            n_epochs=len(sorted_frames),
+        )
 
-            for key, tdata in px_targets.items():
-                epochs = tdata.get("epochs", [])
-                for ep in epochs:
-                    ep_mjd = float(Time(ep["epoch_ut"], scale="utc").tdb.mjd)
-                    c_ep = SkyCoord(ep["ra_deg"] * u.deg, ep["dec_deg"] * u.deg, frame="icrs")
-                    if float(c_cand.separation(c_ep).arcsec) < 60.0 and abs(ep_mjd - mjd_last) < 2.0:
-                        target_name = key
-                        dist_au = float(ep.get("delta_au", 50.0))
-                        parallactic_offset = 1.0 / dist_au
-                        sigma_plx = max(0.002, 0.05 * parallactic_offset)
-                        break
-                if target_name:
-                    break
-        except Exception:
-            pass
-
-    if target_name is None and len(sorted_frames) >= 2:
-        # Compute baseline parallax between earliest and latest frames
-        t0 = float(sorted_frames[0].epoch.mjd_tdb_mid)
-        t1 = float(sorted_frames[-1].epoch.mjd_tdb_mid)
-        b0 = observer_barycentric_au(t0)
-        b1 = observer_barycentric_au(t1)
-        p0 = parallax_factors(b0, ra_b, dec_b)
-        p1 = parallax_factors(b1, ra_b, dec_b)
-        dp = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-
-        # If detections exist in first frame, find matched mover
-        first_dets = frame_detections[0]
-        if first_dets and dp > 0.1:
-            # Estimate distance from displacement and parallax factor difference
-            d_est = 50.0  # nominal 50 AU TNO
-            dist_au = d_est
-            parallactic_offset = 1.0 / d_est
-            sigma_plx = max(0.005, 0.1 * parallactic_offset)
-
+    _, d_best, (pi_fit, sig_pi, _) = best_cand
+    sig_pos = max(float(d_best.sig_ra_arcsec), float(d_best.sig_dec_arcsec), 0.05)
     return PlanetXCandidate(
         recovered=True,
-        ra_deg=ra_b,
-        dec_deg=dec_b,
+        ra_deg=float(d_best.ra_deg),
+        dec_deg=float(d_best.dec_deg),
         sigma_pos_arcsec=sig_pos,
-        parallactic_offset_arcsec=parallactic_offset,
-        sigma_parallax_arcsec=sigma_plx,
-        target_name=target_name,
-        distance_au=dist_au,
-        snr=snr,
-        flux=flux,
+        parallactic_offset_arcsec=pi_fit,
+        sigma_parallax_arcsec=sig_pi,
+        distance_au=1.0 / pi_fit,
+        snr=float(d_best.snr),
+        flux=float(d_best.flux),
         n_epochs=len(sorted_frames),
     )

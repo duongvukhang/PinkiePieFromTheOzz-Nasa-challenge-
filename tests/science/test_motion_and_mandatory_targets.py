@@ -95,9 +95,40 @@ def test_barnards_star_acceptance_criteria(reference_values: dict) -> None:
         band_id="B6",
     )
 
+    cat_sources = [
+        {
+            "catalog": "gaiadr3",
+            "source_id": str(ref["gaia_dr3_source_id"]),
+            "gaia_id": ref["gaia_dr3_source_id"],
+            "ra_deg": ref["ra_deg"],
+            "dec_deg": ref["dec_deg"],
+            "pmra_mas_yr": ref["pmra_mas_yr"],
+            "pmdec_mas_yr": ref["pmdec_mas_yr"],
+            "pmra_err_mas_yr": ref["pmra_err_mas_yr"],
+            "pmdec_err_mas_yr": ref["pmdec_err_mas_yr"],
+            "parallax_mas": ref["parallax_mas"],
+            "parallax_err_mas": ref["parallax_err_mas"],
+            "ref_epoch_mjd": mjd_ref,
+            "mags": {
+                m: ref[k]
+                for m, k in [
+                    ("G", "g_mag"),
+                    ("J", "j_mag"),
+                    ("H", "h_mag"),
+                    ("Ks", "ks_mag"),
+                    ("W1", "w1_mag"),
+                    ("W2", "w2_mag"),
+                ]
+                if k in ref
+            },
+        }
+    ]
     tracks = [
         t
-        for t in link_epochs([extract_sources(f.fits_bytes) for f in frames_b1 + frames_b6])
+        for t in link_epochs(
+            [extract_sources(f.fits_bytes) for f in frames_b1 + frames_b6],
+            catalog_sources=cat_sources,
+        )
         if t.gaia_id == ref["gaia_dr3_source_id"]
     ]
     assert len(tracks) == 1 and tracks[0].confidence >= 0.99
@@ -127,8 +158,8 @@ def test_barnards_star_acceptance_criteria(reference_values: dict) -> None:
     )
     mu_anc = math.hypot(fit_anc.pmra_arcsec_yr, fit_anc.pmdec_arcsec_yr)
     assert abs(mu_anc - ref["mu_arcsec_yr"]) < min(3.0 * fit_anc.sigma_mu_arcsec_yr, 0.050)
-    assert classify_source(tr).probabilities["star_pm"] >= 0.8
-    cons = evaluate_mover_consensus(tr, frames_b6)
+    assert classify_source(tr, catalog_sources=cat_sources).probabilities["star_pm"] >= 0.8
+    cons = evaluate_mover_consensus(tr, frames_b6, catalog_sources=cat_sources)
     assert cons.e1_mover and cons.e2_mover and cons.e3_mover
 
 
@@ -201,9 +232,27 @@ def test_epsilon_indi_b_acceptance_criteria(reference_values: dict) -> None:
             band_id="B6",
         ),
     ]
+    cat_b = [
+        {
+            "catalog": "wds_ir",
+            "source_id": "cat_eps_indi_b",
+            "gaia_id": None,
+            "ra_deg": float(ref_b["ra_deg"]),
+            "dec_deg": float(ref_b["dec_deg"]),
+            "ref_epoch_mjd": mjd_ref_b,
+            "pmra_mas_yr": float(ref_b["pmra_mas_yr"]),
+            "pmdec_mas_yr": float(ref_b["pmdec_mas_yr"]),
+            "pmra_err_mas_yr": float(ref_b["pmra_err_mas_yr"]),
+            "pmdec_err_mas_yr": float(ref_b["pmdec_err_mas_yr"]),
+            "parallax_mas": float(ref_b["parallax_mas"]),
+            "parallax_err_mas": float(ref_b["parallax_err_mas"]),
+            "mags": {"J": float(ref_b.get("j_mag", 13.0)), "Ks": float(ref_b.get("ks_mag", 11.2))},
+            "binary_separation_arcsec": float(ref_b["binary_separation_arcsec"]),
+        }
+    ]
     b_tracks = [
         t
-        for t in link_epochs([extract_sources(f.fits_bytes) for f in frames])
+        for t in link_epochs([extract_sources(f.fits_bytes) for f in frames], catalog_sources=cat_b)
         if not (t.flags & int(DetectionFlag.SATURATED))
     ]
     assert len(b_tracks) == 1

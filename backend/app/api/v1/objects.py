@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import math
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
@@ -445,6 +445,12 @@ async def select_project_objects(
     store: Annotated[JobStore, Depends(get_store)],
 ) -> TrackedObjectSelectResponse:
     """Select objects via box-drag, suggestion, catalog, or manual coordinates."""
+    if payload.analysis_id is None:
+        raise APIProblemError(
+            422,
+            "Analysis ID Required",
+            "Field 'analysis_id' must be specified for project object selection.",
+        )
     job = require_succeeded_job(
         store.get_analysis_job(payload.analysis_id),
         payload.analysis_id,
@@ -878,18 +884,41 @@ async def predict_object_ephemeris(
     if motion_fits:
         best_fit = min(motion_fits, key=lambda f: float(f.get("bic") or 0.0))
 
-    ref_ra = float(obj.get("ra_deg") or (best_fit.get("ra_ref_deg") if best_fit else 0.0) or 0.0)
-    ref_dec = float(obj.get("dec_deg") or (best_fit.get("dec_ref_deg") if best_fit else 0.0) or 0.0)
-    ref_mjd = float(payload.start_mjd or (best_fit.get("ref_epoch_mjd_tdb") if best_fit else None) or 60800.0)
+    params = (best_fit.get("params") if best_fit else None) or {}
 
-    pm_ra = float(best_fit.get("pmra_arcsec_yr") or 0.0) if best_fit else 0.0
-    pm_dec = float(best_fit.get("pmdec_arcsec_yr") or 0.0) if best_fit else 0.0
-    plx = float(best_fit.get("parallax_mas") or 0.0) if best_fit else 0.0
+    ref_ra = float(obj.get("ref_ra") or obj.get("ra_deg") or params.get("ra_deg") or 0.0)
+    ref_dec = float(obj.get("ref_dec") or obj.get("dec_deg") or params.get("dec_deg") or 0.0)
+    ref_mjd = float(
+        payload.start_mjd
+        or (best_fit.get("ref_epoch_mjd_tdb") if best_fit else None)
+        or obj.get("ref_mjd_tdb")
+        or 60800.0
+    )
+
+    pm_ra = (
+        float(params.get("pmra_masyr") or 0.0) / 1000.0
+        if "pmra_masyr" in params
+        else float(best_fit.get("pmra_arcsec_yr") or 0.0)
+    )
+    pm_dec = (
+        float(params.get("pmdec_masyr") or 0.0) / 1000.0
+        if "pmdec_masyr" in params
+        else float(best_fit.get("pmdec_arcsec_yr") or 0.0)
+    )
+    plx = float(
+        best_fit.get("plx_mas") or params.get("parallax_mas") or best_fit.get("parallax_mas") or 0.0
+    )
 
     cov_matrix = None
-    if best_fit and best_fit.get("cov_params"):
+    cov_raw = (best_fit.get("covariance") or best_fit.get("cov_params")) if best_fit else None
+    if cov_raw is not None:
         with contextlib.suppress(Exception):
-            cov_matrix = np.asarray(best_fit["cov_params"], dtype=np.float64)
+            arr = np.asarray(cov_raw, dtype=np.float64)
+            if arr.ndim == 1 and arr.size in (16, 25):
+                n_side = int(math.isqrt(arr.size))
+                cov_matrix = arr.reshape((n_side, n_side))
+            elif arr.ndim == 2:
+                cov_matrix = arr
 
     target_dict = {
         "ra_deg": ref_ra,

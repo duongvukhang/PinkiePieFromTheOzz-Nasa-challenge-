@@ -762,6 +762,14 @@ def difference_frames(
                     pairs.append((idx_prev, idx_k, fprev, fk))
                     seen_p.add((idx_prev, idx_k))
 
+    if require_band_match:
+        pairs = [
+            (ia, ib, fa, fb)
+            for ia, ib, fa, fb in pairs
+            if (fa.band_id or band_group_for_wavelength(fa.wavelength_um))
+            == (fb.band_id or band_group_for_wavelength(fb.wavelength_um))
+        ]
+
     bg_loaded = [estimate_background_and_noise(fd) for fd in loaded]
     bg_fixed = estimate_background_and_noise(ref_fd) if reference_frame is not None else None
     pair_results = [

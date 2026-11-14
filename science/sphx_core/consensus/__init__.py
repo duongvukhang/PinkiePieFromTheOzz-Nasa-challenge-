@@ -72,7 +72,13 @@ def _pair_consistency(a: EstimatorVector, b: EstimatorVector) -> tuple[float, fl
         [a.pmra_arcsec_yr - b.pmra_arcsec_yr, a.pmdec_arcsec_yr - b.pmdec_arcsec_yr],
         dtype=np.float64,
     )
-    c_sum = np.asarray(a.cov_mu, dtype=np.float64) + np.asarray(b.cov_mu, dtype=np.float64)
+    # Astrometric frame-tie uncertainty (0.03"/yr) between external catalogs and native frames (§C.1, §F.1)
+    sig_tie2 = 0.03**2 if ((a.estimator_id in ("E2", "E4")) != (b.estimator_id in ("E2", "E4"))) else 0.0
+    c_sum = (
+        np.asarray(a.cov_mu, dtype=np.float64)
+        + np.asarray(b.cov_mu, dtype=np.float64)
+        + sig_tie2 * np.eye(2, dtype=np.float64)
+    )
     chi2_val = float(da @ np.linalg.pinv(c_sum) @ da)
     return chi2_val, float(chi2_dist.sf(chi2_val, df=2))
 
@@ -98,12 +104,6 @@ def evaluate_mover_consensus(
     """Evaluate E1 (dipole), E2 (catalog PM), E3 (WLS PM), E4, E6 consensus (§F.1-F.2)."""
     notes: list[str] = []
 
-    # E3: Centroid WLS motion fit (§C.3-C.4)
-    mfit: MotionFitResult = fit_motion(track)
-    e3 = EstimatorVector(
-        "E3", bool(mfit.is_mover), mfit.pmra_arcsec_yr, mfit.pmdec_arcsec_yr, _mu_cov2(mfit)
-    )
-
     # E2: Independent external catalog prediction vs SPHEREx observations (§F.1)
     clean_dets = [
         d
@@ -111,27 +111,27 @@ def evaluate_mover_consensus(
         if not (d.flags & int(HARD_BAD_MASK)) and d.ra_deg is not None and d.dec_deg is not None
     ]
     matches = list(track.catalog_matches)
-    if not matches:
-        ref_d = clean_dets[0] if clean_dets else None
-        ref_ra = (
-            float(ref_d.ra_deg)
-            if ref_d is not None and ref_d.ra_deg is not None
-            else mfit.ra_ref_deg
-        )
-        ref_dec = (
-            float(ref_d.dec_deg)
-            if ref_d is not None and ref_d.dec_deg is not None
-            else mfit.dec_ref_deg
-        )
-        ref_mjd = float(ref_d.mjd_tdb) if ref_d is not None else mfit.ref_epoch_mjd_tdb
+    if not matches and clean_dets:
+        ref_d = clean_dets[0]
         matches = crossmatch_catalog(
-            ref_ra,
-            ref_dec,
-            ref_mjd,
+            float(ref_d.ra_deg),
+            float(ref_d.dec_deg),
+            float(ref_d.mjd_tdb),
             max_radius_arcsec=3.0,
             catalog_sources=catalog_sources,
         )
     cat = next((m for m in matches if m.match_prob >= 0.8 and m.pmra_arcsec_yr is not None), None)
+
+    # E3: Centroid WLS motion fit (§C.3-C.4)
+    prior_plx = (
+        float(cat.parallax_mas)
+        if cat is not None and cat.parallax_mas is not None and cat.parallax_mas > 0.0
+        else None
+    )
+    mfit: MotionFitResult = fit_motion(track, prior_parallax_mas=prior_plx)
+    e3 = EstimatorVector(
+        "E3", bool(mfit.is_mover), mfit.pmra_arcsec_yr, mfit.pmdec_arcsec_yr, _mu_cov2(mfit)
+    )
     e2: EstimatorVector | None = None
     if cat is not None and cat.pmra_arcsec_yr is not None and cat.pmdec_arcsec_yr is not None:
         cat_mu = math.hypot(cat.pmra_arcsec_yr, cat.pmdec_arcsec_yr)

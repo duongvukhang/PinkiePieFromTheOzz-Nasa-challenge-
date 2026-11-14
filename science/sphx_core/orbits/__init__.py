@@ -22,15 +22,16 @@ class SSOResidual:
     """Astrometric residual between measured SSO detection and Horizons ephemeris position."""
 
     mjd_tdb: float
-    ra_meas_deg: float
-    dec_meas_deg: float
+    ra_meas_deg: float | None
+    dec_meas_deg: float | None
     ra_ephem_deg: float
     dec_ephem_deg: float
-    dra_arcsec: float
-    ddec_arcsec: float
-    sep_arcsec: float
-    sigma_pos_arcsec: float
-    chi_residual: float
+    dra_arcsec: float | None
+    ddec_arcsec: float | None
+    sep_arcsec: float | None
+    sigma_pos_arcsec: float | None
+    chi_residual: float | None
+    matched: bool = True
 
 
 @dataclass(frozen=True)
@@ -67,38 +68,34 @@ def evaluate_sso_residuals(
         ext_res = extract_sources(frame, detect_thresh_sigma=1.5)
         sources = ext_res.detections
 
-        ra_meas, dec_meas = e_ra, e_dec
-        sig_ra, sig_dec = 0.05, 0.05
-        cov_radec = 0.0
-
+        matched = False
+        matched_src = None
         if sources:
             c_eph = SkyCoord(e_ra * u.deg, e_dec * u.deg, frame="icrs")
             s_coords = [SkyCoord(s.ra_deg * u.deg, s.dec_deg * u.deg, frame="icrs") for s in sources]
             seps = [float(c_eph.separation(sc).arcsec) for sc in s_coords]
             min_idx = int(np.argmin(seps))
             if seps[min_idx] < 15.0:
-                matched = sources[min_idx]
-                ra_meas = matched.ra_deg
-                dec_meas = matched.dec_deg
-                sig_ra = max(matched.sig_ra_arcsec, 1e-4)
-                sig_dec = max(matched.sig_dec_arcsec, 1e-4)
-                cov_radec = matched.cov_sky_arcsec2[2]
+                matched = True
+                matched_src = sources[min_idx]
 
-        cos_dec = math.cos(math.radians(e_dec))
-        dra = (ra_meas - e_ra) * cos_dec * 3600.0
-        ddec = (dec_meas - e_dec) * 3600.0
-        sep = math.hypot(dra, ddec)
-
-        var_ra = sig_ra ** 2
-        var_dec = sig_dec ** 2
-        det_cov = var_ra * var_dec - cov_radec ** 2
-        if det_cov > 0:
-            inv_11 = var_dec / det_cov
-            inv_22 = var_ra / det_cov
-            inv_12 = -cov_radec / det_cov
-            chi = math.sqrt(max(0.0, dra * (inv_11 * dra + inv_12 * ddec) + ddec * (inv_12 * dra + inv_22 * ddec)))
+        if matched and matched_src is not None:
+            ra_meas, dec_meas = matched_src.ra_deg, matched_src.dec_deg
+            sig_ra = max(matched_src.sig_ra_arcsec, 1e-4)
+            sig_dec = max(matched_src.sig_dec_arcsec, 1e-4)
+            cov_radec = matched_src.cov_sky_arcsec2[2]
+            cos_dec = math.cos(math.radians(e_dec))
+            dra, ddec = (ra_meas - e_ra) * cos_dec * 3600.0, (dec_meas - e_dec) * 3600.0
+            sep, sig_pos = math.hypot(dra, ddec), math.hypot(sig_ra, sig_dec)
+            det_cov = sig_ra**2 * sig_dec**2 - cov_radec**2
+            chi = (
+                math.sqrt(max(0.0, (dra**2 * sig_dec**2 - 2 * dra * ddec * cov_radec + ddec**2 * sig_ra**2) / det_cov))
+                if det_cov > 0
+                else sep / sig_pos
+            )
         else:
-            chi = sep / math.hypot(sig_ra, sig_dec)
+            ra_meas, dec_meas = None, None
+            dra = ddec = sep = sig_pos = chi = float("nan")
 
         residuals.append(
             SSOResidual(
@@ -110,8 +107,9 @@ def evaluate_sso_residuals(
                 dra_arcsec=dra,
                 ddec_arcsec=ddec,
                 sep_arcsec=sep,
-                sigma_pos_arcsec=math.hypot(sig_ra, sig_dec),
+                sigma_pos_arcsec=sig_pos,
                 chi_residual=chi,
+                matched=matched,
             )
         )
 

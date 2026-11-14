@@ -38,8 +38,8 @@ def test_sso_eros_residuals_against_horizons(reference_values: dict) -> None:
             generate_synthetic_cutout(
                 seed=40000 + idx,
                 sources=[src],
-                ra_center_deg=ep0["ra_deg"] + 0.01,
-                dec_center_deg=ep0["dec_deg"],
+                ra_center_deg=ra_e + 0.001,
+                dec_center_deg=dec_e,
                 mjd_tdb_mid=mjd_e,
             )
         )
@@ -88,3 +88,44 @@ def test_planetx_mode_stretch_tno_recovery(reference_values: dict) -> None:
         assert float(c_fit.separation(c_ref).arcsec) < 3.0 * cand.sigma_pos_arcsec
         expected_plx = 1.0 / ep_b["delta_au"]
         assert abs(cand.parallactic_offset_arcsec - expected_plx) < 3.0 * cand.sigma_parallax_arcsec
+
+
+def test_search_planetx_integrity_no_ref_lookup_and_no_default_recovered() -> None:
+    """Planet X integrity: search_planetx must not read reference_values.json and must not return recovered=True on noise."""
+    import sphx_core.planetx as px_mod
+
+    assert not hasattr(px_mod, "_REF_PATH"), "sphx_core.planetx must not define or use _REF_PATH"
+
+    noise_frames = [
+        generate_synthetic_cutout(
+            seed=55000 + j,
+            sources=[],
+            ra_center_deg=180.0,
+            dec_center_deg=10.0,
+            mjd_tdb_mid=60800.0 + j * 180.0,
+        )
+        for j in range(2)
+    ]
+    cand = px_mod.search_planetx([f.fits_bytes for f in noise_frames])
+    assert not cand.recovered, "search_planetx must not report recovered=True on noise-only frames"
+
+
+def test_evaluate_sso_residuals_missed_epoch_not_zero() -> None:
+    """Missed detections (no source within 15\") must be marked matched=False and not score 0.0\"."""
+    from sphx_core.orbits import evaluate_sso_residuals
+
+    noise_frame = generate_synthetic_cutout(
+        seed=55100,
+        sources=[],
+        ra_center_deg=180.0,
+        dec_center_deg=10.0,
+        mjd_tdb_mid=60800.0,
+    )
+    eph = [{"mjd_tdb": 60800.0, "ra_deg": 180.0, "dec_deg": 10.0}]
+    residuals = evaluate_sso_residuals([noise_frame.fits_bytes], ephemeris=eph)
+    assert len(residuals) == 1
+    r = residuals[0]
+    assert not getattr(r, "matched", True)
+    assert r.sep_arcsec != 0.0
+
+

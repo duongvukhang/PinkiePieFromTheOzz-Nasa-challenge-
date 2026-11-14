@@ -390,7 +390,6 @@ def extract_sources(
         # Nominal astrometric floor terms per SCIENCE.md §C.1 table.
         sig_reg = 0.05 if sigma_reg_arcsec is None else float(sigma_reg_arcsec)
         floor_px2 = ((0.05**2 + 0.03**2) / (pixscale**2)) if pixscale > 0.0 else 0.0
-        sky_floor_arcsec2 = sig_reg**2 + 0.10**2
         f_max_psf = float(erf(0.5 / (math.sqrt(2.0) * sigma_px))) ** 2
 
         for idx, (row, pcov, morph) in enumerate(all_rows):
@@ -506,7 +505,7 @@ def extract_sources(
             # Tangent-plane sky covariance per §C.1 Eq. (131).
             jac = local_wcs_jacobian(frame.wcs, x_p, y_p)
             cov_det = cov_xy + floor_px2 * np.eye(2, dtype=np.float64)
-            cov_sky = jac @ cov_det @ jac.T + sky_floor_arcsec2 * np.eye(2, dtype=np.float64)
+            cov_sky = jac @ cov_det @ jac.T
             sig_ra = math.sqrt(max(float(cov_sky[0, 0]), 1e-12))
             sig_dec = math.sqrt(max(float(cov_sky[1, 1]), 1e-12))
             corr = float(np.clip(cov_sky[0, 1] / (sig_ra * sig_dec), -0.999, 0.999))

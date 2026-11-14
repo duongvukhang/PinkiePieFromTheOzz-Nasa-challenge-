@@ -263,92 +263,9 @@ def format_public_id(ra_j2026_deg: float, dec_j2026_deg: float) -> str:
     )
 
 
-@lru_cache(maxsize=1)
 def _default_offline_catalog() -> tuple[dict[str, Any], ...]:
-    """Load ONLY observational catalog entries (no labels/answers) from `reference_values.json`."""
-    if not _REF_PATH.exists():
-        return ()
-    raw = json.loads(_REF_PATH.read_text(encoding="utf-8"))
-    entries: list[dict[str, Any]] = []
-    mjd_2016 = float(Time(2016.0, format="jyear", scale="tdb").mjd)
-
-    for s in raw.get("gaia_qa_stars", ()):
-        entries.append(
-            {
-                "catalog": "gaiadr3",
-                "source_id": str(s["source_id"]),
-                "gaia_id": int(s["source_id"]),
-                "ra_deg": float(s["ra"]),
-                "dec_deg": float(s["dec"]),
-                "ref_epoch_mjd": float(
-                    Time(float(s.get("ref_epoch", 2016.0)), format="jyear", scale="tdb").mjd
-                )
-                if "ref_epoch" in s
-                else mjd_2016,
-                "pmra_mas_yr": float(s.get("pmra") or 0.0),
-                "pmdec_mas_yr": float(s.get("pmdec") or 0.0),
-                "pmra_err_mas_yr": float(s.get("pmra_error") or 0.1),
-                "pmdec_err_mas_yr": float(s.get("pmdec_error") or 0.1),
-                "parallax_mas": float(s.get("parallax") or 0.0),
-                "parallax_err_mas": float(s.get("parallax_error") or 0.1),
-                "ra_err_mas": float(s.get("ra_error") or 0.1),
-                "dec_err_mas": float(s.get("dec_error") or 0.1),
-                "mags": {
-                    k: float(v) for k, v in (("G", s.get("phot_g_mean_mag")),) if v is not None
-                },
-                "binary_separation_arcsec": None,
-            }
-        )
-
-    for key, t in raw.get("targets", {}).items():
-        # Exclude ground-truth class labels, periods, spectral types, and derived mu/pa.
-        ra_v = t.get("ra_deg")
-        dec_v = t.get("dec_deg")
-        if ra_v is None or dec_v is None:
-            continue
-        if "ref_epoch_jd" in t:
-            ref_mjd = float(Time(float(t["ref_epoch_jd"]), format="jd", scale="tdb").mjd)
-        elif "ref_epoch_year" in t:
-            ref_mjd = float(Time(float(t["ref_epoch_year"]), format="jyear", scale="tdb").mjd)
-        else:
-            ref_mjd = mjd_2016
-        gid = t.get("gaia_dr3_source_id")
-        mag_map = {
-            m_name: float(t[m_key])
-            for m_key, m_name in (
-                ("g_mag", "G"),
-                ("j_mag", "J"),
-                ("h_mag", "H"),
-                ("ks_mag", "Ks"),
-                ("w1_mag", "W1"),
-                ("w2_mag", "W2"),
-                ("w3_mag", "W3"),
-            )
-            if t.get(m_key) is not None
-        }
-        entries.append(
-            {
-                "catalog": "gaiadr3" if gid is not None else "wds_ir",
-                "source_id": str(gid) if gid is not None else f"cat_{key}",
-                "gaia_id": int(gid) if gid is not None else None,
-                "ra_deg": float(ra_v),
-                "dec_deg": float(dec_v),
-                "ref_epoch_mjd": ref_mjd,
-                "pmra_mas_yr": float(t.get("pmra_mas_yr") or 0.0),
-                "pmdec_mas_yr": float(t.get("pmdec_mas_yr") or 0.0),
-                "pmra_err_mas_yr": float(t.get("pmra_err_mas_yr") or 1.0),
-                "pmdec_err_mas_yr": float(t.get("pmdec_err_mas_yr") or 1.0),
-                "parallax_mas": float(t.get("parallax_mas") or 0.0),
-                "parallax_err_mas": float(t.get("parallax_err_mas") or 1.0),
-                "ra_err_mas": 1.0,
-                "dec_err_mas": 1.0,
-                "mags": mag_map,
-                "binary_separation_arcsec": float(t["binary_separation_arcsec"])
-                if t.get("binary_separation_arcsec") is not None
-                else None,
-            }
-        )
-    return tuple(entries)
+    """Return empty catalog when catalog_sources=None in production."""
+    return ()
 
 
 def _row_get(obj: Any, key: str, default: Any = None) -> Any:
@@ -426,11 +343,17 @@ def _normalize_catalog_rows(catalog_sources: Sequence[Any] | None) -> list[dict[
                 "ref_epoch_mjd": float(ep_mjd),
                 "pmra_mas_yr": float(pmra),
                 "pmdec_mas_yr": float(pmdec),
-                "pmra_err_mas_yr": float(
-                    _row_get(item, "pmra_err_masyr") or _row_get(item, "pmra_err_mas_yr") or 1.0
+                "pmra_err_mas_yr": (
+                    float(pe)
+                    if (pe := (_row_get(item, "pmra_err_masyr") or _row_get(item, "pmra_err_mas_yr")))
+                    is not None
+                    else None
                 ),
-                "pmdec_err_mas_yr": float(
-                    _row_get(item, "pmdec_err_masyr") or _row_get(item, "pmdec_err_mas_yr") or 1.0
+                "pmdec_err_mas_yr": (
+                    float(pde)
+                    if (pde := (_row_get(item, "pmdec_err_masyr") or _row_get(item, "pmdec_err_mas_yr")))
+                    is not None
+                    else None
                 ),
                 "parallax_mas": float(
                     _row_get(item, "parallax_mas") or _row_get(item, "parallax") or 0.0
@@ -481,7 +404,9 @@ def _propagate_catalog_entry(
         ra_e, dec_e = float(entry["ra_deg"]) % 360.0, float(entry["dec_deg"])
     dt_yr = abs(mjd_tdb - entry["ref_epoch_mjd"]) / 365.25
     sig0 = max(float(entry["ra_err_mas"]), float(entry["dec_err_mas"])) * 1e-3
-    sig_mu = max(float(entry["pmra_err_mas_yr"]), float(entry["pmdec_err_mas_yr"])) * 1e-3
+    pme_r = entry["pmra_err_mas_yr"] if entry["pmra_err_mas_yr"] is not None else 20.0
+    pme_d = entry["pmdec_err_mas_yr"] if entry["pmdec_err_mas_yr"] is not None else 20.0
+    sig_mu = max(float(pme_r), float(pme_d)) * 1e-3
     sig_plx = float(entry["parallax_err_mas"]) * 1e-3
     pa, pd = parallax_factors(observer_barycentric_au(mjd_tdb), ra_e, dec_e)
     sig_cat = max(1e-3, math.sqrt(sig0**2 + (dt_yr * sig_mu) ** 2 + (sig_plx**2) * (pa**2 + pd**2)))
@@ -540,8 +465,16 @@ def crossmatch_catalog(
                 mags=dict(entry["mags"]),
                 binary_separation_arcsec=entry["binary_separation_arcsec"],
                 ref_epoch_mjd=float(mjd_tdb),
-                pmra_err_arcsec_yr=entry["pmra_err_mas_yr"] * 1e-3,
-                pmdec_err_arcsec_yr=entry["pmdec_err_mas_yr"] * 1e-3,
+                pmra_err_arcsec_yr=(
+                    entry["pmra_err_mas_yr"] * 1e-3
+                    if entry["pmra_err_mas_yr"] is not None
+                    else None
+                ),
+                pmdec_err_arcsec_yr=(
+                    entry["pmdec_err_mas_yr"] * 1e-3
+                    if entry["pmdec_err_mas_yr"] is not None
+                    else None
+                ),
                 ra_err_arcsec=entry["ra_err_mas"] * 1e-3,
                 dec_err_arcsec=entry["dec_err_mas"] * 1e-3,
                 parallax_err_mas=entry["parallax_err_mas"],
@@ -939,7 +872,7 @@ def _pair_cost(
     )
     if det.flags & int(DetectionFlag.BLENDED):
         c_j = c_j * 2.0
-    s_kj = pred_cov + c_j
+    s_kj = pred_cov + c_j + (0.05**2 + 0.10**2) * np.eye(2, dtype=np.float64)
     try:
         s_inv = np.linalg.inv(s_kj)
         sign, logdet = np.linalg.slogdet(2.0 * math.pi * s_kj)
@@ -1106,7 +1039,6 @@ def _seed_tracks(
         tracks.append(tr)
 
     # 1. Seed static/catalog-prior sources starting from earliest exposures
-    # Group distinct time clusters so multi-band simultaneous exposures share seeds cleanly.
     v0 = ordered[0]
     for d0 in v0.detections:
         if d0.flags & int(HARD_BAD_MASK) or d0.ra_deg is None or d0.dec_deg is None:
@@ -1129,51 +1061,45 @@ def _seed_tracks(
                 plx_as = (cm.parallax_mas or 0.0) * 1e-3
                 px_k = cm.pmra_arcsec_yr * dt_k + plx_as * (pa_k - pa_0)
                 py_k = cm.pmdec_arcsec_yr * dt_k + plx_as * (pd_k - pd_0)
-                best_dk = None
-                best_r = 2.0
+                best_dk, best_r = None, 2.0
                 for dk in vk.detections:
                     if (
                         (vk.epoch_index, dk.detection_id) in claimed
                         or (dk.flags & int(HARD_BAD_MASK))
                         or dk.ra_deg is None
-                        or dk.dec_deg is None
                     ):
                         continue
                     rx, ry = sky_to_tangent_arcsec(dk.ra_deg, dk.dec_deg, d0.ra_deg, d0.dec_deg)
                     r = math.hypot(float(rx) - px_k, float(ry) - py_k)
                     if r < best_r:
-                        best_r = r
-                        best_dk = dk
+                        best_r, best_dk = r, dk
                 if best_dk is not None:
                     cat_peers.append((vk, best_dk))
             _add_seed(cat_peers, (cm.pmra_arcsec_yr, cm.pmdec_arcsec_yr), 0.25, cat_match=cm)
             continue
-        # Check if static/slow match exists in at least one other distinct timestamp (< 2.5 "/yr)
+
+        # Check if static/slow match exists in at least one other distinct timestamp
         static_peers = [(v0, d0)]
         for vk in ordered[1:]:
             dt_yr = abs(vk.mjd_tdb - v0.mjd_tdb) / 365.25
-            lim = max(1.5, 2.5 * dt_yr + 1.0)
-            best_dk = None
-            best_r = lim
+            lim = max(1.5, 0.40 * dt_yr + 0.8)
+            best_dk, best_r = None, lim
             for dk in vk.detections:
                 if (
                     (vk.epoch_index, dk.detection_id) in claimed
                     or (dk.flags & int(HARD_BAD_MASK))
                     or dk.ra_deg is None
-                    or dk.dec_deg is None
                 ):
                     continue
                 r = math.hypot(*sky_to_tangent_arcsec(dk.ra_deg, dk.dec_deg, d0.ra_deg, d0.dec_deg))
                 if float(r) < best_r:
-                    best_r = float(r)
-                    best_dk = dk
+                    best_r, best_dk = float(r), dk
             if best_dk is not None:
                 static_peers.append((vk, best_dk))
         if len(static_peers) >= 2:
-            _add_seed(static_peers, (0.0, 0.0), init_sig_mu)
+            _add_seed(static_peers, (0.0, 0.0), max(0.35, sigma_mu_0))
 
-    # 2. Seed fast movers across unclaimed detections (pairwise speed <= max_pm_arcsec_yr)
-    distinct_views = [v for v in ordered if abs(v.mjd_tdb - v0.mjd_tdb) > 1e-2]
+    # 2. Velocity-space clustering for moving sources over pairwise displacements
     all_v = ordered
     for i_a, va in enumerate(all_v[:-1]):
         for da in va.detections:
@@ -1181,12 +1107,10 @@ def _seed_tracks(
                 (va.epoch_index, da.detection_id) in claimed
                 or (da.flags & int(HARD_BAD_MASK))
                 or da.ra_deg is None
-                or da.dec_deg is None
             ):
                 continue
             best_chain: list[tuple[_EpochView, EpochDetection]] = [(va, da)]
             best_mu = (0.0, 0.0)
-            # Search pairs with later distinct-time epochs
             for vb in reversed(all_v[i_a + 1 :]):
                 dt_ab = (vb.mjd_tdb - va.mjd_tdb) / 365.25
                 if abs(dt_ab) < 0.02:
@@ -1196,51 +1120,41 @@ def _seed_tracks(
                         (vb.epoch_index, db.detection_id) in claimed
                         or (db.flags & int(HARD_BAD_MASK))
                         or db.ra_deg is None
-                        or db.dec_deg is None
                     ):
                         continue
-                    xi_b, eta_b = sky_to_tangent_arcsec(
-                        db.ra_deg, db.dec_deg, da.ra_deg, da.dec_deg
-                    )
-                    mu_a = float(xi_b) / dt_ab
-                    mu_d = float(eta_b) / dt_ab
-                    mu_tot = math.hypot(mu_a, mu_d)
-                    if mu_tot > max_pm_arcsec_yr:
+                    xi_b, eta_b = sky_to_tangent_arcsec(db.ra_deg, db.dec_deg, da.ra_deg, da.dec_deg)
+                    mu_a, mu_d = float(xi_b) / dt_ab, float(eta_b) / dt_ab
+                    if math.hypot(mu_a, mu_d) > max_pm_arcsec_yr:
                         continue
-                    chain = [(va, da)]
+                    chain = [(va, da), (vb, db)]
                     for vc in all_v:
-                        if vc.epoch_index == va.epoch_index:
+                        if vc.epoch_index in (va.epoch_index, vb.epoch_index):
                             continue
                         dt_c = (vc.mjd_tdb - va.mjd_tdb) / 365.25
                         px_c, py_c = mu_a * dt_c, mu_d * dt_c
-                        best_dc = None
-                        best_rc = max(2.2, 4.0 * max(da.sig_ra_arcsec, 0.2))
+                        best_dc, best_rc = None, max(2.0, 3.0 * max(da.sig_ra_arcsec, 0.2))
                         for dc in vc.detections:
                             if (
                                 (vc.epoch_index, dc.detection_id) in claimed
                                 or (dc.flags & int(HARD_BAD_MASK))
                                 or dc.ra_deg is None
-                                or dc.dec_deg is None
                             ):
                                 continue
-                            xc, yc = sky_to_tangent_arcsec(
-                                dc.ra_deg, dc.dec_deg, da.ra_deg, da.dec_deg
-                            )
+                            xc, yc = sky_to_tangent_arcsec(dc.ra_deg, dc.dec_deg, da.ra_deg, da.dec_deg)
                             rc = math.hypot(float(xc) - px_c, float(yc) - py_c)
                             if rc < best_rc:
-                                best_rc = rc
-                                best_dc = dc
+                                best_rc, best_dc = rc, dc
                         if best_dc is not None:
                             chain.append((vc, best_dc))
                     if len(chain) > len(best_chain):
                         best_chain = chain
                         best_mu = (mu_a, mu_d)
-            if len(best_chain) >= 2 or not distinct_views:
-                _add_seed(best_chain, best_mu, max(1.5, 0.25 * math.hypot(*best_mu), init_sig_mu))
+            if len(best_chain) >= 2:
+                _add_seed(best_chain, best_mu, max(0.50, 0.15 * math.hypot(*best_mu)))
             else:
                 _add_seed([(va, da)], (0.0, 0.0), init_sig_mu)
 
-    # 3. Any remaining clean detections in any epoch get their own seed track
+    # 3. Remaining unclaimed detections get single seed
     for v in ordered:
         for d in v.detections:
             if (
@@ -1283,8 +1197,16 @@ def _refit_track_state(track: _TrackProto, fit_parallax: bool | None = None) -> 
     if len(meas) < 2:
         _update_track_photometry(track)
         return
+    corroborated = bool(track.catalog_id or track.gaia_id or track.catalog_matches)
+    prior_plx = (
+        float(track.catalog_matches[0].parallax_mas)
+        if track.catalog_matches and track.catalog_matches[0].parallax_mas is not None and track.catalog_matches[0].parallax_mas > 0.0
+        else None
+    )
     try:
-        mfit = fit_motion(meas, fit_parallax=fit_parallax)
+        mfit = fit_motion(
+            meas, fit_parallax=fit_parallax, corroborated=corroborated, prior_parallax_mas=prior_plx
+        )
     except ValueError as exc:
         msg = f"REFIT_FAILED: {exc}"
         if msg not in track.notes:
@@ -1339,6 +1261,9 @@ def _refit_track_state(track: _TrackProto, fit_parallax: bool | None = None) -> 
     if mfit.vim_flagged:
         track.notes = [n for n in track.notes if not n.startswith("VIM_CANDIDATE")]
         track.notes.append("VIM_CANDIDATE: photocentre wobble correlated with flux")
+    if any("unvalidated" in n for n in mfit.notes):
+        track.notes = [n for n in track.notes if not n.startswith("unvalidated")]
+        track.notes.append("unvalidated: N=2 epochs (dof=0, chi2=0) without corroboration")
     _update_track_photometry(track)
 
 
@@ -1399,11 +1324,15 @@ def _solve_epoch_hungarian(
             or [8.0]
         )
         p_d = float(np.clip(ndtr(snr_est - 5.0), 0.01, 0.99))
+        log_pd = math.log(max(p_d, 1e-6))
         cost[rk, j_cnt + rk] = -math.log(max(1.0 - p_d, 1e-6))
         for j, det in enumerate(view.detections):
             cij, _, r_vec = _pair_cost(tr, det, p_xy, p_cov, view)
-            if cij < 0.5 * _BIG_COST:
-                cost[rk, j] = cij
+            if cij < -0.5 * _BIG_COST:
+                cost[rk, j] = -_BIG_COST
+                res_map[(rk, j)] = r_vec
+            elif cij < 0.5 * _BIG_COST:
+                cost[rk, j] = -log_pd + cij
                 res_map[(rk, j)] = r_vec
 
     # Solve global optimal assignment and compute exact 2nd-best margin per track.
@@ -1421,16 +1350,23 @@ def _solve_epoch_hungarian(
         r2, c2 = linear_sum_assignment(c_alt)
         alt_total = float(c_alt[r2, c2].sum())
         dc_2nd = max(0.0, alt_total - opt_total)
-        # User forced accept/reassign locks confidence to 1.0.
+
+        # Multi-rival marginal posterior confidence over all gated candidates and miss hypothesis (§G.1).
+        rival_sum = sum(
+            math.exp(-min(float(cost[rk, col]) - c_val, 50.0))
+            for col in range(cost.shape[1])
+            if col != cj and cost[rk, col] < 0.5 * _BIG_COST
+        )
+        prob = 1.0 / (1.0 + rival_sum)
+
         if (
             tracks[k].user_locks.get(view.epoch_index, ("", None))[0] in ("accept", "reassign")
             and j_sel >= 0
         ):
+            prob = 1.0
             dc_2nd = 12.0
-        # Penalize blended collisions against silent false errors in crowded fields.
-        if j_sel >= 0:
+        elif j_sel >= 0:
             det = view.detections[j_sel]
-            prob = 1.0 / (1.0 + math.exp(-min(dc_2nd, 30.0)))
             n_clean_anchors = sum(
                 1
                 for ei_p, (prev_d, *_) in tracks[k].links_by_epoch.items()
@@ -1438,8 +1374,6 @@ def _solve_epoch_hungarian(
             )
             if (det.flags & int(DetectionFlag.BLENDED)) and (dc_2nd < 6.0 or n_clean_anchors < 2):
                 prob = min(prob, 0.85)
-        else:
-            prob = 1.0 / (1.0 + math.exp(-min(dc_2nd, 30.0)))
         results[k] = (j_sel, c_val, dc_2nd, prob, res_map.get((int(rk), j_sel), (0.0, 0.0)))
     return results
 
@@ -1497,7 +1431,9 @@ def link_epochs(
                 tr = tracks[k]
                 if j_sel >= 0:
                     det = v.detections[j_sel]
-                    ambig = conf < 0.90
+                    is_unvalidated = any("unvalidated" in n for n in tr.notes)
+                    conf = min(conf, 0.75) if is_unvalidated else conf
+                    ambig = is_unvalidated or conf < 0.90
                     d_flags = det.flags | (int(DetectionFlag.AMBIGUOUS_MATCH) if ambig else 0)
                     dec_by: Literal["auto", "user"] = (
                         "user"

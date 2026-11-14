@@ -83,7 +83,7 @@ class SkyBox(BaseModel):
 class TrackedObjectSelectRequest(BaseModel):
     """Select objects by box-drag, suggestion, catalog, or manual coordinates."""
 
-    analysis_id: UUID
+    analysis_id: UUID | None = None
     mode: Literal["box", "suggestion", "catalog", "manual"]
     epoch: str | None = None
     box: SkyBox | None = None

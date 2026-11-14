@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import astropy.units as u
 import pytest
@@ -438,3 +438,75 @@ def test_objects_error_states(objects_env: dict[str, Any]) -> None:
         ).status_code
         == 422
     )
+
+
+def test_select_analysis_objects_uuid5_and_predict_ephemeris_covariance(
+    objects_env: dict[str, Any],
+) -> None:
+    client: TestClient = objects_env["client"]
+    store: InMemoryJobStore = objects_env["store"]
+
+    f0 = _upload_fits(
+        client,
+        "f0.fits",
+        _render_sky_fits(
+            date_obs="2025-01-01T00:00:00.000",
+            sky_sources=[(_RA0, _DEC0, 100.0)],
+            seed=1,
+        ),
+    )
+    f1 = _upload_fits(
+        client,
+        "f1.fits",
+        _render_sky_fits(
+            date_obs="2025-07-01T00:00:00.000",
+            sky_sources=[(_RA0 + 0.001, _DEC0 + 0.001, 100.0)],
+            seed=2,
+        ),
+    )
+    an_res = client.post("/api/v1/analyses", json={"fits_file_ids": [f0, f1]}).json()
+    aid = an_res["analysis_id"]
+
+    sel = client.post(
+        f"/api/v1/analyses/{aid}/select",
+        json={
+            "mode": "box",
+            "box": {
+                "ra_min": _RA0 - 0.01,
+                "ra_max": _RA0 + 0.01,
+                "dec_min": _DEC0 - 0.01,
+                "dec_max": _DEC0 + 0.01,
+            },
+        },
+    )
+    assert sel.status_code == 201
+    objs = sel.json()["objects"]
+    assert len(objs) >= 1
+    oid = objs[0]["id"]
+
+    cov_5x5 = [0.01 if i == j else 0.0 for i in range(5) for j in range(5)]
+    fit_rec = {
+        "model": "linear",
+        "ref_epoch_mjd_tdb": 60800.0,
+        "params": {
+            "ra_deg": _RA0,
+            "dec_deg": _DEC0,
+            "pmra_masyr": 500.0,
+            "pmdec_masyr": 200.0,
+            "parallax_mas": 50.0,
+        },
+        "covariance": cov_5x5,
+        "bic": 12.0,
+    }
+    store._motion_fits[UUID(str(oid))] = [fit_rec]
+
+    eph_res = client.post(
+        f"/api/v1/objects/{oid}/ephemeris",
+        json={"start_mjd": 60800.0, "extrapolation_days": 30.0, "steps": 5},
+    )
+    assert eph_res.status_code == 200
+    traj = eph_res.json()["trajectory"]
+    assert len(traj) == 6
+    assert traj[0]["ra_deg"] == pytest.approx(_RA0, abs=1e-3)
+    assert traj[-1]["uncertainty_semi_major_arcsec"] > 0.0
+
