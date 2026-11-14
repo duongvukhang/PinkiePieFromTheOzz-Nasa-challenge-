@@ -19,7 +19,9 @@ from app.api.deps import (
     require_succeeded_job,
     require_write,
 )
+from app.api.v1.uploads import format_uploaded_fits
 from app.schemas.common import JobAcceptedResponse, JobStatus, PaginatedResponse, ProblemDetail
+from app.schemas.fields import UploadedFitsSummary
 from app.schemas.projects import (
     ExportRequest,
     FindingCreate,
@@ -29,6 +31,7 @@ from app.schemas.projects import (
     NoteRead,
     NoteUpdate,
     ProjectCreate,
+    ProjectFileLinkRequest,
     ProjectRead,
     ProjectShareResponse,
     ProjectUpdate,
@@ -274,6 +277,78 @@ async def delete_project(
     _require_project_access(project_id, request, store, ctx, min_role="owner")
     store.delete_project(project_id)
     _audit(store, ctx, request, "project.delete", "projects", project_id)
+
+
+@router.get("/{project_id}/files", response_model=list[UploadedFitsSummary])
+async def list_project_files(
+    project_id: UUID,
+    request: Request,
+    store: Annotated[JobStore, Depends(get_store)],
+    ctx: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    share_token: str | None = None,
+) -> list[UploadedFitsSummary]:
+    """List FITS files linked to a project workspace."""
+    _require_project_access(
+        project_id, request, store, ctx, share_token=share_token, min_role="read"
+    )
+    files = store.list_fits_files(project_id=project_id)
+    return [format_uploaded_fits(f) for f in files]
+
+
+@router.post("/{project_id}/files", response_model=UploadedFitsSummary, status_code=status.HTTP_201_CREATED)
+async def link_project_file(
+    project_id: UUID,
+    payload: ProjectFileLinkRequest,
+    request: Request,
+    store: Annotated[JobStore, Depends(get_store)],
+    ctx: Annotated[AuthContext, Depends(require_write)],
+) -> UploadedFitsSummary:
+    """Link an existing registered FITS file to this project workspace."""
+    _require_project_access(project_id, request, store, ctx, min_role="editor")
+    fits_rec = store.get_fits_file(payload.fits_file_id)
+    if fits_rec is None:
+        raise APIProblemError(
+            status.HTTP_404_NOT_FOUND,
+            "FITS File Not Found",
+            f"No registered FITS file found with id {payload.fits_file_id}.",
+        )
+    store.link_project_file(project_id, payload.fits_file_id)
+    _audit(
+        store,
+        ctx,
+        request,
+        "project.file.link",
+        "project_files",
+        f"{project_id}:{payload.fits_file_id}",
+    )
+    return format_uploaded_fits(fits_rec)
+
+
+@router.delete("/{project_id}/files/{fits_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unlink_project_file(
+    project_id: UUID,
+    fits_id: UUID,
+    request: Request,
+    store: Annotated[JobStore, Depends(get_store)],
+    ctx: Annotated[AuthContext, Depends(require_write)],
+) -> None:
+    """Disassociate a FITS file from this project workspace (does not delete raw file)."""
+    _require_project_access(project_id, request, store, ctx, min_role="editor")
+    unlinked = store.unlink_project_file(project_id, fits_id)
+    if not unlinked:
+        raise APIProblemError(
+            status.HTTP_404_NOT_FOUND,
+            "Project File Link Not Found",
+            f"File {fits_id} is not linked to project {project_id}.",
+        )
+    _audit(
+        store,
+        ctx,
+        request,
+        "project.file.unlink",
+        "project_files",
+        f"{project_id}:{fits_id}",
+    )
 
 
 @router.get("/{project_id}/notes")

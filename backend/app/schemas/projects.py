@@ -169,3 +169,9 @@ class ExportRequest(BaseModel):
     # PHASE2: add "mp4" WebCodecs/server export in Public phase
     format: Literal["csv", "json", "fits", "png", "gif", "ades"]
     object_ids: list[UUID] | None = None
+
+
+class ProjectFileLinkRequest(BaseModel):
+    """Link a registered FITS file to a project workspace."""
+
+    fits_file_id: UUID

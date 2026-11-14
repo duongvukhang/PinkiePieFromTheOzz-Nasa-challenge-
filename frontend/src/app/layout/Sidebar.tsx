@@ -4,9 +4,10 @@ import { useAuthStore } from "../authStore";
 
 export const PRIMARY_NAV = [
   { label: "Journal", to: "/" },
+  { label: "Observatory", to: "/v" },
+  { label: "Workspaces", to: "/projects" },
   { label: "About", to: "/about" },
   { label: "Methodology", to: "/methodology" },
-  { label: "Observatory", to: "/v" },
 ] as const;
 
 export const MANDATORY_TARGETS = [

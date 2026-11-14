@@ -178,6 +178,53 @@ def test_projects_crud_rbac_sharing_versions_and_consensus_gate(
         == 403
     )
 
+    # Project Files Link / Unlink CRUD
+    sample_fid = uuid4()
+    store.register_fits_file(
+        fits_file_id=sample_fid,
+        metadata={
+            "origin": "upload",
+            "provider": "user",
+            "obs_id": "wise_epoch_1",
+            "band_label": "WISE-W1",
+            "mjd_tdb_mid": 60100.5,
+            "date_obs_utc": "2025-06-01T12:00:00Z",
+            "ra_center": 133.795,
+            "dec_center": -7.245,
+            "naxis1": 64,
+            "naxis2": 64,
+            "wcs_header": "SIMPLE  =                    T",
+        },
+        sha256_hex="aabbccdd" * 8,
+        storage_path="uploads/staging/test.fits",
+    )
+
+    # User B cannot link files into Alice's project
+    assert client.post(
+        f"/api/v1/projects/{pid}/files",
+        json={"fits_file_id": str(sample_fid)},
+        headers=hdr_b,
+    ).status_code == 403
+
+    # Alice links the file
+    link_res = client.post(
+        f"/api/v1/projects/{pid}/files",
+        json={"fits_file_id": str(sample_fid)},
+        headers=hdr_a,
+    )
+    assert link_res.status_code == 201
+    assert link_res.json()["fits_file_id"] == str(sample_fid)
+    assert link_res.json()["obs_id"] == "wise_epoch_1"
+
+    # List project files
+    pfiles = client.get(f"/api/v1/projects/{pid}/files", headers=hdr_a).json()
+    assert len(pfiles) == 1
+    assert pfiles[0]["fits_file_id"] == str(sample_fid)
+
+    # Unlink file from project
+    assert client.delete(f"/api/v1/projects/{pid}/files/{sample_fid}", headers=hdr_a).status_code == 204
+    assert len(client.get(f"/api/v1/projects/{pid}/files", headers=hdr_a).json()) == 0
+
     # Notes, Saved Views, Findings CRUD
     note = client.post(
         f"/api/v1/projects/{pid}/notes",

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import type { DataReleaseRead, ExampleTargetSummary } from "../../api/client";
+import { api, type DataReleaseRead, type ExampleTargetSummary } from "../../api/client";
 import { formatSexagesimal, toGalacticAndEcliptic } from "../aladin/wcs";
-import { useViewStore, type ViewerMode } from "../state/viewStore";
+import { toViewQuery, useViewStore, type ViewerMode } from "../state/viewStore";
 import { ArchiveSearchModal } from "./ArchiveSearchModal";
 import { UploadFitsModal } from "./UploadFitsModal";
 
@@ -41,6 +41,7 @@ export function ViewerToolbar({
     to,
     release,
     mode,
+    projectId,
     isUploadModalOpen: storeUploadOpen,
     setView,
     setUploadModalOpen,
@@ -78,6 +79,42 @@ export function ViewerToolbar({
         >
           📁 Upload FITS
         </button>
+
+        {projectId && (
+          <>
+            <Link
+              to={`/projects/${projectId}`}
+              className="viewer-btn"
+              title="Open Project Workspace (Notes, Findings, FITS Files)"
+              style={{ borderColor: "var(--accent-archive)", color: "var(--link)" }}
+            >
+              📂 Workspace
+            </Link>
+            <button
+              type="button"
+              className="viewer-btn"
+              title="Bookmark active viewer coordinates and layers in project workspace"
+              onClick={async () => {
+                const name = prompt(
+                  "Enter bookmark name for this view:",
+                  `View ${ra !== undefined ? ra.toFixed(3) : ""}, ${dec !== undefined ? dec.toFixed(3) : ""}`,
+                );
+                if (!name) return;
+                try {
+                  await api.createSavedView(projectId, {
+                    name,
+                    url_state: toViewQuery(useViewStore.getState()),
+                  });
+                  alert("View bookmarked in project workspace!");
+                } catch (e: unknown) {
+                  alert(e instanceof Error ? e.message : "Failed to bookmark view");
+                }
+              }}
+            >
+              💾 Bookmark View
+            </button>
+          </>
+        )}
 
         <div className="viewer-field-badge" title="Current sky field coordinates and target">
           <span style={{ color: "var(--sky-muted)" }}>Field:</span>

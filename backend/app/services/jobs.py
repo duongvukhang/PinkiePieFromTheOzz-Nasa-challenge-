@@ -188,6 +188,14 @@ class JobStore(WorkspaceStore, ABC):
         """Delete persisted FITS file record by `fits_file_id`."""
 
     @abstractmethod
+    def link_project_file(self, project_id: UUID, fits_file_id: UUID) -> bool:
+        """Associate a FITS file with a project workspace."""
+
+    @abstractmethod
+    def unlink_project_file(self, project_id: UUID, fits_file_id: UUID) -> bool:
+        """Disassociate a FITS file from a project workspace."""
+
+    @abstractmethod
     def update_job(
         self,
         job_id: UUID,
@@ -305,6 +313,7 @@ class InMemoryJobStore(InMemoryWorkspaceMixin, InMemoryObjectMixin, JobStore):
         self._by_hash: dict[bytes, UUID] = {}
         self._by_param: dict[tuple[str, str, str], UUID] = {}
         self._fits_files: dict[UUID, dict[str, Any]] = {}
+        self._project_files: set[tuple[UUID, UUID]] = set()
         self._detections: dict[int, DetectionRead] = {}
         self._next_det_id = 1
         self._provenance: list[dict[str, Any]] = []
@@ -396,6 +405,8 @@ class InMemoryJobStore(InMemoryWorkspaceMixin, InMemoryObjectMixin, JobStore):
                 "uploader_id": uploader_id,
                 "project_id": project_id,
             }
+            if project_id is not None:
+                self._project_files.add((project_id, fits_file_id))
 
     def get_fits_file(self, fits_file_id: UUID) -> dict[str, Any] | None:
         with self._lock:
@@ -410,13 +421,32 @@ class InMemoryJobStore(InMemoryWorkspaceMixin, InMemoryObjectMixin, JobStore):
         if user_id is not None:
             items = [f for f in items if f.get("uploader_id") == user_id]
         if project_id is not None:
-            items = [f for f in items if f.get("project_id") == project_id]
+            items = [
+                f
+                for f in items
+                if (project_id, f["id"]) in self._project_files or f.get("project_id") == project_id
+            ]
         items.sort(key=lambda x: float(x.get("mjd_tdb_mid") or 0.0))
         return [dict(f) for f in items]
 
     def delete_fits_file(self, fits_file_id: UUID) -> bool:
         with self._lock:
+            self._project_files = {pair for pair in self._project_files if pair[1] != fits_file_id}
             return self._fits_files.pop(fits_file_id, None) is not None
+
+    def link_project_file(self, project_id: UUID, fits_file_id: UUID) -> bool:
+        with self._lock:
+            if fits_file_id not in self._fits_files:
+                return False
+            self._project_files.add((project_id, fits_file_id))
+            return True
+
+    def unlink_project_file(self, project_id: UUID, fits_file_id: UUID) -> bool:
+        with self._lock:
+            if (project_id, fits_file_id) not in self._project_files:
+                return False
+            self._project_files.discard((project_id, fits_file_id))
+            return True
 
     def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
         saved: list[DetectionRead] = []
@@ -794,6 +824,24 @@ class SqlAlchemyJobStore(SqlAlchemyWorkspaceMixin, SqlAlchemyObjectMixin, JobSto
             session.delete(row)
             session.commit()
             return True
+
+    def link_project_file(self, project_id: UUID, fits_file_id: UUID) -> bool:
+        with self._session_factory() as session:
+            if session.get(Project, project_id) and session.get(FitsFile, fits_file_id):
+                if session.get(ProjectFile, (project_id, fits_file_id)) is None:
+                    session.add(ProjectFile(project_id=project_id, fits_file_id=fits_file_id))
+                    session.commit()
+                return True
+            return False
+
+    def unlink_project_file(self, project_id: UUID, fits_file_id: UUID) -> bool:
+        with self._session_factory() as session:
+            pf = session.get(ProjectFile, (project_id, fits_file_id))
+            if pf is not None:
+                session.delete(pf)
+                session.commit()
+                return True
+            return False
 
     def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
         if not detections:

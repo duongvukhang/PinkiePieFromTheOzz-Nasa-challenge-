@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useAuthStore } from "../app/authStore";
+import { useAuthStore, type AuthUser } from "../app/authStore";
 import { Field } from "../design/components/Field";
 import { Callout } from "../design/components/Primitives";
 
@@ -31,25 +31,52 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
     setSubmitting(true);
     setStatusMessage("");
     const displayName = name.trim() || email.split("@")[0] || "Researcher";
+    const apiBase = (import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? "") as string;
+    let authUser: AuthUser = { name: displayName, email };
 
-    const apiBase = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL;
-    if (apiBase) {
-      try {
-        const endpoint = isSignUp ? "/api/v1/auth/register" : "/api/v1/auth/login";
-        await fetch(`${apiBase}${endpoint}`, {
+    try {
+      if (isSignUp) {
+        const regRes = await fetch(`${apiBase}/api/v1/auth/register`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            isSignUp ? { name: displayName, email, password } : { email, password },
-          ),
+          credentials: "include",
+          body: JSON.stringify({ display_name: displayName, email, password }),
         });
-      } catch {
-        /* backend optional during frontend preview */
+        if (!regRes.ok) {
+          const err = await regRes.json().catch(() => ({}));
+          throw new Error(err.detail || err.title || "Registration failed");
+        }
+      }
+
+      const loginRes = await fetch(`${apiBase}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email, password }),
+      });
+      if (loginRes.ok) {
+        const data = await loginRes.json();
+        authUser = {
+          id: data.user?.id,
+          name: data.user?.display_name || displayName,
+          email: data.user?.email || email,
+          token: data.access_token,
+        };
+      } else {
+        const err = await loginRes.json().catch(() => ({}));
+        throw new Error(err.detail || err.title || "Login failed");
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setStatusMessage(err.message);
+        setSubmitting(false);
+        return;
       }
     }
-    login({ name: displayName, email });
+
+    login(authUser);
     setSubmitting(false);
-    navigate("/");
+    navigate("/projects");
   };
 
   return (

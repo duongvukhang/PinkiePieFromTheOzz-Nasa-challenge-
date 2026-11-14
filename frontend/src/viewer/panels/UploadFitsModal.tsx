@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { api, type UploadCompatibilityReport } from "../../api/client";
+import { useViewStore } from "../state/viewStore";
 
 interface UploadFitsModalProps {
   isOpen: boolean;
@@ -58,7 +59,8 @@ export function UploadFitsModal({ isOpen, onClose, onLoadedField }: UploadFitsMo
     setReport(null);
 
     try {
-      const res = await api.uploadFits(file, userEpoch.trim() || undefined);
+      const pid = useViewStore.getState().projectId;
+      const res = await api.uploadFits(file, userEpoch.trim() || undefined, undefined, undefined, pid);
       // Wait for job completion if queued/running
       let status = res.status;
       let delay = 150;

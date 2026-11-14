@@ -1,4 +1,5 @@
 import type { components } from "./schema";
+import { useAuthStore } from "../app/authStore";
 
 export type Schema<K extends keyof components["schemas"]> = components["schemas"][K];
 export type ProblemDetail = Schema<"ProblemDetail">;
@@ -25,6 +26,26 @@ export type UploadCompatibilityReport = Schema<"UploadCompatibilityReport"> & {
   ra_center_deg?: number | null;
   dec_center_deg?: number | null;
 };
+
+export type ProjectCreate = Schema<"ProjectCreate">;
+export type ProjectRead = Schema<"ProjectRead">;
+export type ProjectUpdate = Schema<"ProjectUpdate">;
+export type NoteCreate = Schema<"NoteCreate">;
+export type NoteRead = Schema<"NoteRead">;
+export type NoteUpdate = Schema<"NoteUpdate">;
+export type FindingCreate = Schema<"FindingCreate">;
+export type FindingRead = Schema<"FindingRead">;
+export type FindingUpdate = Schema<"FindingUpdate">;
+export type SavedViewCreate = Schema<"SavedViewCreate">;
+export type SavedViewRead = Schema<"SavedViewRead">;
+export type ProjectVersionCreate = Schema<"ProjectVersionCreate">;
+export type ProjectVersionRead = Schema<"ProjectVersionRead">;
+export type ProjectShareResponse = Schema<"ProjectShareResponse">;
+export type ExportRequest = Schema<"ExportRequest">;
+export interface PaginatedProjects {
+  items: ProjectRead[];
+  next_cursor?: string | null;
+}
 
 export type ArchiveLoadRequest = Schema<"ArchiveLoadRequest">;
 export type ArchiveSourceId = NonNullable<ArchiveLoadRequest["source"]>;
@@ -114,10 +135,24 @@ function buildUrl(path: string, params?: Record<string, string | number | undefi
   return `${API_BASE}${path}${s ? `?${s}` : ""}`;
 }
 
-export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+function getAuthHeaders(shareToken?: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = useAuthStore.getState().user?.token;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (shareToken) {
+    headers["X-Share-Token"] = shareToken;
+  }
+  return headers;
+}
+
+export async function apiJson<T>(path: string, init?: RequestInit, shareToken?: string): Promise<T> {
+  const authHeaders = getAuthHeaders(shareToken);
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { "Content-Type": "application/json", ...authHeaders, ...init?.headers },
   });
   const text = await res.text();
   let data: unknown;
@@ -283,14 +318,24 @@ export const api = {
       throw new ApiError(res.status, err.detail || "Delete upload failed", err.title);
     }
   },
-  uploadFits: async (file: File, userEpoch?: string, refRa?: number, refDec?: number) => {
+  uploadFits: async (
+    file: File,
+    userEpoch?: string,
+    refRa?: number,
+    refDec?: number,
+    projectId?: string,
+  ) => {
     const form = new FormData();
     form.append("file", file);
     if (userEpoch) form.append("user_epoch", userEpoch);
     if (refRa !== undefined) form.append("reference_ra_deg", String(refRa));
     if (refDec !== undefined) form.append("reference_dec_deg", String(refDec));
+    if (projectId) form.append("project_id", projectId);
+    const headers = getAuthHeaders();
     const res = await fetch(`${API_BASE}/api/v1/uploads`, {
       method: "POST",
+      credentials: "include",
+      headers,
       body: form,
     });
     if (!res.ok) {
@@ -301,4 +346,145 @@ export const api = {
   },
   getUploadReport: (uploadId: string) =>
     apiJson<UploadCompatibilityReport>(`/api/v1/uploads/${uploadId}/report`),
+  listProjects: (params?: { cursor?: string; limit?: number }) =>
+    apiJson<PaginatedProjects>(buildUrl("/api/v1/projects", params)),
+  createProject: (body: ProjectCreate) =>
+    postJson<ProjectRead>("/api/v1/projects", body),
+  getProject: (projectId: string, shareToken?: string) =>
+    apiJson<ProjectRead>(
+      buildUrl(`/api/v1/projects/${projectId}`, { share_token: shareToken }),
+      undefined,
+      shareToken,
+    ),
+  updateProject: (projectId: string, body: ProjectUpdate) =>
+    apiJson<ProjectRead>(`/api/v1/projects/${projectId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteProject: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Delete project failed");
+    }
+  },
+  listProjectFiles: (projectId: string, shareToken?: string) =>
+    apiJson<UploadedFitsSummary[]>(
+      buildUrl(`/api/v1/projects/${projectId}/files`, { share_token: shareToken }),
+      undefined,
+      shareToken,
+    ),
+  linkProjectFile: (projectId: string, fitsFileId: string) =>
+    postJson<UploadedFitsSummary>(`/api/v1/projects/${projectId}/files`, {
+      fits_file_id: fitsFileId,
+    }),
+  unlinkProjectFile: async (projectId: string, fitsId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/files/${fitsId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Unlink file failed");
+    }
+  },
+  listNotes: (projectId: string, shareToken?: string) =>
+    apiJson<NoteRead[]>(
+      buildUrl(`/api/v1/projects/${projectId}/notes`, { share_token: shareToken }),
+      undefined,
+      shareToken,
+    ),
+  createNote: (projectId: string, body: NoteCreate) =>
+    postJson<NoteRead>(`/api/v1/projects/${projectId}/notes`, body),
+  updateNote: (projectId: string, noteId: string, body: NoteUpdate) =>
+    apiJson<NoteRead>(`/api/v1/projects/${projectId}/notes/${noteId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteNote: async (projectId: string, noteId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/notes/${noteId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Delete note failed");
+    }
+  },
+  listFindings: (projectId: string, shareToken?: string) =>
+    apiJson<FindingRead[]>(
+      buildUrl(`/api/v1/projects/${projectId}/findings`, { share_token: shareToken }),
+      undefined,
+      shareToken,
+    ),
+  createFinding: (projectId: string, body: FindingCreate) =>
+    postJson<FindingRead>(`/api/v1/projects/${projectId}/findings`, body),
+  updateFinding: (projectId: string, findingId: string, body: FindingUpdate) =>
+    apiJson<FindingRead>(`/api/v1/projects/${projectId}/findings/${findingId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteFinding: async (projectId: string, findingId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/findings/${findingId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Delete finding failed");
+    }
+  },
+  listSavedViews: (projectId: string, shareToken?: string) =>
+    apiJson<SavedViewRead[]>(
+      buildUrl(`/api/v1/projects/${projectId}/views`, { share_token: shareToken }),
+      undefined,
+      shareToken,
+    ),
+  createSavedView: (projectId: string, body: SavedViewCreate) =>
+    postJson<SavedViewRead>(`/api/v1/projects/${projectId}/views`, body),
+  deleteSavedView: async (projectId: string, viewId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/views/${viewId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Delete saved view failed");
+    }
+  },
+  listVersions: (projectId: string, shareToken?: string) =>
+    apiJson<ProjectVersionRead[]>(
+      buildUrl(`/api/v1/projects/${projectId}/versions`, { share_token: shareToken }),
+      undefined,
+      shareToken,
+    ),
+  createVersion: (projectId: string, body: ProjectVersionCreate) =>
+    postJson<ProjectVersionRead>(`/api/v1/projects/${projectId}/versions`, body),
+  restoreVersion: (projectId: string, version: number) =>
+    postJson<ProjectRead>(`/api/v1/projects/${projectId}/versions/${version}/restore`, {}),
+  createShareLink: (projectId: string) =>
+    postJson<ProjectShareResponse>(`/api/v1/projects/${projectId}/share`, {}),
+  revokeShareLink: async (projectId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/share`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Revoke share link failed");
+    }
+  },
+  exportProject: (projectId: string, body: ExportRequest) =>
+    postJson<{ job_id: string; status: string }>(`/api/v1/projects/${projectId}/exports`, body),
+  downloadProjectExportUrl: (projectId: string, exportId: string, shareToken?: string) =>
+    buildUrl(`/api/v1/projects/${projectId}/exports/${exportId}`, { share_token: shareToken }),
 };

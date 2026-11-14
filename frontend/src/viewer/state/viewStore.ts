@@ -17,6 +17,7 @@ export interface ViewState {
   release: string;
   bands: string;
   source?: string;
+  projectId?: string;
   fitsId?: string;
   fitsIds: string[];
   excludedFrameIds: string[];
@@ -129,6 +130,7 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     release: q.get("release") ?? "latest",
     bands: q.get("bands") ?? "all",
     source: q.get("source") ?? undefined,
+    projectId: q.get("projectId") ?? undefined,
     fitsId: parsedFitsIds[0] ?? singleFits ?? undefined,
     fitsIds: parsedFitsIds,
     excludedFrameIds: excluded,
@@ -163,6 +165,7 @@ export function toViewQuery(s: Partial<ViewState>): string {
   if (s.release && s.release !== "latest") q.set("release", s.release);
   if (s.bands && s.bands !== "all") q.set("bands", s.bands);
   if (s.source && s.source !== "spherex_irsa") q.set("source", s.source);
+  if (s.projectId) q.set("projectId", s.projectId);
   if (s.fitsIds && s.fitsIds.length > 0) {
     if (s.fitsIds[0]) q.set("fitsId", s.fitsIds[0]);
     if (s.fitsIds.length > 1) q.set("fitsIds", s.fitsIds.join(","));

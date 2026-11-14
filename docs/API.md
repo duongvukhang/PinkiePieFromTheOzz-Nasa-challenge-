@@ -89,6 +89,7 @@ Conventions: JSON; angles in decimal deg (`RaDeg` in `[0, 360)`, `DecDeg` in `[-
 | GET | `/compare/{compare_id}/products/{product_name}` | Download `diff\|sum\|ratio.{fits,webp,bin}` or `score_corr.fits` |
 | GET | `/jobs/{job_id}` ; `/jobs/{job_id}/events` (SSE) | Job status/progress (`0..1`) and SSE `progress` stream |
 | GET / POST | `/projects` (`?cursor=&limit=` on `GET`) ; `GET / PATCH / DELETE /projects/{project_id}` | Project workspace CRUD (`?share_token=` / `X-Share-Token` supported on `GET /projects/{project_id}` and all read-only `/projects/{project_id}/*` endpoints) |
+| GET / POST | `/projects/{project_id}/files` ; `DELETE /projects/{project_id}/files/{fits_id}` | Project workspace FITS files list, link (`{ fits_file_id }`), and unlink |
 | GET / POST | `/projects/{project_id}/notes` ; `PATCH / DELETE /projects/{project_id}/notes/{note_id}` | Markdown notes |
 | GET / POST | `/projects/{project_id}/findings` ; `PATCH / DELETE /projects/{project_id}/findings/{finding_id}` | Scientific findings |
 | GET / POST | `/projects/{project_id}/views` ; `DELETE /projects/{project_id}/views/{view_id}` | Saved viewer URL bookmarks |

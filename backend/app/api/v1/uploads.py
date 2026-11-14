@@ -312,6 +312,35 @@ async def get_upload_science(
     )
 
 
+def format_uploaded_fits(f: dict[str, Any]) -> UploadedFitsSummary:
+    fid = f["id"]
+    obs_id = f.get("obs_id") or str(fid)
+    mjd = float(f.get("mjd_tdb_mid") or 60000.0)
+    utc = str(f.get("date_obs_utc") or "2025-01-01T00:00:00Z")
+    n1 = f.get("naxis1")
+    n2 = f.get("naxis2")
+    shape = [n2, n1] if n1 and n2 else [128, 128]
+    return UploadedFitsSummary(
+        fits_file_id=fid,
+        filename=f.get("filename") or obs_id,
+        obs_id=obs_id,
+        origin=f.get("origin") or "upload",
+        epoch=f.get("band_label") or obs_id,
+        mjd_tdb_mid=mjd,
+        utc_mid=utc,
+        ra_center=f.get("ra_center"),
+        dec_center=f.get("dec_center"),
+        naxis1=n1,
+        naxis2=n2,
+        wcs_header=f.get("wcs_header") or "",
+        display_url=f"/api/v1/uploads/{fid}/display.webp",
+        science_url=f"/api/v1/uploads/{fid}/science.bin",
+        fits_url=f"/api/v1/uploads/{fid}/frame.fits",
+        band_label=f.get("band_label"),
+        stretch={"vmin": 0.0, "vmax": 1000.0, "shape": shape},
+    )
+
+
 @router.get("/uploads", response_model=list[UploadedFitsSummary])
 async def list_uploads(
     store: Annotated[JobStore, Depends(get_store)],
@@ -319,38 +348,7 @@ async def list_uploads(
     user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
 ) -> list[UploadedFitsSummary]:
     """List active registered user uploads and archive-loaded FITS files."""
-    files = store.list_fits_files(user_id=user_id, project_id=project_id)
-    out: list[UploadedFitsSummary] = []
-    for f in files:
-        fid = f["id"]
-        obs_id = f.get("obs_id") or str(fid)
-        mjd = float(f.get("mjd_tdb_mid") or 60000.0)
-        utc = str(f.get("date_obs_utc") or "2025-01-01T00:00:00Z")
-        n1 = f.get("naxis1")
-        n2 = f.get("naxis2")
-        shape = [n2, n1] if n1 and n2 else [128, 128]
-        out.append(
-            UploadedFitsSummary(
-                fits_file_id=fid,
-                filename=f.get("filename") or obs_id,
-                obs_id=obs_id,
-                origin=f.get("origin") or "upload",
-                epoch=f.get("band_label") or obs_id,
-                mjd_tdb_mid=mjd,
-                utc_mid=utc,
-                ra_center=f.get("ra_center"),
-                dec_center=f.get("dec_center"),
-                naxis1=n1,
-                naxis2=n2,
-                wcs_header=f.get("wcs_header") or "",
-                display_url=f"/api/v1/uploads/{fid}/display.webp",
-                science_url=f"/api/v1/uploads/{fid}/science.bin",
-                fits_url=f"/api/v1/uploads/{fid}/frame.fits",
-                band_label=f.get("band_label"),
-                stretch={"vmin": 0.0, "vmax": 1000.0, "shape": shape},
-            )
-        )
-    return out
+    return [format_uploaded_fits(f) for f in store.list_fits_files(user_id=user_id, project_id=project_id)]
 
 
 @router.delete("/uploads/{fits_id}", status_code=status.HTTP_204_NO_CONTENT)

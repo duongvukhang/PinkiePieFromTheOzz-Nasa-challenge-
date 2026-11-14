@@ -10,6 +10,12 @@ const ViewerPage = lazy(() =>
   import("../pages/ViewerPage").then((m) => ({ default: m.ViewerPage })),
 );
 const EmbedPage = lazy(() => import("../pages/EmbedPage").then((m) => ({ default: m.EmbedPage })));
+const ProjectsPage = lazy(() =>
+  import("../pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })),
+);
+const ProjectDetailPage = lazy(() =>
+  import("../pages/ProjectDetailPage").then((m) => ({ default: m.ProjectDetailPage })),
+);
 
 function StubPage({ kicker, title, body }: { kicker: string; title: string; body: string }) {
   return (
@@ -53,6 +59,7 @@ function DocumentTitleSync() {
       "/signup": "Create account | SkyTrace",
       "/logout": "Log out | SkyTrace",
       "/v": "Observatory Viewer | SkyTrace",
+      "/projects": "Workspaces | SkyTrace",
       "/methodology": "Methodology & Limits | SkyTrace",
       "/credits": "Archive Credits | SkyTrace",
     };
@@ -98,6 +105,22 @@ function ShellRoutes() {
           element={
             <Suspense fallback={<div className="viewer-stage">Loading observatory…</div>}>
               <ViewerPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/projects"
+          element={
+            <Suspense fallback={<div className="container section">Loading workspaces…</div>}>
+              <ProjectsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/projects/:id"
+          element={
+            <Suspense fallback={<div className="container section">Loading workspace…</div>}>
+              <ProjectDetailPage />
             </Suspense>
           }
         />

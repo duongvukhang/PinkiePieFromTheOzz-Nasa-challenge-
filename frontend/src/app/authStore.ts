@@ -1,8 +1,10 @@
 import { create } from "zustand";
 
 export interface AuthUser {
+  id?: string;
   name: string;
   email: string;
+  token?: string;
 }
 
 const STORAGE_KEY = "skytrace_session_user";
