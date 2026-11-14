@@ -265,6 +265,7 @@ export function ViewerToolbar({
         onApplyInterval={({
           ra: newRa,
           dec: newDec,
+          fov: newFov,
           from: newFrom,
           to: newTo,
           bands: newBands,
@@ -273,6 +274,7 @@ export function ViewerToolbar({
           const nextView = {
             ra: newRa,
             dec: newDec,
+            ...(newFov !== undefined ? { fov: newFov } : {}),
             from: newFrom || "",
             to: newTo || "",
             bands: newBands || "all",

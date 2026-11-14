@@ -35,6 +35,8 @@ export function EmbedPage() {
         detections={[]}
         suggestions={[]}
         selectBoxMode={false}
+        loading={v.loadingCutouts}
+        loadingText={v.loadingText}
         onVisibilityPause={v.setPausedByVis}
       />
 

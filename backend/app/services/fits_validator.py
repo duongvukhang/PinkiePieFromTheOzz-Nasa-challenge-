@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+import numpy as np
 from astropy.time import Time
 
 from app.db.flags import DetectionFlag
@@ -175,6 +176,25 @@ def validate_fits_upload(
         "header_summary": inspection.header_summary,
         "validation": report.model_dump(mode="json"),
     }
+
+    try:
+        from app.services.fields import extract_2d_image
+
+        raw_b = payload if payload is not None else (src_path.read_bytes() if src_path is not None else None)
+        if raw_b is not None:
+            arr = extract_2d_image(raw_b)
+            fin = arr[np.isfinite(arr)]
+            if fin.size > 0:
+                p_lo, p_hi = (float(x) for x in np.percentile(fin, [1.0, 99.5]))
+                metadata["stretch"] = {
+                    "mode": "asinh",
+                    "percentile": [1.0, 99.5],
+                    "vmin": p_lo,
+                    "vmax": p_hi,
+                    "shape": list(arr.shape),
+                }
+    except Exception:
+        pass
 
     return FitsUploadValidationResult(
         report=report,

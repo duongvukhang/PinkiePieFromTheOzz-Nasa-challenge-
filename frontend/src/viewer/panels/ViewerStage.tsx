@@ -45,6 +45,7 @@ interface ViewerStageProps {
   onVisibilityPause?: (paused: boolean) => void;
   onSelectEpoch?: (epoch: string) => void;
   loading?: boolean;
+  loadingText?: string;
   errorMsg?: string;
   emptyWarning?: string;
 }
@@ -69,6 +70,7 @@ export function ViewerStage({
   onVisibilityPause,
   onSelectEpoch,
   loading,
+  loadingText,
   errorMsg,
 }: ViewerStageProps) {
   const {
@@ -513,7 +515,7 @@ export function ViewerStage({
         {loading && (
           <div className="viewer-status-overlay" role="status" aria-live="polite">
             <div className="viewer-status-spinner" />
-            <div className="viewer-status-msg">Loading FITS cutouts…</div>
+            <div className="viewer-status-msg">{loadingText || "Loading FITS cutouts…"}</div>
           </div>
         )}
         {!loading && errorMsg && (

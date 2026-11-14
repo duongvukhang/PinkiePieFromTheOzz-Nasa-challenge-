@@ -44,13 +44,13 @@ class ImageRenderer:
         data: NDArray[Any] | Sequence[Sequence[float]],
         stretch: str = "asinh",
         colormap: str = "inferno",
-        p_min: float = 0.5,
+        p_min: float = 1.0,
         p_max: float = 99.5,
         custom_vmin: float | None = None,
         custom_vmax: float | None = None,
         brightness: float = 1.0,
         contrast: float = 1.0,
-        max_dim: int | None = 1200,
+        max_dim: int | None = None,
     ) -> bytes:
         """Transforms raw scientific array to scaled 8-bit RGB PNG image bytes."""
         arr = np.asarray(data, dtype=np.float64)

@@ -138,6 +138,7 @@ export function ViewerPage() {
             onBoxSelect={v.onBoxSelect}
             onVisibilityPause={v.setPausedByVis}
             loading={v.loadingCutouts}
+            loadingText={v.loadingText}
             errorMsg={v.errorMsg}
             emptyWarning={v.warnings[0]}
           />

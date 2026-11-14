@@ -203,48 +203,6 @@ def group_records_into_epochs(records: list[ArchiveRecord], source_name: str) ->
     return epochs
 
 
-def _crop_archive_fits(
-    raw_fits: bytes,
-    ra_deg: float | None,
-    dec_deg: float | None,
-    fov_arcmin: float = 10.0,
-) -> bytes:
-    if ra_deg is None or dec_deg is None:
-        return raw_fits
-    try:
-        from astropy.io import fits
-        from astropy.nddata import Cutout2D
-        from astropy.wcs import WCS
-
-        with fits.open(io.BytesIO(raw_fits)) as hdul:
-            ref = next((h for h in hdul if getattr(getattr(h, "data", None), "ndim", 0) == 2), None)
-            if ref is None:
-                return raw_fits
-            wcs = WCS(ref.header)
-            if not wcs.has_celestial or max(ref.data.shape) <= 256:
-                return raw_fits
-            center = SkyCoord(ra_deg * u.deg, dec_deg * u.deg, frame="icrs")
-            size = (fov_arcmin * u.arcmin, fov_arcmin * u.arcmin)
-            out_hdus: list[fits.PrimaryHDU | fits.ImageHDU] = []
-            for idx, hdu in enumerate(hdul):
-                data = getattr(hdu, "data", None)
-                if data is not None and getattr(data, "ndim", 0) == 2 and data.shape == ref.data.shape:
-                    hw = WCS(hdu.header)
-                    cut = Cutout2D(data, position=center, size=size, wcs=hw if hw.has_celestial else wcs, mode="trim")
-                    hdr = hdu.header.copy()
-                    hdr.update(cut.wcs.to_header(relax=True))
-                    cls_hdu = fits.PrimaryHDU if idx == 0 else fits.ImageHDU
-                    out_hdus.append(cls_hdu(data=cut.data.astype(data.dtype), header=hdr, name=hdu.name if idx > 0 else None))
-                else:
-                    out_hdus.append(hdu.copy())
-            buf = io.BytesIO()
-            fits.HDUList(out_hdus).writeto(buf, overwrite=True)
-            return buf.getvalue()
-    except Exception:
-        pass
-    return raw_fits
-
-
 class IRSASearchService:
     """Service querying NASA IRSA SIAv2, TAP, WISE, 2MASS, and SkyView services."""
 
@@ -329,7 +287,7 @@ class IRSASearchService:
         records: list[ArchiveRecord] = []
         failure_reason: str | None = None
         try:
-            with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
                 res = client.get(
                     self.sia_url,
                     params=[
@@ -337,6 +295,7 @@ class IRSASearchService:
                         ("COLLECTION", "spherex_dr1"),
                         ("COLLECTION", "spherex_qr3"),
                         ("RESPONSEFORMAT", "votable"),
+                        ("MAXREC", str(max_records)),
                     ],
                 )
                 if res.status_code == 200:
@@ -419,7 +378,7 @@ class IRSASearchService:
                 else:
                     failure_reason = f"NASA IRSA SIA responded with HTTP {res.status_code}."
         except httpx.ReadTimeout:
-            failure_reason = "NASA IRSA server timed out (>10s latency) under heavy public load."
+            failure_reason = "NASA IRSA server timed out (>30s latency) under heavy public load."
         except Exception as exc:
             failure_reason = f"NASA IRSA connection note: {exc}"
 
@@ -436,7 +395,7 @@ class IRSASearchService:
                         if ra_c is not None and dec_c is not None:
                             c_targ = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
                             c_f = SkyCoord(float(ra_c) * u.deg, float(dec_c) * u.deg, frame="icrs")
-                            if c_targ.separation(c_f).deg <= (radius_deg + 0.5):
+                            if c_targ.separation(c_f).deg <= radius_deg:
                                 mjd_val = float(hdr.get("MJD-OBS") or hdr.get("MJD") or 60793.54)
                                 det_code = "D1"
                                 b_info = SPHEREX_BANDS["D1"]
@@ -657,6 +616,14 @@ class IRSASearchService:
     ) -> dict[str, Any]:
         """Fetch or register an authentic external archive FITS into active session storage."""
         if req.access_url:
+            if req.access_url.startswith("synthetic://"):
+                from app.api.deps import APIProblemError
+
+                raise APIProblemError(
+                    502,
+                    "Archive Product Unavailable",
+                    f"Synthetic demo product '{req.obs_id}' cannot be loaded. Authentic FITS download required.",
+                )
             validate_url_security(req.access_url)
 
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", req.obs_id)
@@ -734,26 +701,16 @@ class IRSASearchService:
                 pass
 
         if content is not None and status != "already_loaded":
-            content = _crop_archive_fits(content, req.ra_deg, req.dec_deg, req.fov_arcmin)
             storage.put_bytes(storage_key, content, content_type="application/fits")
 
         if content is None:
-            # Fallback to authentic synthetic cutout matching requested coordinates & band
-            from app.services.synthetic_fits import generate_synthetic_cutout
+            from app.api.deps import APIProblemError
 
-            seed = abs(hash(req.obs_id)) % 100000
-            mjd_val = float(req.mjd_obs) if req.mjd_obs is not None else 60000.0
-            syn = generate_synthetic_cutout(
-                seed=seed,
-                sources=[],
-                ra_center_deg=float(req.ra_deg or 133.79513),
-                dec_center_deg=float(req.dec_deg or -7.24515),
-                mjd_tdb_mid=mjd_val,
-                band_id="B1",
+            raise APIProblemError(
+                502,
+                "Archive Product Unavailable",
+                f"Failed to retrieve authentic FITS product for {req.obs_id} from {req.source or 'archive'}.",
             )
-            content = syn.fits_bytes
-            storage.put_bytes(storage_key, content, content_type="application/fits")
-            status = "ready_for_cutout"
 
         fid = uuid.uuid4()
         res = validate_fits_upload(content, storage=storage, storage_key=storage_key)

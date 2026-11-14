@@ -259,3 +259,24 @@ def test_search_spherex_siv2_parsing_and_fallback(monkeypatch: pytest.MonkeyPatc
     assert len(recs_err) > 0
     assert any("500" in n for n in notes_err)
 
+
+def test_load_archive_product_failure_raises_502(tmp_path: Path):
+    from app.api.deps import APIProblemError
+    from app.schemas.archive import ArchiveLoadRequest
+    from app.services.jobs import InMemoryJobStore
+    from app.services.storage import LocalStorageBackend
+
+    storage = LocalStorageBackend(tmp_path / "storage")
+    store = InMemoryJobStore()
+    req = ArchiveLoadRequest(
+        obs_id="demo_failed_product",
+        access_url="synthetic://demo/not_downloadable.fits",
+        source="spherex_irsa",
+        ra_deg=133.795,
+        dec_deg=-7.245,
+    )
+    with pytest.raises(APIProblemError) as exc_info:
+        irsa_search_service.load_archive_product(req, storage, store)
+    assert exc_info.value.status_code == 502
+    assert "Archive Product Unavailable" in exc_info.value.title
+

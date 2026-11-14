@@ -127,7 +127,7 @@ export function useViewerData(search: string, skipSecondary = false) {
         from: from || undefined,
         to: to || undefined,
       }),
-    enabled: hasCoords,
+    enabled: hasCoords && allFitsIds.length === 0,
   });
 
   const cutoutQ = useQuery({
@@ -162,7 +162,7 @@ export function useViewerData(search: string, skipSecondary = false) {
       }
       return api.getCutoutSet(accepted.cutout_id);
     },
-    enabled: hasCoords,
+    enabled: hasCoords && allFitsIds.length === 0,
   });
 
   const frames: CutoutFrame[] = useMemo(() => {
@@ -203,33 +203,20 @@ export function useViewerData(search: string, skipSecondary = false) {
       }
     }
 
-    const rawCutouts = cutoutQ.data?.frames ?? [];
-    const isSyntheticCutout =
-      cutoutQ.data?.warnings?.some((w) => w.toLowerCase().includes("synthetic")) ||
-      Boolean(rawCutouts[0]?.epoch.startsWith("E"));
-    const eligibleCutouts =
-      userFrames.length > 0 && isSyntheticCutout
-        ? []
-        : rawCutouts.filter((f) => !excluded.has(f.frame_id));
+    if (userFrames.length > 0) {
+      const seen = new Set<string>();
+      return userFrames
+        .filter((uf) => !excluded.has(uf.frame_id) && !seen.has(uf.frame_id) && seen.add(uf.frame_id))
+        .sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
+    }
 
+    const rawCutouts = cutoutQ.data?.frames ?? [];
     const seenFrameIds = new Set<string>();
     const seenEpochs = new Set<string>();
     const combined: CutoutFrame[] = [];
 
-    for (const uf of userFrames) {
-      if (excluded.has(uf.frame_id) || seenFrameIds.has(uf.frame_id)) continue;
-      combined.push(uf);
-      seenFrameIds.add(uf.frame_id);
-      seenEpochs.add(uf.epoch.toLowerCase());
-    }
-
-    for (const cf of eligibleCutouts) {
+    for (const cf of rawCutouts) {
       if (excluded.has(cf.frame_id) || seenFrameIds.has(cf.frame_id)) continue;
-      const isReplacedByArchive = userFrames.some(
-        (uf) => !excluded.has(uf.frame_id) && Math.abs(cf.mjd_tdb_mid - uf.mjd_tdb_mid) < 0.5,
-      );
-      if (isReplacedByArchive) continue;
-
       if (!seenEpochs.has(cf.epoch.toLowerCase())) {
         combined.push(cf);
         seenFrameIds.add(cf.frame_id);
@@ -529,7 +516,8 @@ export function useViewerData(search: string, skipSecondary = false) {
     spectrum: spectrumQ.data,
     resolveTargetDirect,
     resolving: resolveQ.isFetching,
-    loadingCutouts: cutoutQ.isFetching,
+    loadingCutouts: allFitsIds.length > 0 ? uploadsQ.isFetching : cutoutQ.isFetching,
+    loadingText: allFitsIds.length > 0 ? "Loading FITS frames…" : "Loading FITS cutouts…",
     errorMsg: (() => {
       const err = resolveQ.error ?? cutoutQ.error ?? fieldsQ.error ?? bufAQ.error ?? null;
       return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;

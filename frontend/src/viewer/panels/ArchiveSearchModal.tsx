@@ -13,10 +13,17 @@ import {
 export interface ArchiveSearchApplyParams {
   ra: number;
   dec: number;
+  fov?: number;
   from?: string;
   to?: string;
   bands?: string;
   source: ArchiveSourceId;
+}
+
+export function computeFovArcmin(rStr: string, unit: "arcsec" | "arcmin" | "deg"): number {
+  const r = Number.parseFloat(rStr) || 5.0;
+  const rArcmin = unit === "deg" ? r * 60.0 : unit === "arcsec" ? r / 60.0 : r;
+  return Math.max(0.1, Math.min(180.0, rArcmin * 2.0));
 }
 
 interface ArchiveSearchModalProps {
@@ -147,6 +154,8 @@ export function ArchiveSearchModal({
   const handleLoadEpoch = async (ep: ObservationEpoch) => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
+    const fovArcmin = computeFovArcmin(radius, radiusUnit);
+    useViewStore.getState().setView({ fov: fovArcmin });
     let fromVal = startDate || undefined;
     let toVal = endDate || undefined;
     if (!fromVal || !toVal || fromVal === toVal) {
@@ -173,7 +182,7 @@ export function ArchiveSearchModal({
           ra_deg: raNum,
           dec_deg: decNum,
           mjd_obs: ep.mjd_obs ?? undefined,
-          fov_arcmin: useViewStore.getState().fov || 10.0,
+          fov_arcmin: fovArcmin,
         });
         if (loaded?.fits_file_id) {
           useViewStore.getState().addFitsId(loaded.fits_file_id);
@@ -188,6 +197,7 @@ export function ArchiveSearchModal({
     onApplyInterval({
       ra: raNum,
       dec: decNum,
+      fov: fovArcmin,
       from: fromVal,
       to: toVal,
       bands: band === "ALL" ? "all" : band.toLowerCase(),
@@ -199,7 +209,8 @@ export function ArchiveSearchModal({
   const handleLoadAllInterval = async () => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
-    const fovArcmin = useViewStore.getState().fov || 10.0;
+    const fovArcmin = computeFovArcmin(radius, radiusUnit);
+    useViewStore.getState().setView({ fov: fovArcmin });
     const epochs = searchResult?.epochs ?? [];
 
     setLoadingAll(true);
@@ -238,6 +249,7 @@ export function ArchiveSearchModal({
     onApplyInterval({
       ra: raNum,
       dec: decNum,
+      fov: fovArcmin,
       from: startDate || undefined,
       to: endDate || undefined,
       bands: band === "ALL" ? "all" : band.toLowerCase(),

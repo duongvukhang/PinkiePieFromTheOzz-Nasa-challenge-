@@ -50,7 +50,7 @@ def render_array_products(
     rgba = cm.inferno(norm_flipped.astype(np.float32) / 255.0)
     rgb_bytes = (rgba[:, :, :3] * 255.0).astype(np.uint8)
     webp_buf = io.BytesIO()
-    Image.fromarray(rgb_bytes, mode="RGB").save(webp_buf, format="WEBP", quality=92)
+    Image.fromarray(rgb_bytes, mode="RGB").save(webp_buf, format="WEBP", lossless=True)
     disp_obj = storage.put_bytes(
         f"{prefix}/display.webp", webp_buf.getvalue(), content_type="image/webp"
     )

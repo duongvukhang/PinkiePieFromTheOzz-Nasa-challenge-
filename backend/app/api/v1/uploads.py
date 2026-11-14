@@ -284,7 +284,7 @@ async def get_upload_display(
     png_bytes = await asyncio.to_thread(image_renderer.render_to_png_bytes, arr, stretch=stretch, colormap=colormap)
     from PIL import Image
     buf = io.BytesIO()
-    Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", quality=90)
+    Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", lossless=True)
     return Response(
         content=buf.getvalue(),
         media_type="image/webp",
@@ -320,6 +320,9 @@ def format_uploaded_fits(f: dict[str, Any]) -> UploadedFitsSummary:
     n1 = f.get("naxis1")
     n2 = f.get("naxis2")
     shape = [n2, n1] if n1 and n2 else [128, 128]
+    stretch_meta = f.get("stretch")
+    if not isinstance(stretch_meta, dict) or "vmin" not in stretch_meta or "vmax" not in stretch_meta:
+        stretch_meta = {"mode": "asinh", "percentile": [1.0, 99.5], "vmin": 0.0, "vmax": 1000.0, "shape": shape}
     return UploadedFitsSummary(
         fits_file_id=fid,
         filename=f.get("filename") or obs_id,
@@ -337,7 +340,7 @@ def format_uploaded_fits(f: dict[str, Any]) -> UploadedFitsSummary:
         science_url=f"/api/v1/uploads/{fid}/science.bin",
         fits_url=f"/api/v1/uploads/{fid}/frame.fits",
         band_label=f.get("band_label"),
-        stretch={"vmin": 0.0, "vmax": 1000.0, "shape": shape},
+        stretch=stretch_meta,
     )
 
 
