@@ -175,6 +175,34 @@ export const api = {
     apiJson<CompareResultResponse>(`/api/v1/compare/${compareId}`),
   getObjectSpectrum: (objectId: string, epoch?: string) =>
     apiJson<SpectrumResponse>(buildUrl(`/api/v1/objects/${objectId}/spectrum`, { epoch })),
+  recomputeTrajectory: (
+    objectId: string,
+    body: { excluded_detection_ids?: number[]; models?: string[] },
+  ) =>
+    postJson<{ object_id: string; refit_job_id: string; status: string }>(
+      `/api/v1/objects/${objectId}/recompute`,
+      body,
+    ),
+  predictEphemeris: (
+    objectId: string,
+    body: { extrapolation_days?: number; steps?: number; start_mjd?: number },
+  ) =>
+    postJson<{
+      object_id: string;
+      trajectory: Array<{
+        time_mjd: number;
+        date_iso: string;
+        ra_deg: number;
+        dec_deg: number;
+        uncertainty_semi_major_arcsec: number;
+        uncertainty_semi_minor_arcsec: number;
+        pa_deg: number;
+        is_extrapolated: boolean;
+        method: string;
+      }>;
+      preferred_model?: string;
+      baseline_days: number;
+    }>(`/api/v1/objects/${objectId}/ephemeris`, body),
   searchArchive: (params: ArchiveSearchParams) =>
     apiJson<ArchiveSearchResponse>(
       buildUrl("/api/v1/archive/search", {

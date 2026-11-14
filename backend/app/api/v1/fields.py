@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import contextlib
+import io
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
+from astropy.io import fits
+import numpy as np
 from fastapi import APIRouter, Depends, Query, Response, status
+
+from app.services.image_renderer import image_renderer
 
 from app.api.deps import (
     APIProblemError,
@@ -248,20 +253,140 @@ def _get_cutout_artifact(
     return data, frame_meta
 
 
+def _render_frame_image(
+    cutout_id: UUID,
+    frame_id: UUID,
+    store: JobStore,
+    storage: StorageBackend,
+    stretch: str = "asinh",
+    colormap: str = "inferno",
+    brightness: float = 1.0,
+    contrast: float = 1.0,
+    p_min: float = 0.5,
+    p_max: float = 99.5,
+) -> bytes:
+    """Render scientific frame data array into PNG bytes using astronomical stretch/colormap."""
+    try:
+        data, frame_meta = _get_cutout_artifact(cutout_id, frame_id, "science", store, storage)
+        shape = tuple(frame_meta.get("stretch", {}).get("shape", []))
+        if shape and len(shape) == 2:
+            arr = np.frombuffer(data, dtype=np.float32).reshape(shape)
+        else:
+            fits_bytes, _ = _get_cutout_artifact(cutout_id, frame_id, "fits", store, storage)
+            with fits.open(io.BytesIO(fits_bytes)) as hdul:
+                arr = hdul["IMAGE"].data
+    except Exception:
+        fits_bytes, _ = _get_cutout_artifact(cutout_id, frame_id, "fits", store, storage)
+        with fits.open(io.BytesIO(fits_bytes)) as hdul:
+            arr = hdul["IMAGE"].data
+
+    return image_renderer.render_to_png_bytes(
+        arr,
+        stretch=stretch,
+        colormap=colormap,
+        brightness=brightness,
+        contrast=contrast,
+        p_min=p_min,
+        p_max=p_max,
+    )
+
+
+@router.get("/cutouts/{cutout_id}/frames/{frame_id}/preview.png", tags=["cutouts"])
+async def get_cutout_preview_png(
+    cutout_id: UUID,
+    frame_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    stretch: Annotated[
+        Literal["asinh", "log", "sqrt", "linear", "zscale"], Query()
+    ] = "asinh",
+    colormap: Annotated[
+        Literal["inferno", "viridis", "plasma", "magma", "cividis", "hot", "cool", "bone", "gray"],
+        Query(),
+    ] = "inferno",
+    brightness: Annotated[float, Query(ge=0.1, le=5.0)] = 1.0,
+    contrast: Annotated[float, Query(ge=0.1, le=5.0)] = 1.0,
+    p_min: Annotated[float, Query(ge=0.0, le=50.0)] = 0.5,
+    p_max: Annotated[float, Query(ge=50.0, le=100.0)] = 99.5,
+) -> Response:
+    """Serve dynamic PNG preview with custom astronomical stretch and colormap."""
+    png_bytes = _render_frame_image(
+        cutout_id,
+        frame_id,
+        store,
+        storage,
+        stretch=stretch,
+        colormap=colormap,
+        brightness=brightness,
+        contrast=contrast,
+        p_min=p_min,
+        p_max=p_max,
+    )
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.get("/cutouts/{cutout_id}/frames/{frame_id}/display.webp", tags=["cutouts"])
 async def get_cutout_display(
     cutout_id: UUID,
     frame_id: UUID,
     store: Annotated[JobStore, Depends(get_store)],
     storage: Annotated[StorageBackend, Depends(get_storage)],
+    stretch: Annotated[
+        Literal["asinh", "log", "sqrt", "linear", "zscale"] | None, Query()
+    ] = None,
+    colormap: Annotated[
+        Literal["inferno", "viridis", "plasma", "magma", "cividis", "hot", "cool", "bone", "gray"]
+        | None,
+        Query(),
+    ] = None,
+    brightness: Annotated[float | None, Query(ge=0.1, le=5.0)] = None,
+    contrast: Annotated[float | None, Query(ge=0.1, le=5.0)] = None,
+    p_min: Annotated[float | None, Query(ge=0.0, le=50.0)] = None,
+    p_max: Annotated[float | None, Query(ge=50.0, le=100.0)] = None,
 ) -> Response:
-    """Serve immutable 8-bit display WebP tile for a cutout frame."""
+    """Serve 8-bit display WebP tile for a cutout frame with optional stretch/colormap overrides."""
+    if (
+        stretch is not None
+        or colormap is not None
+        or brightness is not None
+        or contrast is not None
+        or p_min is not None
+        or p_max is not None
+    ):
+        png_bytes = _render_frame_image(
+            cutout_id,
+            frame_id,
+            store,
+            storage,
+            stretch=stretch or "asinh",
+            colormap=colormap or "inferno",
+            brightness=brightness if brightness is not None else 1.0,
+            contrast=contrast if contrast is not None else 1.0,
+            p_min=p_min if p_min is not None else 0.5,
+            p_max=p_max if p_max is not None else 99.5,
+        )
+        # Convert PNG to WebP
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", quality=90)
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/webp",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
     data, _ = _get_cutout_artifact(cutout_id, frame_id, "display", store, storage)
     return Response(
         content=data,
         media_type="image/webp",
         headers={"Cache-Control": "public, max-age=2592000, immutable"},
     )
+
 
 
 @router.get("/cutouts/{cutout_id}/frames/{frame_id}/science.bin", tags=["cutouts"])

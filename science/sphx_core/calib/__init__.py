@@ -735,6 +735,88 @@ def coadd_band_group(
     return results
 
 
+def evaluate_lvf_wavelength(
+    frame_or_hdul: Any,
+    x_pix: float,
+    y_pix: float,
+    lvf_gradient_axis: int = 1,
+) -> tuple[float, float]:
+    """Calculate calibrated wavelength and bandwidth (um) at detector pixel (x_pix, y_pix) (§0, §A).
+
+    Interpolates 2D WCS-WAVE lookup table when present, falling back to linear LVF dispersion.
+    """
+    from scipy.interpolate import RegularGridInterpolator
+
+    # 1. If FrameData instance
+    if isinstance(frame_or_hdul, FrameData):
+        if frame_or_hdul.wcs_wave is not None:
+            wave = frame_or_hdul.wcs_wave
+            ny, nx = frame_or_hdul.shape
+            y_pts = np.arange(ny, dtype=np.float64)
+            x_pts = np.arange(nx, dtype=np.float64)
+            if wave.ndim == 2:
+                rgi = RegularGridInterpolator((y_pts, x_pts), wave, bounds_error=False, fill_value=None)
+                w = float(rgi([[y_pix, x_pix]])[0])
+                return round(w, 5), round(w / 80.0, 5)
+            elif wave.ndim == 3:
+                rgi_w = RegularGridInterpolator((y_pts, x_pts), wave[..., 0], bounds_error=False, fill_value=None)
+                rgi_b = RegularGridInterpolator((y_pts, x_pts), wave[..., 1], bounds_error=False, fill_value=None)
+                return round(float(rgi_w([[y_pix, x_pix]])[0]), 5), round(float(rgi_b([[y_pix, x_pix]])[0]), 5)
+
+        w_range = frame_or_hdul.wavelength_um or BAND_GROUPS.get(frame_or_hdul.band_id or "", (0.75, 1.11))
+        ny, nx = frame_or_hdul.shape
+        coord = x_pix if lvf_gradient_axis == 1 else y_pix
+        max_dim = max(1.0, (nx - 1.0) if lvf_gradient_axis == 1 else (ny - 1.0))
+        frac = max(0.0, min(1.0, coord / max_dim))
+        w = w_range[0] + frac * (w_range[1] - w_range[0])
+        b = (w_range[1] - w_range[0]) / 16.0
+        return round(float(w), 5), round(float(b), 5)
+
+    # 2. If HDUList, filepath, or bytes
+    hdul, should_close = _open_hdul(frame_or_hdul)
+    try:
+        if "WCS-WAVE" in hdul:
+            whdu = hdul["WCS-WAVE"]
+            data = getattr(whdu, "data", None)
+            if data is not None and hasattr(data, "names") and {"X", "Y", "VALUES"}.issubset(data.names):
+                x_pts = np.asarray(data["X"][0], dtype=np.float64)
+                y_pts = np.asarray(data["Y"][0], dtype=np.float64)
+                vals = np.asarray(data["VALUES"][0], dtype=np.float64)
+                rgi_w = RegularGridInterpolator((y_pts, x_pts), vals[:, :, 0], bounds_error=False, fill_value=None)
+                rgi_b = RegularGridInterpolator((y_pts, x_pts), vals[:, :, 1], bounds_error=False, fill_value=None)
+                fx = x_pix + 1.0 if x_pts[0] >= 1.0 else x_pix
+                fy = y_pix + 1.0 if y_pts[0] >= 1.0 else y_pix
+                return round(float(rgi_w([[fy, fx]])[0]), 5), round(float(rgi_b([[fy, fx]])[0]), 5)
+            elif isinstance(data, np.ndarray) and data.ndim >= 2:
+                ny, nx = data.shape[:2]
+                y_pts = np.arange(ny, dtype=np.float64)
+                x_pts = np.arange(nx, dtype=np.float64)
+                if data.ndim == 2:
+                    rgi = RegularGridInterpolator((y_pts, x_pts), data, bounds_error=False, fill_value=None)
+                    w = float(rgi([[y_pix, x_pix]])[0])
+                    return round(w, 5), round(w / 80.0, 5)
+                rgi_w = RegularGridInterpolator((y_pts, x_pts), data[..., 0], bounds_error=False, fill_value=None)
+                rgi_b = RegularGridInterpolator((y_pts, x_pts), data[..., 1], bounds_error=False, fill_value=None)
+                return round(float(rgi_w([[y_pix, x_pix]])[0]), 5), round(float(rgi_b([[y_pix, x_pix]])[0]), 5)
+
+        hdr = hdul[0].header
+        sci_hdu = _find_hdu(hdul, _IMAGE_NAMES) or hdul[0]
+        s_hdr = getattr(sci_hdu, "header", hdr)
+        w_min = float(s_hdr.get("LAM_MIN") or hdr.get("LAM_MIN") or 0.75)
+        w_max = float(s_hdr.get("LAM_MAX") or hdr.get("LAM_MAX") or 1.11)
+        nx = int(s_hdr.get("NAXIS1") or 2048)
+        ny = int(s_hdr.get("NAXIS2") or 2048)
+        coord = x_pix if lvf_gradient_axis == 1 else y_pix
+        max_dim = max(1.0, (nx - 1.0) if lvf_gradient_axis == 1 else (ny - 1.0))
+        frac = max(0.0, min(1.0, coord / max_dim))
+        w = w_min + frac * (w_max - w_min)
+        b = (w_max - w_min) / 16.0
+        return round(float(w), 5), round(float(b), 5)
+    finally:
+        if should_close:
+            hdul.close()
+
+
 __all__ = [
     "BAND_GROUPS",
     "HARD_BAD_MASK",
@@ -747,6 +829,7 @@ __all__ = [
     "build_quality_mask",
     "coadd_band_group",
     "estimate_background_and_noise",
+    "evaluate_lvf_wavelength",
     "load_frame",
     "measure_correlated_noise",
     "reproject_to_grid",

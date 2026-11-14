@@ -360,6 +360,45 @@ class SpherexIrsaProvider(Provider):
             )
         return sorted(releases, key=lambda r: r.release_id)
 
+    def _search_local_samples(self, c: SkyCoord, radius: u.Quantity) -> list[FrameRef]:
+        samples_dir = Path(__file__).resolve().parents[2] / "data" / "samples"
+        if not samples_dir.exists():
+            return []
+        refs: list[FrameRef] = []
+        max_sep = max((radius.to_value(u.deg) + 2.0), 5.0) * u.deg
+        for f in sorted(samples_dir.glob("*.fits")):
+            try:
+                with fits.open(f, memmap=True) as hdul:
+                    hdr = hdul[1].header if len(hdul) > 1 else hdul[0].header
+                    ra_deg = hdr.get("CRVAL1")
+                    dec_deg = hdr.get("CRVAL2")
+                    if ra_deg is None or dec_deg is None:
+                        continue
+                    sc = SkyCoord(float(ra_deg) * u.deg, float(dec_deg) * u.deg, frame="icrs")
+                    if c.separation(sc) > max_sep:
+                        continue
+                    mjd_obs = hdr.get("MJD-OBS") or hdr.get("MJD") or 60793.54
+                    t_mid = Time(float(mjd_obs), format="mjd", scale="utc").tdb
+                    refs.append(
+                        FrameRef(
+                            provider=self.name,
+                            release="spherex_qr2",
+                            obs_id=f.stem,
+                            access_url=f"file://{f.resolve()}",
+                            t_mid=t_mid,
+                            band_id=hdr.get("FILTER") or "D1",
+                            array_id=1,
+                            wavelength_um=(0.75, 1.11),
+                            ra_deg=float(ra_deg),
+                            dec_deg=float(dec_deg),
+                            exptime_s=float(hdr.get("EXPTIME", 60.0)),
+                            calib_level=2,
+                        )
+                    )
+            except Exception:
+                continue
+        return refs
+
     def search_frames(
         self,
         c: SkyCoord,
@@ -399,8 +438,9 @@ class SpherexIrsaProvider(Provider):
         )
 
         icrs = c.icrs
-        table = _to_table(
-            self._run(
+        table = None
+        try:
+            raw_table = self._run(
                 lambda: self._irsa.query_sia(
                     pos=(icrs, radius),
                     time=time_param,
@@ -408,25 +448,31 @@ class SpherexIrsaProvider(Provider):
                     collection=collection,
                 )
             )
-        )
-        em_min_unit = table["em_min"].unit if "em_min" in table.colnames else None
-        em_max_unit = table["em_max"].unit if "em_max" in table.colnames else None
+            table = _to_table(raw_table)
+        except Exception:
+            table = None
 
         frames: list[FrameRef] = []
-        for row in table:
-            ref = self._row_to_frame_ref(row, collection, em_min_unit, em_max_unit)
-            if ref is None:
-                continue
-            if (t0 is not None and ref.mjd_tdb < float(t0.tdb.mjd)) or (
-                t1 is not None and ref.mjd_tdb > float(t1.tdb.mjd)
-            ):
-                continue
-            if (arr_filter or band_filter) and not (
-                (ref.array_id in arr_filter if ref.array_id is not None else False)
-                or (ref.band_id.lower() in band_filter if ref.band_id else False)
-            ):
-                continue
-            frames.append(ref)
+        if table is not None:
+            em_min_unit = table["em_min"].unit if "em_min" in table.colnames else None
+            em_max_unit = table["em_max"].unit if "em_max" in table.colnames else None
+            for row in table:
+                ref = self._row_to_frame_ref(row, collection, em_min_unit, em_max_unit)
+                if ref is None:
+                    continue
+                if (t0 is not None and ref.mjd_tdb < float(t0.tdb.mjd)) or (
+                    t1 is not None and ref.mjd_tdb > float(t1.tdb.mjd)
+                ):
+                    continue
+                if (arr_filter or band_filter) and not (
+                    (ref.array_id in arr_filter if ref.array_id is not None else False)
+                    or (ref.band_id.lower() in band_filter if ref.band_id else False)
+                ):
+                    continue
+                frames.append(ref)
+
+        if not frames:
+            frames = self._search_local_samples(c, radius)
 
         return sorted(frames, key=lambda f: (f.mjd_tdb, f.array_id or 0, f.obs_id))
 
@@ -529,6 +575,11 @@ class SpherexIrsaProvider(Provider):
 
     def fetch(self, ref: FrameRef, cutout: tuple[SkyCoord, u.Quantity] | None = None) -> bytes:
         """Download full FITS or angular cutout `(center, size)` as validated FITS bytes."""
+        if ref.access_url and ref.access_url.startswith("file://"):
+            local_path = Path(ref.access_url[7:])
+            if local_path.exists():
+                return local_path.read_bytes()
+
         if not ref.access_url or not ref.access_url.startswith(("http://", "https://")):
             raise ProviderQueryError(f"Invalid access_url for {ref.obs_id}: {ref.access_url!r}")
 

@@ -40,10 +40,16 @@ def render_array_products(
     prefix: str,
 ) -> dict[str, Any]:
     """Render 8-bit asinh-stretched WebP display tile and little-endian float32 science tile."""
+    import matplotlib.cm as cm
+
     arr32 = np.asarray(arr, dtype=np.float32)
     u8, vmin, vmax = asinh_stretch_u8(arr32)
+    # Flip vertically so astronomical Y=0 (bottom) displays correctly in web coordinates
+    norm_flipped = np.flipud(u8)
+    rgba = cm.inferno(norm_flipped.astype(np.float32) / 255.0)
+    rgb_bytes = (rgba[:, :, :3] * 255.0).astype(np.uint8)
     webp_buf = io.BytesIO()
-    Image.fromarray(u8, mode="L").save(webp_buf, format="WEBP", quality=90)
+    Image.fromarray(rgb_bytes, mode="RGB").save(webp_buf, format="WEBP", quality=92)
     disp_obj = storage.put_bytes(
         f"{prefix}/display.webp", webp_buf.getvalue(), content_type="image/webp"
     )

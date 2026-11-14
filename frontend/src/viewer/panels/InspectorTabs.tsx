@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type {
-  AssociationHypothesis,
-  CutoutFrame,
-  DetectionRead,
-  SpectrumResponse,
-  SuggestionItem,
-  TrackedObjectDetailResponse,
+import {
+  api,
+  type AssociationHypothesis,
+  type CutoutFrame,
+  type DetectionRead,
+  type SpectrumResponse,
+  type SuggestionItem,
+  type TrackedObjectDetailResponse,
 } from "../../api/client";
 import { useViewStore, type InspectorTab } from "../state/viewStore";
 import { nextTrackLabel } from "../state/useViewerData";
@@ -61,6 +62,61 @@ export function InspectorTabs({
   const objRef = useRef<HTMLDivElement>(null);
   const [reassigningEpoch, setReassigningEpoch] = useState<string | null>(null);
   const [reassignInput, setReassignInput] = useState<string>("");
+
+  const [excludedDets, setExcludedDets] = useState<Set<number>>(new Set());
+  const [isRecomputing, setIsRecomputing] = useState(false);
+  const [recomputeMsg, setRecomputeMsg] = useState<string | null>(null);
+
+  const [predDays, setPredDays] = useState(30);
+  const [isPredicting, setIsPredicting] = useState(false);
+  const [ephemerisResult, setEphemerisResult] = useState<{
+    object_id: string;
+    trajectory: Array<{
+      time_mjd: number;
+      date_iso: string;
+      ra_deg: number;
+      dec_deg: number;
+      uncertainty_semi_major_arcsec: number;
+      uncertainty_semi_minor_arcsec: number;
+      pa_deg: number;
+      is_extrapolated: boolean;
+      method: string;
+    }>;
+    preferred_model?: string;
+    baseline_days: number;
+  } | null>(null);
+
+  const handleRecompute = async () => {
+    if (!objectDetail?.id) return;
+    setIsRecomputing(true);
+    setRecomputeMsg(null);
+    try {
+      const res = await api.recomputeTrajectory(objectDetail.id, {
+        excluded_detection_ids: Array.from(excludedDets),
+      });
+      setRecomputeMsg(`Trajectory refit job queued: ${res.refit_job_id.slice(0, 8)}`);
+    } catch (err: unknown) {
+      setRecomputeMsg(`Error: ${err instanceof Error ? err.message : "Recompute failed"}`);
+    } finally {
+      setIsRecomputing(false);
+    }
+  };
+
+  const handlePredict = async () => {
+    if (!objectDetail?.id) return;
+    setIsPredicting(true);
+    try {
+      const res = await api.predictEphemeris(objectDetail.id, {
+        extrapolation_days: predDays,
+        steps: 10,
+      });
+      setEphemerisResult(res);
+    } catch (err) {
+      console.error("Ephemeris prediction error:", err);
+    } finally {
+      setIsPredicting(false);
+    }
+  };
 
   // Sync beforematch so Ctrl+F inside hidden-until-found panels activates that tab (tabs guide)
   useEffect(() => {
@@ -284,6 +340,170 @@ export function InspectorTabs({
                   ⚠ {c}
                 </p>
               ))}
+
+              {/* Feature: Epoch Curation & Trajectory Refitting */}
+              <div className="epoch-curation-section" style={{ marginTop: "var(--space-4)" }}>
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                >
+                  <h3 className="viewer-sec-title">Trajectory Epoch Curation</h3>
+                  <button
+                    type="button"
+                    className="viewer-btn viewer-btn-primary"
+                    disabled={isRecomputing}
+                    onClick={handleRecompute}
+                  >
+                    {isRecomputing ? "Refitting…" : "Recompute Trajectory"}
+                  </button>
+                </div>
+                {recomputeMsg && (
+                  <p className="viewer-note" style={{ marginTop: "var(--space-1)" }}>
+                    {recomputeMsg}
+                  </p>
+                )}
+                <ul
+                  className="epoch-checklist"
+                  style={{ listStyle: "none", padding: 0, marginTop: "var(--space-2)" }}
+                >
+                  {objectDetail.measurements.map((m, idx) => {
+                    const detId = (m as unknown as { detection_id?: number }).detection_id ?? idx;
+                    const isExcluded = excludedDets.has(detId);
+                    const snrStr =
+                      m.flux_ujy != null && m.flux_err_ujy != null && m.flux_err_ujy > 0
+                        ? `${(m.flux_ujy / m.flux_err_ujy).toFixed(1)}σ`
+                        : "N/A";
+                    return (
+                      <li
+                        key={`m-${idx}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "4px 8px",
+                          borderBottom: "1px solid var(--border-subtle)",
+                          opacity: isExcluded ? 0.5 : 1,
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!isExcluded}
+                            onChange={(e) => {
+                              const next = new Set(excludedDets);
+                              if (e.target.checked) {
+                                next.delete(detId);
+                              } else {
+                                next.add(detId);
+                              }
+                              setExcludedDets(next);
+                            }}
+                          />
+                          <span>
+                            <strong>{m.epoch || `Epoch ${idx + 1}`}</strong>
+                            <span
+                              className="viewer-mono"
+                              style={{ fontSize: "0.75rem", marginLeft: "6px" }}
+                            >
+                              {m.ra != null && m.dec != null
+                                ? `${m.ra.toFixed(4)}°, ${m.dec.toFixed(4)}°`
+                                : "No pos"}
+                            </span>
+                          </span>
+                        </label>
+                        <span className="viewer-chip" style={{ fontSize: "0.7rem" }}>
+                          {snrStr}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+
+              {/* Feature: Future Ephemeris Extrapolation (Kinematic Prediction) */}
+              <div className="ephemeris-prediction-section" style={{ marginTop: "var(--space-4)" }}>
+                <h3 className="viewer-sec-title">Future Ephemeris Extrapolation</h3>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    marginTop: "var(--space-2)",
+                  }}
+                >
+                  <label htmlFor="extrap-days" className="viewer-label">
+                    Days:
+                  </label>
+                  <input
+                    id="extrap-days"
+                    type="number"
+                    min={1}
+                    max={365}
+                    className="viewer-input"
+                    style={{ width: "5rem" }}
+                    value={predDays}
+                    onChange={(e) => setPredDays(Number(e.target.value) || 30)}
+                  />
+                  <button
+                    type="button"
+                    className="viewer-btn"
+                    disabled={isPredicting}
+                    onClick={handlePredict}
+                  >
+                    {isPredicting ? "Predicting…" : "Predict Ephemeris"}
+                  </button>
+                </div>
+                {ephemerisResult && (
+                  <div
+                    style={{ marginTop: "var(--space-2)", maxHeight: "12rem", overflowY: "auto" }}
+                  >
+                    <table
+                      style={{
+                        width: "100%",
+                        fontSize: "0.75rem",
+                        fontFamily: "monospace",
+                        borderCollapse: "collapse",
+                      }}
+                    >
+                      <thead>
+                        <tr
+                          style={{
+                            borderBottom: "1px solid var(--border-subtle)",
+                            textAlign: "left",
+                          }}
+                        >
+                          <th>Date</th>
+                          <th>RA (deg)</th>
+                          <th>Dec (deg)</th>
+                          <th>±1σ (″)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ephemerisResult.trajectory.map((pt, i) => (
+                          <tr
+                            key={i}
+                            style={{
+                              borderBottom: "1px solid var(--border-subtle)",
+                              opacity: pt.is_extrapolated ? 1 : 0.6,
+                            }}
+                          >
+                            <td>{pt.date_iso.slice(0, 10)}</td>
+                            <td>{pt.ra_deg.toFixed(4)}</td>
+                            <td>{pt.dec_deg.toFixed(4)}</td>
+                            <td>±{pt.uncertainty_semi_major_arcsec.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
 
               {/* Feature B: Identity Inspector with per-epoch associations & Accept/Reject/Reassign */}
               <div className="associations-section">

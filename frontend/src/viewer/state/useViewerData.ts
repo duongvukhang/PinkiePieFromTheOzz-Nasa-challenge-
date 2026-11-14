@@ -237,13 +237,17 @@ export function useViewerData(search: string, skipSecondary = false) {
     return () => window.clearInterval(id);
   }, [playing, pausedByVis, fps, frames.length, setView]);
 
+  const frameShape = frameA?.stretch?.shape as [number, number] | undefined;
+  const imgW = frameShape?.[1] ?? bufAQ.data?.width ?? 2040;
+  const imgH = frameShape?.[0] ?? bufAQ.data?.height ?? 2040;
+
   const wcs = parseFitsWcs(
     frameA?.wcs_header,
-    activeRa ?? 133.79513,
-    activeDec ?? -7.24515,
+    activeRa ?? 276.26139,
+    activeDec ?? 64.82577,
     fov,
-    bufAQ.data?.width ?? 128,
-    bufAQ.data?.height ?? 128,
+    imgW,
+    imgH,
   );
 
   const overrideAssociation = async (

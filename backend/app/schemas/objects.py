@@ -301,3 +301,50 @@ class CompareResultResponse(BaseModel):
     products: dict[str, str] = Field(default_factory=dict)
     header_diff: dict[str, Any] | None = None
     source_changes: dict[str, Any] | None = None
+
+
+class EphemerisPredictionPointSchema(BaseModel):
+    """Predicted future/past ephemeris position with full covariance uncertainty ellipse."""
+
+    time_mjd: float
+    date_iso: str
+    ra_deg: float
+    dec_deg: float
+    uncertainty_semi_major_arcsec: float
+    uncertainty_semi_minor_arcsec: float
+    pa_deg: float = 0.0
+    is_extrapolated: bool = False
+    method: str = "astrometric5_wls"
+
+
+class EphemerisRequest(BaseModel):
+    """Request future sky position ephemeris prediction for a tracked object."""
+
+    extrapolation_days: float = Field(default=30.0, ge=0.1, le=3650.0)
+    steps: int = Field(default=10, ge=2, le=100)
+    start_mjd: float | None = None
+
+
+class EphemerisResponse(BaseModel):
+    """Ephemeris trajectory prediction response."""
+
+    object_id: UUID
+    trajectory: list[EphemerisPredictionPointSchema]
+    preferred_model: str | None = None
+    baseline_days: float = 0.0
+
+
+class TrajectoryRecomputeRequest(BaseModel):
+    """Recompute trajectory motion fits with optional excluded detections or models."""
+
+    excluded_detection_ids: list[int] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=lambda: ["linear", "astrometric5"])
+
+
+class TrajectoryRecomputeResponse(BaseModel):
+    """Response after recomputing trajectory motion fits."""
+
+    object_id: UUID
+    refit_job_id: UUID
+    status: str = "recomputed"
+

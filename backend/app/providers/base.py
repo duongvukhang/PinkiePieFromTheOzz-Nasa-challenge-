@@ -698,7 +698,11 @@ def _summarize_fits_bytes(
                 try:
                     w = WCS(hdu.header)
                     if w.has_celestial:
-                        wcs_header = w.to_header(relax=True).tostring(sep="\n")
+                        hdr_wcs = w.to_header(relax=True)
+                        if hasattr(hdu, "shape") and len(hdu.shape) >= 2:
+                            hdr_wcs["NAXIS1"] = hdu.shape[1]
+                            hdr_wcs["NAXIS2"] = hdu.shape[0]
+                        wcs_header = hdr_wcs.tostring(sep="\n")
                         break
                 except Exception:
                     continue

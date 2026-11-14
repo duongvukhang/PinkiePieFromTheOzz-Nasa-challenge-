@@ -5,7 +5,7 @@ export type ImageOp = "none" | "sum" | "diff" | "ratio" | "swipe";
 export type StretchMode = "asinh" | "linear" | "log" | "sqrt";
 export type ColormapMode = "gray" | "sepia" | "viridis";
 export type CatalogName = "gaia" | "catwise";
-export type InspectorTab = "spectrum" | "flags" | "object";
+export type InspectorTab = "spectrum" | "flags" | "object" | "tracks" | "layers";
 
 export interface ViewState {
   target: string;
@@ -38,7 +38,7 @@ export interface ViewState {
 const MODES = new Set<ViewerMode>(["blink", "compare", "planetx"]);
 const OPS = new Set<ImageOp>(["none", "sum", "diff", "ratio", "swipe"]);
 const STRETCHES = new Set<StretchMode>(["asinh", "linear", "log", "sqrt"]);
-const INSPECTOR_TABS = new Set<InspectorTab>(["spectrum", "flags", "object"]);
+const INSPECTOR_TABS = new Set<InspectorTab>(["spectrum", "flags", "object", "tracks", "layers"]);
 
 function hmsToDeg(token: string, isHours: boolean): number | undefined {
   const clean = token
@@ -154,8 +154,10 @@ export function toViewQuery(s: ViewState): string {
 }
 
 const DEFAULT_STATE: ViewState = {
-  target: "WISE 0855",
-  fov: 10,
+  target: "SPHEREx NEP Deep Field",
+  ra: 276.26139,
+  dec: 64.82577,
+  fov: 15,
   from: "",
   to: "",
   release: "latest",

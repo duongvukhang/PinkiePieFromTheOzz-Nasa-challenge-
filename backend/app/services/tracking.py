@@ -18,7 +18,13 @@ from app.schemas.objects import (
     LightcurveResponse,
     SpectrumResponse,
 )
-from sphx_core.calib import BAND_GROUPS, FrameData, band_group_for_wavelength, load_frame
+from sphx_core.calib import (
+    BAND_GROUPS,
+    FrameData,
+    band_group_for_wavelength,
+    evaluate_lvf_wavelength,
+    load_frame,
+)
 from sphx_core.motion import (
     forced_photometry_at_sky,
     measure_variability_period,
@@ -149,11 +155,7 @@ def compute_object_spectrum(
             continue
         flux, ferr, _, fflags = forced_photometry_at_sky(frame, ra_t, dec_t)
         flux_ujy, err_ujy, _ = flux_to_ujy_and_mag(flux, ferr, frame)
-        if frame.wavelength_um is not None:
-            lam_um = 0.5 * (float(frame.wavelength_um[0]) + float(frame.wavelength_um[1]))
-        else:
-            band = frame.band_id or band_group_for_wavelength(frame.wavelength_um) or ""
-            lam_um = _BAND_MID_UM.get(band, 2.5)
+        lam_um, _ = evaluate_lvf_wavelength(frame, x_px, y_px)
         pts.append((lam_um, flux_ujy, err_ujy, mjd, int(fflags)))
 
     if not pts:

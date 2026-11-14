@@ -7,6 +7,7 @@ import type {
 } from "../../api/client";
 import type { WcsParams } from "../aladin/wcs";
 import { pixelToSky, skyToPixel } from "../aladin/wcs";
+import type { SelectedSourceData } from "../panels/SourceInfoCard";
 
 const OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"];
 
@@ -33,15 +34,21 @@ interface WcsSvgOverlayProps {
   tracks: string[];
   selectBoxMode: boolean;
   objectDetail?: TrackedObjectDetailResponse;
-  selectedTarget?: {
-    label: string;
-    ra: number;
-    dec: number;
-    snr?: number | null;
-    isTrack?: boolean;
-  } | null;
+  selectedTarget?: SelectedSourceData | null;
   currentEpoch?: string;
   showGrid?: boolean;
+  showSources?: boolean;
+  showLabels?: boolean;
+  showTrajectories?: boolean;
+  showUncertainty?: boolean;
+  predictionData?: {
+    trajectory_points?: Array<{
+      ra_deg: number;
+      dec_deg: number;
+      uncertainty_semi_major_arcsec?: number;
+      uncertainty_semi_minor_arcsec?: number;
+    }>;
+  };
   onSelectCoord: (ra: number, dec: number) => void;
   onSelectBox?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onSelectDetection?: (detection: DetectionRead) => void;
@@ -54,13 +61,18 @@ export function WcsSvgOverlay({
   gaiaSources,
   catwiseSources,
   detections,
-  suggestions,
+  suggestions = [],
   tracks,
   selectBoxMode,
   objectDetail,
   selectedTarget,
   currentEpoch,
-  showGrid = true,
+  showGrid = false,
+  showSources = true,
+  showLabels = true,
+  showTrajectories = true,
+  showUncertainty = false,
+  predictionData,
   onSelectCoord,
   onSelectBox,
   onSelectDetection,
@@ -248,31 +260,53 @@ export function WcsSvgOverlay({
           </marker>
         </defs>
 
-        {/* 1. Subtle Celestial Coordinate Grid (Stellarium aesthetic) */}
+        {/* 1. Coordinate Grid Lines */}
         {showGrid && (
-          <g className="viewer-grid-overlay" opacity="0.32" pointerEvents="none">
-            {[0.2, 0.4, 0.6, 0.8].map((f) => (
-              <g key={f}>
-                <line
-                  x1={wcs.naxis1 * f}
-                  y1={0}
-                  x2={wcs.naxis1 * f}
-                  y2={wcs.naxis2}
-                  stroke="rgba(34, 211, 238, 0.4)"
-                  strokeWidth={0.8 * pxScale}
-                  strokeDasharray={`${3 * pxScale},${3 * pxScale}`}
-                />
-                <line
-                  x1={0}
-                  y1={wcs.naxis2 * f}
-                  x2={wcs.naxis1}
-                  y2={wcs.naxis2 * f}
-                  stroke="rgba(34, 211, 238, 0.4)"
-                  strokeWidth={0.8 * pxScale}
-                  strokeDasharray={`${3 * pxScale},${3 * pxScale}`}
-                />
-              </g>
-            ))}
+          <g className="pointer-events-none opacity-40">
+            {[0.2, 0.4, 0.6, 0.8].map((frac, idx) => {
+              const ptX = pixelToSky(wcs.naxis1 * frac, wcs.naxis2 / 2, wcs);
+              const ptY = pixelToSky(wcs.naxis1 / 2, wcs.naxis2 * frac, wcs);
+              return (
+                <g key={`grid_${idx}`}>
+                  <line
+                    x1={wcs.naxis1 * frac}
+                    y1={0}
+                    x2={wcs.naxis1 * frac}
+                    y2={wcs.naxis2}
+                    stroke="rgba(34, 211, 238, 0.4)"
+                    strokeWidth={1}
+                    strokeDasharray="4,4"
+                  />
+                  <text
+                    x={wcs.naxis1 * frac + 3}
+                    y={12}
+                    fill="rgba(34, 211, 238, 0.7)"
+                    fontSize="9px"
+                    fontFamily="monospace"
+                  >
+                    {ptX.ra.toFixed(2)}°
+                  </text>
+                  <line
+                    x1={0}
+                    y1={wcs.naxis2 * frac}
+                    x2={wcs.naxis1}
+                    y2={wcs.naxis2 * frac}
+                    stroke="rgba(34, 211, 238, 0.4)"
+                    strokeWidth={1}
+                    strokeDasharray="4,4"
+                  />
+                  <text
+                    x={4}
+                    y={wcs.naxis2 * frac - 3}
+                    fill="rgba(34, 211, 238, 0.7)"
+                    fontSize="9px"
+                    fontFamily="monospace"
+                  >
+                    {ptY.dec.toFixed(2)}°
+                  </text>
+                </g>
+              );
+            })}
           </g>
         )}
         {gaiaSources.map((s) => {
@@ -305,44 +339,143 @@ export function WcsSvgOverlay({
           );
         })}
 
-        {detections.map((d) => {
-          const p = skyToPixel(d.ra, d.dec, wcs);
-          const isSug = suggestions.some((s) => s.detection_id === d.id);
-          if (!isSug && detections.length > 40) return null;
-          return (
-            <g
-              key={`det-${d.id}`}
-              transform={`translate(${p.x},${p.y})`}
-              style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
-              role="button"
-              tabIndex={0}
-              aria-label={`Detection ${d.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectDetection?.(d);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
+        {/* 4. Detected Sources Overlay — thin green squares with persistent track labels */}
+        {showSources &&
+          detections.map((d) => {
+            const screenX = d.x_pix != null ? d.x_pix : skyToPixel(d.ra, d.dec, wcs).x;
+            const screenY = d.y_pix != null ? wcs.naxis2 - d.y_pix : skyToPixel(d.ra, d.dec, wcs).y;
+            const dLabel =
+              d.x_pix != null && d.y_pix != null
+                ? `src_${d.id.toString(16).padStart(8, "0")}_${Math.round(d.x_pix)}_${Math.round(d.y_pix)}`
+                : `src_${d.id}`;
+            const isSelected =
+              selectedTarget?.label === dLabel ||
+              String(d.id) === selectedTarget?.label ||
+              selectedTarget?.label === `DET #${d.id}`;
+            const size = isSelected ? 18 : 10;
+            const half = size / 2;
+
+            const matchedTrack = tracks.find((t) => {
+              const [, coords] = t.split(":");
+              const coordsArr = (coords ?? "").split(",").map(Number);
+              const r = coordsArr[0];
+              const dec = coordsArr[1];
+              return (
+                r != null &&
+                dec != null &&
+                Math.abs(r - d.ra) < 0.001 &&
+                Math.abs(dec - d.dec) < 0.001
+              );
+            });
+            const trackLabel = matchedTrack ? matchedTrack.split(":")[0] : null;
+            const isConfirmed = Boolean(trackLabel);
+            const isConflict = Boolean(trackLabel && matchedTrack?.includes("CONFLICT"));
+            const isAmbiguous = Boolean(d.flags && d.flags & 4);
+            const detStroke = isConflict
+              ? "#f59e0b"
+              : isAmbiguous
+                ? "#fbbf24"
+                : isConfirmed
+                  ? "#38bdf8"
+                  : isSelected
+                    ? "#4ade80"
+                    : "#22c55e";
+            const displayLabel = trackLabel
+              ? `${trackLabel} (${dLabel})${isConflict ? " [CONFLICT]" : isAmbiguous ? " [REVIEW]" : ""}`
+              : dLabel;
+
+            return (
+              <g
+                key={`det-${d.id}`}
+                style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
+                role="button"
+                tabIndex={0}
+                aria-label={`Detection ${displayLabel}`}
+                onClick={(e) => {
                   e.stopPropagation();
                   onSelectDetection?.(d);
-                }
-              }}
-            >
-              <rect
-                x={-3.5 * pxScale}
-                y={-3.5 * pxScale}
-                width={7 * pxScale}
-                height={7 * pxScale}
-                fill="none"
-                stroke="var(--oi-green)"
-                strokeWidth={0.85 * pxScale}
-              />
-            </g>
-          );
-        })}
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.stopPropagation();
+                    onSelectDetection?.(d);
+                  }
+                }}
+              >
+                <rect
+                  x={screenX - half}
+                  y={screenY - half}
+                  width={size}
+                  height={size}
+                  fill={isSelected ? "rgba(34, 197, 94, 0.15)" : "none"}
+                  stroke={detStroke}
+                  strokeWidth={isSelected ? 1.5 : 1}
+                  strokeDasharray={isAmbiguous ? "3,2" : undefined}
+                  vectorEffect="non-scaling-stroke"
+                />
+                {showUncertainty && (
+                  <circle
+                    cx={screenX}
+                    cy={screenY}
+                    r={Math.max(4, d.fwhm_arcsec ? d.fwhm_arcsec / 1.5 : 6)}
+                    fill="none"
+                    stroke={detStroke}
+                    strokeWidth={1}
+                    strokeDasharray="2,2"
+                    opacity={0.6}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+                {(showLabels || isSelected) && (
+                  <text
+                    x={screenX + half + 3}
+                    y={screenY - half + 2}
+                    fill={isSelected ? "#4ade80" : detStroke}
+                    fontSize={isSelected ? 11 : 10}
+                    fontFamily="monospace"
+                    fontWeight={isSelected ? "bold" : "normal"}
+                    className="pointer-events-none select-none drop-shadow"
+                  >
+                    {displayLabel}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+
+        {/* Suggestions Overlay — dashed purple reticles */}
+        {showSources &&
+          suggestions?.map((s) => {
+            const pt = skyToPixel(s.ra, s.dec, wcs);
+            return (
+              <g key={`sugg-${s.detection_id}`} className="pointer-events-none">
+                <circle
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={12}
+                  fill="none"
+                  stroke="#c084fc"
+                  strokeWidth={1.5}
+                  strokeDasharray="3 2"
+                />
+                {showLabels && (
+                  <text
+                    x={pt.x + 14}
+                    y={pt.y - 4}
+                    fill="#c084fc"
+                    fontSize="10"
+                    fontFamily="monospace"
+                  >
+                    {s.summary ?? `SUGG (${Math.round(s.score * 100)}%)`}
+                  </text>
+                )}
+              </g>
+            );
+          })}
 
         {/* 2. Directional Trajectory Vectors with Arrowheads and Glow (Feature C) */}
-        {trajPoints.length >= 2 &&
+        {showTrajectories &&
+          trajPoints.length >= 2 &&
           trajPoints.map((pt, idx) => {
             if (idx === 0) return null;
             const prev = trajPoints[idx - 1]!;
@@ -465,6 +598,71 @@ export function WcsSvgOverlay({
               strokeWidth={1.5 * pxScale}
             />
             <circle cx={pmVector.x2} cy={pmVector.y2} r={2 * pxScale} fill="var(--oi-sky)" />
+          </g>
+        )}
+
+        {/* Prediction dashed trajectory vector in amber with uncertainty ellipses */}
+        {predictionData?.trajectory_points && predictionData.trajectory_points.length > 1 && (
+          <g className="pointer-events-none">
+            {predictionData.trajectory_points.map((pt, idx) => {
+              if (idx === 0) return null;
+              const prev = predictionData.trajectory_points![idx - 1]!;
+              const p1 = skyToPixel(prev.ra_deg, prev.dec_deg, wcs);
+              const p2 = skyToPixel(pt.ra_deg, pt.dec_deg, wcs);
+              const isLast = idx === predictionData.trajectory_points!.length - 1;
+
+              return (
+                <g key={`pred_seg_${idx}`}>
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke="rgba(245, 158, 11, 0.25)"
+                    strokeWidth={2.5 * pxScale}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke="#f59e0b"
+                    strokeWidth={1.5 * pxScale}
+                    strokeDasharray="4,3"
+                    vectorEffect="non-scaling-stroke"
+                    markerEnd={isLast ? "url(#predArrow)" : undefined}
+                  />
+                  <circle
+                    cx={p2.x}
+                    cy={p2.y}
+                    r={2.5 * pxScale}
+                    fill="#f59e0b"
+                    stroke="#ffffff"
+                    strokeWidth={1 * pxScale}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  {showUncertainty && pt.uncertainty_semi_major_arcsec != null && (
+                    <ellipse
+                      cx={p2.x}
+                      cy={p2.y}
+                      rx={Math.max(3 * pxScale, pt.uncertainty_semi_major_arcsec / (pxScale * 6.2))}
+                      ry={Math.max(
+                        2 * pxScale,
+                        (pt.uncertainty_semi_minor_arcsec ?? pt.uncertainty_semi_major_arcsec) /
+                          (pxScale * 6.2),
+                      )}
+                      fill="rgba(245, 158, 11, 0.12)"
+                      stroke="#f59e0b"
+                      strokeWidth={1 * pxScale}
+                      strokeDasharray="2,2"
+                      opacity={0.8}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )}
+                </g>
+              );
+            })}
           </g>
         )}
 

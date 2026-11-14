@@ -219,6 +219,7 @@ def extract_sources(
     detect_thresh_sigma: float = 1.5,
     min_area: int = 3,
     min_snr: float = 4.5,
+    max_sources: int = 500,
 ) -> ExtractionResult:
     """Extract sources on native un-resampled frame with SEP + photutils PSF photometry (§B, §C.1).
 
@@ -313,6 +314,14 @@ def extract_sources(
 
     unsat_rows: list[tuple[Any, NDArray[np.float64] | None, dict[str, float]]] = []
     resid_all = work_sub
+    if unsat_seeds and len(unsat_seeds) > max_sources:
+        unsat_seeds.sort(
+            key=lambda s: float(
+                snr_work[int(np.clip(round(s[1]), 0, ny - 1)), int(np.clip(round(s[0]), 0, nx - 1))]
+            ),
+            reverse=True,
+        )
+        unsat_seeds = unsat_seeds[:max_sources]
     if unsat_seeds:
         phot = PSFPhotometry(
             CircularGaussianPRF(fwhm=fwhm_px),

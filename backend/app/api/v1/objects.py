@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+import numpy as np
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.deps import (
@@ -33,6 +34,9 @@ from app.schemas.objects import (
     AssociationOverrideRequest,
     AssociationOverrideResponse,
     DetectionRead,
+    EphemerisPredictionPointSchema,
+    EphemerisRequest,
+    EphemerisResponse,
     LightcurveResponse,
     MotionFitRead,
     ObjectAssociationsResponse,
@@ -43,6 +47,8 @@ from app.schemas.objects import (
     TrackedObjectSelectRequest,
     TrackedObjectSelectResponse,
     TrackRunRequest,
+    TrajectoryRecomputeRequest,
+    TrajectoryRecomputeResponse,
 )
 from app.services.jobs import JobStore, compute_params_hash
 from app.services.storage import StorageBackend
@@ -63,6 +69,7 @@ from app.workers.tasks_heavy import (
     run_tracks,
 )
 from sphx_core.calib import HARD_BAD_MASK, band_group_for_wavelength
+from sphx_core.orbits import predict_ephemeris
 
 _ALLOWED_MOTION_MODELS = frozenset(
     {"static", "linear", "astrometric5", "astrometric5_prior", "keplerian", "shift_stack"}
@@ -718,3 +725,126 @@ async def get_object_lightcurve(
     """Fetch multi-epoch photometry lightcurve and variability indices."""
     bundle = _require_object_bundle(store, object_id)
     return build_object_lightcurve(bundle)
+
+
+@router.post(
+    "/objects/{object_id}/recompute",
+    tags=["objects"],
+    response_model=TrajectoryRecomputeResponse,
+    responses=_ANALYSIS_RESPONSES,
+)
+async def recompute_object_trajectory(
+    object_id: UUID,
+    payload: TrajectoryRecomputeRequest,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    gaia: Annotated[GaiaProvider, Depends(get_gaia_provider)],
+    wise: Annotated[WiseProvider, Depends(get_wise_provider)],
+    mpc: Annotated[MpcProvider, Depends(get_mpc_provider)],
+    user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
+) -> TrajectoryRecomputeResponse:
+    """Recompute trajectory motion models with optional excluded detection IDs."""
+    bundle = _require_object_bundle(store, object_id)
+    for det_id in payload.excluded_detection_ids:
+        for obs in bundle.get("observations") or []:
+            if obs.get("detection_id") == det_id:
+                store.apply_association_override(
+                    object_id,
+                    str(obs.get("epoch") or obs.get("observation_id")),
+                    action="reject",
+                    reason="User excluded detection in trajectory recompute",
+                    user_id=user_id,
+                )
+
+    existing_models = payload.models or [
+        str(f["model"]) for f in (bundle.get("motion_fits") or [])
+    ] or ["linear", "astrometric5"]
+
+    refit_job_id, _ = _enqueue_tracks_job(
+        project_id=bundle["project_id"],
+        object_ids=[object_id],
+        models=existing_models,
+        run_classification=True,
+        user_id=user_id,
+        store=store,
+        storage=storage,
+        gaia=gaia,
+        wise=wise,
+        mpc=mpc,
+    )
+    return TrajectoryRecomputeResponse(
+        object_id=object_id, refit_job_id=refit_job_id, status="recomputed"
+    )
+
+
+@router.post(
+    "/objects/{object_id}/ephemeris",
+    tags=["objects"],
+    response_model=EphemerisResponse,
+    responses=_ANALYSIS_RESPONSES,
+)
+async def predict_object_ephemeris(
+    object_id: UUID,
+    payload: EphemerisRequest,
+    store: Annotated[JobStore, Depends(get_store)],
+) -> EphemerisResponse:
+    """Compute future celestial motion predictions and propagated covariance uncertainty ellipses."""
+    bundle = _require_object_bundle(store, object_id)
+    obj = bundle.get("object") or {}
+    motion_fits = bundle.get("motion_fits") or []
+
+    best_fit = None
+    if motion_fits:
+        best_fit = min(motion_fits, key=lambda f: float(f.get("bic") or 0.0))
+
+    ref_ra = float(obj.get("ra_deg") or (best_fit.get("ra_ref_deg") if best_fit else 0.0) or 0.0)
+    ref_dec = float(obj.get("dec_deg") or (best_fit.get("dec_ref_deg") if best_fit else 0.0) or 0.0)
+    ref_mjd = float(payload.start_mjd or (best_fit.get("ref_epoch_mjd_tdb") if best_fit else None) or 60800.0)
+
+    pm_ra = float(best_fit.get("pmra_arcsec_yr") or 0.0) if best_fit else 0.0
+    pm_dec = float(best_fit.get("pmdec_arcsec_yr") or 0.0) if best_fit else 0.0
+    plx = float(best_fit.get("parallax_mas") or 0.0) if best_fit else 0.0
+
+    cov_matrix = None
+    if best_fit and best_fit.get("cov_params"):
+        with contextlib.suppress(Exception):
+            cov_matrix = np.asarray(best_fit["cov_params"], dtype=np.float64)
+
+    target_dict = {
+        "ra_deg": ref_ra,
+        "dec_deg": ref_dec,
+        "ref_epoch_mjd": ref_mjd,
+        "pmra_arcsec_yr": pm_ra,
+        "pmdec_arcsec_yr": pm_dec,
+        "parallax_mas": plx,
+    }
+
+    pts = predict_ephemeris(
+        target=target_dict,
+        days_forward=payload.extrapolation_days,
+        n_steps=payload.steps,
+        cov_matrix=cov_matrix,
+    )
+
+    trajectory = [
+        EphemerisPredictionPointSchema(
+            time_mjd=p.time_mjd,
+            date_iso=p.date_iso,
+            ra_deg=p.ra_deg,
+            dec_deg=p.dec_deg,
+            uncertainty_semi_major_arcsec=p.uncertainty_semi_major_arcsec,
+            uncertainty_semi_minor_arcsec=p.uncertainty_semi_minor_arcsec,
+            pa_deg=p.pa_deg,
+            is_extrapolated=p.is_extrapolated,
+            method=p.method,
+        )
+        for p in pts
+    ]
+
+    return EphemerisResponse(
+        object_id=object_id,
+        trajectory=trajectory,
+        preferred_model=str(best_fit.get("model")) if best_fit else None,
+        baseline_days=payload.extrapolation_days,
+    )
+

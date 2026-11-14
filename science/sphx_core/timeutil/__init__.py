@@ -9,6 +9,37 @@ from typing import Any
 import astropy.units as u
 from astropy.io import fits
 from astropy.time import Time
+from astropy.time.formats import TimeUnique
+from datetime import datetime
+import numpy as np
+
+class TimeHorizons(TimeUnique):
+    """Custom Time format for JPL Horizons date strings (e.g. '2025-Jul-01 00:00')."""
+    name = "horizons"
+
+    def _check_val_type(self, val1: Any, val2: Any) -> tuple[Any, Any]:
+        if val2 is not None:
+            raise ValueError("Horizons format only accepts 1 argument")
+        arr = np.asarray(val1)
+        if arr.size > 0:
+            s = str(arr.flat[0]).strip()
+            if not any(m in s for m in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")):
+                raise ValueError(f"String '{s}' does not match Horizons format")
+        return arr, None
+
+    def set_jds(self, val1: Any, val2: Any) -> None:
+        arr = np.asarray(val1)
+        dts = []
+        for v in arr.flat:
+            s = str(v).strip()
+            try:
+                dt = datetime.strptime(s, "%Y-%b-%d %H:%M")
+            except ValueError:
+                dt = datetime.strptime(s, "%Y-%b-%d %H:%M:%S")
+            dts.append(dt)
+        t = Time(dts, scale=self.scale)
+        self.jd1 = t.jd1.reshape(arr.shape)
+        self.jd2 = t.jd2.reshape(arr.shape)
 
 _VALID_SCALES = frozenset({"utc", "tai", "tt", "tdb", "tcg", "tcb", "ut1"})
 
