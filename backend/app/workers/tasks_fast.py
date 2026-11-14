@@ -248,9 +248,8 @@ def execute_build_cutouts(
             try:
                 stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
                 fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
-                frame_uuid = uuid5(
-                    _FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}"
-                )
+                frame_seed = f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.array_id}:{ref.band_id}:{ref.mjd_tdb:.6f}:{idx}"
+                frame_uuid = uuid5(_FRAME_UUID_NS, frame_seed)
                 rendered = render_cutout_products(
                     fits_bytes,
                     storage,

@@ -177,7 +177,7 @@ export function FrameStrip({ frames, compact = false }: FrameStripProps) {
 
           return (
             <button
-              key={f.frame_id}
+              key={`${f.frame_id}-${i}`}
               type="button"
               className="viewer-epoch-btn"
               aria-pressed={i === safeIdx}

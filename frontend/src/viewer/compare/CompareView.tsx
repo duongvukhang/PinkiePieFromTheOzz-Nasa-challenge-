@@ -197,8 +197,8 @@ export function CompareView({
                 value={curFrame?.frame_id ?? ""}
                 onChange={(e) => onSel(e.target.value)}
               >
-                {frames.map((f) => (
-                  <option key={f.frame_id} value={f.frame_id}>
+                {frames.map((f, i) => (
+                  <option key={`${f.frame_id}-${i}`} value={f.frame_id}>
                     {f.epoch} ({f.utc_mid.slice(0, 10)}) {f.band_label ?? ""}
                   </option>
                 ))}

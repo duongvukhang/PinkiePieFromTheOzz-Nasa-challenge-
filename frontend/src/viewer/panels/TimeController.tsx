@@ -135,7 +135,7 @@ export function TimeController({
       <div className="tc-scrubber-track">
         {frames.map((f, i) => (
           <button
-            key={f.frame_id}
+            key={`${f.frame_id}-${i}`}
             type="button"
             className={`tc-scrubber-segment ${i === safeIdx ? "is-active" : ""}`}
             onClick={() => onSelectFrame(i)}
