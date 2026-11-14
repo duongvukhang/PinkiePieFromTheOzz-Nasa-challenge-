@@ -10,6 +10,11 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image
 import matplotlib.cm as cm
+from matplotlib.colors import LinearSegmentedColormap
+
+_SEPIA_CMAP = LinearSegmentedColormap.from_list(
+    "sepia", ["#000000", "#704214", "#d4af37", "#fefee9"]
+)
 
 # Supported colormaps
 SUPPORTED_COLORMAPS: dict[str, Any] = {
@@ -23,6 +28,7 @@ SUPPORTED_COLORMAPS: dict[str, Any] = {
     "bone": cm.bone,
     "gray": cm.gray,
     "gist_heat": cm.gist_heat,
+    "sepia": _SEPIA_CMAP,
 }
 
 

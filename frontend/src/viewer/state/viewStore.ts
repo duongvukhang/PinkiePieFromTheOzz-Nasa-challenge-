@@ -17,6 +17,7 @@ export interface ViewState {
   release: string;
   bands: string;
   source?: string;
+  fitsId?: string;
   mode: ViewerMode;
   op: ImageOp;
   a?: string;
@@ -33,6 +34,9 @@ export interface ViewState {
   swipe: number;
   inspectorTab: InspectorTab;
   selectBoxMode: boolean;
+  isLayersOpen: boolean;
+  isInspectorOpen: boolean;
+  isTimelineOpen: boolean;
 }
 
 const MODES = new Set<ViewerMode>(["blink", "compare", "planetx"]);
@@ -108,6 +112,7 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     release: q.get("release") ?? "latest",
     bands: q.get("bands") ?? "all",
     source: q.get("source") ?? undefined,
+    fitsId: q.get("fitsId") ?? undefined,
     mode: mode && MODES.has(mode) ? mode : "blink",
     op: op && OPS.has(op) ? op : "none",
     a: q.get("a") ?? undefined,
@@ -125,28 +130,29 @@ export function parseViewParams(search: string, authenticated = false): Partial<
   };
 }
 
-export function toViewQuery(s: ViewState): string {
+export function toViewQuery(s: Partial<ViewState>): string {
   const q = new URLSearchParams();
   if (s.ra !== undefined && s.dec !== undefined) {
     q.set("ra", s.ra.toFixed(5));
     q.set("dec", s.dec.toFixed(5));
   }
   if (s.target) q.set("target", s.target);
-  if (s.fov !== 10) q.set("fov", String(s.fov));
+  if (s.fov !== undefined && s.fov !== 10) q.set("fov", String(s.fov));
   if (s.from) q.set("from", s.from);
   if (s.to) q.set("to", s.to);
   if (s.release && s.release !== "latest") q.set("release", s.release);
   if (s.bands && s.bands !== "all") q.set("bands", s.bands);
   if (s.source && s.source !== "spherex_irsa") q.set("source", s.source);
-  if (s.mode !== "blink") q.set("mode", s.mode);
-  if (s.op !== "none") q.set("op", s.op);
+  if (s.fitsId) q.set("fitsId", s.fitsId);
+  if (s.mode && s.mode !== "blink") q.set("mode", s.mode);
+  if (s.op && s.op !== "none") q.set("op", s.op);
   if (s.a) q.set("a", s.a);
   if (s.b) q.set("b", s.b);
-  if (s.frame > 0) q.set("frame", String(s.frame));
-  if (s.fps !== 2) q.set("fps", String(s.fps));
-  if (s.stretch !== "asinh") q.set("stretch", s.stretch);
-  if (s.overlay.length) q.set("overlay", s.overlay.join(","));
-  if (s.track.length) q.set("track", s.track.join(";"));
+  if (s.frame !== undefined && s.frame > 0) q.set("frame", String(s.frame));
+  if (s.fps !== undefined && s.fps !== 2) q.set("fps", String(s.fps));
+  if (s.stretch && s.stretch !== "asinh") q.set("stretch", s.stretch);
+  if (s.overlay && s.overlay.length) q.set("overlay", s.overlay.join(","));
+  if (s.track && s.track.length) q.set("track", s.track.join(";"));
   if (s.obj) q.set("obj", s.obj);
   if (s.inspectorTab && s.inspectorTab !== "spectrum") q.set("inspectorTab", s.inspectorTab);
   const str = q.toString();
@@ -176,6 +182,9 @@ const DEFAULT_STATE: ViewState = {
   swipe: 0.5,
   inspectorTab: "spectrum",
   selectBoxMode: false,
+  isLayersOpen: false,
+  isInspectorOpen: false,
+  isTimelineOpen: false,
 };
 
 interface ViewStore extends ViewState {
@@ -183,6 +192,10 @@ interface ViewStore extends ViewState {
   setView: (patch: Partial<ViewState>, syncUrl?: boolean) => void;
   toggleOverlay: (cat: CatalogName) => void;
   toggleSelectBox: () => void;
+  toggleLayers: () => void;
+  toggleInspector: () => void;
+  toggleTimeline: () => void;
+  openInspector: (tab?: InspectorTab) => void;
   addTrack: (label: string, ra: number, dec: number) => void;
   removeTrack: (label: string) => void;
 }
@@ -208,7 +221,19 @@ export const useViewStore = create<ViewStore>((set) => ({
     }),
   setView: (patch, syncUrl = true) =>
     set((prev) => {
-      const next: ViewState = { ...prev, ...patch };
+      const updated = { ...patch };
+      if (patch.inspectorTab === "tracks") {
+        updated.inspectorTab = "object";
+        updated.isInspectorOpen = true;
+      } else if (patch.inspectorTab === "layers") {
+        updated.isLayersOpen = true;
+      } else if (patch.inspectorTab) {
+        updated.isInspectorOpen = true;
+      }
+      if (patch.obj !== undefined && patch.obj !== "") {
+        updated.isInspectorOpen = true;
+      }
+      const next: ViewState = { ...prev, ...updated };
       if (syncUrl) syncReplaceUrl(next);
       return next;
     }),
@@ -222,6 +247,19 @@ export const useViewStore = create<ViewStore>((set) => ({
       return next;
     }),
   toggleSelectBox: () => set((prev) => ({ selectBoxMode: !prev.selectBoxMode })),
+  toggleLayers: () => set((prev) => ({ isLayersOpen: !prev.isLayersOpen })),
+  toggleInspector: () => set((prev) => ({ isInspectorOpen: !prev.isInspectorOpen })),
+  toggleTimeline: () => set((prev) => ({ isTimelineOpen: !prev.isTimelineOpen })),
+  openInspector: (tab) =>
+    set((prev) => {
+      const next = {
+        ...prev,
+        isInspectorOpen: true,
+        inspectorTab: tab === "tracks" ? "object" : (tab ?? prev.inspectorTab),
+      };
+      syncReplaceUrl(next);
+      return next;
+    }),
   addTrack: (label, ra, dec) =>
     set((prev) => {
       const entry = `${label}:${ra.toFixed(5)},${dec.toFixed(5)}`;

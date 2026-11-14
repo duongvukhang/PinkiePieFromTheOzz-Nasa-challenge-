@@ -1,5 +1,5 @@
 import "../design/viewer.css";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuthStore } from "../app/authStore";
 import { CompareView } from "../viewer/compare/CompareView";
@@ -15,21 +15,30 @@ import { useViewStore } from "../viewer/state/viewStore";
 export function ViewerPage() {
   const { search } = useLocation();
   const user = useAuthStore((s) => s.user);
-  const { mode, fov, release, op, swipe, obj, setView } = useViewStore();
+  const {
+    mode,
+    fov,
+    release,
+    op,
+    swipe,
+    obj,
+    isLayersOpen,
+    isInspectorOpen,
+    isTimelineOpen,
+    toggleLayers,
+    toggleInspector,
+    toggleTimeline,
+    setView,
+  } = useViewStore();
 
   const v = useViewerData(search);
-
-  // Floating observatory panels (closed by default for edge-to-edge astronomical field)
-  const [isLayersOpen, setIsLayersOpen] = useState(false);
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
-  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
 
   // Auto-open inspector when an object is selected/inspected
   useEffect(() => {
     if (obj || v.objectDetail) {
-      setIsInspectorOpen(true);
+      setView({ isInspectorOpen: true });
     }
-  }, [obj, v.objectDetail]);
+  }, [obj, v.objectDetail, setView]);
 
   // Global hotkeys: L (Layers), T (Timeline), I (Inspector), Esc (Close drawers)
   useEffect(() => {
@@ -47,21 +56,20 @@ export function ViewerPage() {
       const k = e.key.toLowerCase();
       if (k === "l") {
         e.preventDefault();
-        setIsLayersOpen((p) => !p);
+        toggleLayers();
       } else if (k === "t") {
         e.preventDefault();
-        setIsTimelineOpen((p) => !p);
+        toggleTimeline();
       } else if (k === "i") {
         e.preventDefault();
-        setIsInspectorOpen((p) => !p);
+        toggleInspector();
       } else if (k === "escape") {
-        setIsLayersOpen(false);
-        setIsInspectorOpen(false);
+        setView({ isLayersOpen: false, isInspectorOpen: false });
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [toggleLayers, toggleTimeline, toggleInspector, setView]);
 
   return (
     <div className="viewer-shell is-observatory" data-theme="dark">
@@ -75,11 +83,11 @@ export function ViewerPage() {
         authenticated={Boolean(user)}
         errorMsg={v.errorMsg ?? v.resolveError}
         isLayersOpen={isLayersOpen}
-        onToggleLayers={() => setIsLayersOpen((prev) => !prev)}
+        onToggleLayers={toggleLayers}
         isTimelineOpen={isTimelineOpen}
-        onToggleTimeline={() => setIsTimelineOpen((prev) => !prev)}
+        onToggleTimeline={toggleTimeline}
         isInspectorOpen={isInspectorOpen}
-        onToggleInspector={() => setIsInspectorOpen((prev) => !prev)}
+        onToggleInspector={toggleInspector}
       />
 
       {mode === "planetx" ? (
@@ -126,6 +134,7 @@ export function ViewerPage() {
             suggestions={v.suggestions}
             selectBoxMode={v.selectBoxMode}
             objectDetail={v.objectDetail}
+            predictionData={v.ephemerisResult ? { trajectory_points: v.ephemerisResult.trajectory } : undefined}
             onBoxSelect={v.onBoxSelect}
             onVisibilityPause={v.setPausedByVis}
             loading={v.loadingCutouts}
@@ -149,7 +158,7 @@ export function ViewerPage() {
                 <button
                   type="button"
                   className="viewer-drawer-close"
-                  onClick={() => setIsLayersOpen(false)}
+                  onClick={() => setView({ isLayersOpen: false })}
                   aria-label="Close layers drawer"
                 >
                   ✕
@@ -173,7 +182,7 @@ export function ViewerPage() {
                 <button
                   type="button"
                   className="viewer-drawer-close"
-                  onClick={() => setIsInspectorOpen(false)}
+                  onClick={() => setView({ isInspectorOpen: false })}
                   aria-label="Close inspector drawer"
                 >
                   ✕
@@ -192,6 +201,7 @@ export function ViewerPage() {
                 onPickSuggestion={v.onTrackSuggestion}
                 onOverrideAssociation={v.overrideAssociation}
                 onRemoveTrack={v.removeTrack}
+                onEphemerisResult={v.setEphemerisResult}
               />
             </aside>
           )}

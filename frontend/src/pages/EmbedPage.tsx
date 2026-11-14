@@ -26,6 +26,7 @@ export function EmbedPage() {
         ra={v.activeRa}
         dec={v.activeDec}
         fov={fov}
+        frames={v.frames}
         frameA={v.frameA}
         bufA={v.bufA}
         bufB={v.bufB}

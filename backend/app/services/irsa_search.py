@@ -80,10 +80,19 @@ def parse_date_to_mjd(date_str: str) -> float:
 
 
 def validate_url_security(url: str) -> str:
-    """Ensure download target URL uses HTTPS and points to an authorized astronomical archive domain."""
+    """Ensure download target URL uses HTTPS (or local sample file://) and points to an authorized domain."""
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
+    if scheme == "file":
+        samples_dir = Path(__file__).resolve().parent.parent.parent / "data" / "samples"
+        try:
+            local_path = Path(parsed.path).resolve()
+            if not local_path.is_relative_to(samples_dir.resolve()):
+                raise ValueError("Security error: Local file access outside sample directory is prohibited.")
+        except Exception as exc:
+            raise ValueError(f"Security error: Invalid local file path: {exc}") from exc
+        return url
     if scheme != "https" and not (scheme == "http" and host in ("localhost", "127.0.0.1")):
         raise ValueError(f"Security error: Invalid scheme '{parsed.scheme}'. HTTPS required.")
     if not host or not any(host == d or host.endswith("." + d) for d in ALLOWED_DOMAINS):
@@ -286,7 +295,7 @@ class IRSASearchService:
         records: list[ArchiveRecord] = []
         failure_reason: str | None = None
         try:
-            with httpx.Client(timeout=45.0) as client:
+            with httpx.Client(timeout=10.0) as client:
                 res = client.post(
                     f"{self.tap_url}/sync",
                     data={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query, "FORMAT": "json"},
@@ -560,6 +569,20 @@ class IRSASearchService:
                 "obs_id": req.obs_id,
                 "storage_key": storage_key,
                 "status": "already_loaded",
+                "source": req.source,
+            }
+
+        # Handle local sample file:// URL directly
+        if req.access_url and req.access_url.startswith("file://"):
+            local_path = Path(urlparse(req.access_url).path).resolve()
+            if not local_path.is_file():
+                raise ValueError(f"Sample file not found: {local_path}")
+            content = local_path.read_bytes()
+            storage.put_bytes(storage_key, content, content_type="application/fits")
+            return {
+                "obs_id": req.obs_id,
+                "storage_key": storage_key,
+                "status": "loaded_sample",
                 "source": req.source,
             }
 

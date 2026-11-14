@@ -5,6 +5,7 @@ import {
   ApiError,
   fetchScienceFrame,
   type CutoutFrame,
+  type EphemerisPredictionResult,
   type SuggestionItem,
 } from "../../api/client";
 import { useAuthStore } from "../../app/authStore";
@@ -50,8 +51,11 @@ export function useViewerData(search: string, skipSecondary = false) {
     syncFromSearch,
     setView,
   } = view;
+  const fitsId = view.fitsId;
 
   const [pausedByVis, setPausedByVis] = useState(false);
+  const [trackedUuid, setTrackedUuid] = useState<string | null>(null);
+  const [ephemerisResult, setEphemerisResult] = useState<EphemerisPredictionResult | null>(null);
 
   useEffect(() => {
     syncFromSearch(search, Boolean(user));
@@ -145,8 +149,27 @@ export function useViewerData(search: string, skipSecondary = false) {
 
   const frames: CutoutFrame[] = useMemo(() => {
     const raw = cutoutQ.data?.frames ?? [];
-    return [...raw].sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
-  }, [cutoutQ.data?.frames]);
+    if (raw.length > 0) {
+      return [...raw].sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
+    }
+    if (fitsId) {
+      return [
+        {
+          frame_id: fitsId,
+          epoch: "Uploaded FITS",
+          mjd_tdb_mid: 60000.0,
+          utc_mid: "2025-01-01T00:00:00Z",
+          display_url: `/api/v1/uploads/${fitsId}/display.webp`,
+          science_url: `/api/v1/uploads/${fitsId}/science.bin`,
+          fits_url: `/api/v1/uploads/${fitsId}/report`,
+          wcs_header: "",
+          stretch: { vmin: 0, vmax: 1000 },
+          flagged_fraction: 0,
+        },
+      ];
+    }
+    return [];
+  }, [cutoutQ.data?.frames, fitsId]);
   const safeIdx = frames.length ? ((frame % frames.length) + frames.length) % frames.length : 0;
   const frameA = frames.find((f) => f.frame_id === a) ?? frames[safeIdx];
   const frameB =
@@ -175,15 +198,17 @@ export function useViewerData(search: string, skipSecondary = false) {
   const catwiseQ = useCatOverlay("catwise");
 
   const analysisQ = useQuery({
-    queryKey: ["analysis", cutoutQ.data?.cutout_id, activeRa, activeDec, fov, release],
+    queryKey: ["analysis", cutoutQ.data?.cutout_id, fitsId, activeRa, activeDec, fov, release],
     queryFn: async () => {
-      const acc = await api.createAnalysis({
-        cutout_id: cutoutQ.data?.cutout_id,
-        ra: cutoutQ.data ? undefined : activeRa,
-        dec: cutoutQ.data ? undefined : activeDec,
-        fov_arcmin: fov,
-        release,
-      });
+      const acc = fitsId
+        ? await api.createAnalysis({ fits_file_ids: [fitsId] })
+        : await api.createAnalysis({
+            cutout_id: cutoutQ.data?.cutout_id,
+            ra: cutoutQ.data ? undefined : activeRa,
+            dec: cutoutQ.data ? undefined : activeDec,
+            fov_arcmin: fov,
+            release,
+          });
       const [sources, suggestions] = await Promise.all([
         api.getAnalysisSources(acc.analysis_id),
         api.getAnalysisSuggestions(acc.analysis_id),
@@ -194,14 +219,35 @@ export function useViewerData(search: string, skipSecondary = false) {
         suggestions: suggestions.suggestions,
       };
     },
-    enabled: !skipSecondary && Boolean(cutoutQ.data?.cutout_id),
+    enabled: !skipSecondary && (Boolean(cutoutQ.data?.cutout_id) || Boolean(fitsId)),
   });
 
-  const activeObjId =
-    obj ??
-    (analysisQ.data?.suggestions[0]
-      ? String(analysisQ.data.suggestions[0].detection_id)
-      : undefined);
+  const activeObjId = (obj && isUuid(obj)) ? obj : (trackedUuid ?? undefined);
+
+  useEffect(() => {
+    if (
+      !obj &&
+      !trackedUuid &&
+      analysisQ.data?.analysisId &&
+      analysisQ.data.suggestions.length > 0
+    ) {
+      const top = analysisQ.data.suggestions[0];
+      if (top) {
+        api
+          .selectAnalysisObject(analysisQ.data.analysisId, {
+            mode: "suggestion",
+            detection_ids: [top.detection_id],
+          })
+          .then((res) => {
+            if (res.objects?.[0]) {
+              setTrackedUuid(res.objects[0].id);
+              addTrack(res.objects[0].label, top.ra, top.dec);
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [analysisQ.data?.analysisId, analysisQ.data?.suggestions, obj, trackedUuid, addTrack]);
 
   const hasValidObjUuid = isUuid(activeObjId);
   const canQueryObj = !skipSecondary && Boolean(activeObjId && hasValidObjUuid);
@@ -266,13 +312,61 @@ export function useViewerData(search: string, skipSecondary = false) {
     objectQ.refetch();
   };
 
-  const onTrackSuggestion = (s: SuggestionItem) => {
+  const onTrackSuggestion = async (s: SuggestionItem) => {
+    if (analysisQ.data?.analysisId) {
+      try {
+        const res = await api.selectAnalysisObject(analysisQ.data.analysisId, {
+          mode: "suggestion",
+          detection_ids: [s.detection_id],
+        });
+        const created = res.objects?.[0];
+        if (created) {
+          setTrackedUuid(created.id);
+          addTrack(created.label, s.ra, s.dec);
+          setView({ obj: created.id, inspectorTab: "object" });
+          return;
+        }
+      } catch {
+        // fallback to client-side tracking
+      }
+    }
     const lbl = nextTrackLabel(track);
     addTrack(lbl, s.ra, s.dec);
     setView({ obj: String(s.detection_id), inspectorTab: "object" });
   };
 
-  const onBoxSelect = (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
+  const onBoxSelect = async (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
+    if (analysisQ.data?.analysisId) {
+      try {
+        const res = await api.selectAnalysisObject(analysisQ.data.analysisId, {
+          mode: "box",
+          box: {
+            ra_min: Math.min(box.raMin, box.raMax),
+            dec_min: Math.min(box.decMin, box.decMax),
+            ra_max: Math.max(box.raMin, box.raMax),
+            dec_max: Math.max(box.decMin, box.decMax),
+          },
+        });
+        if (res.objects && res.objects.length > 0) {
+          res.objects.forEach((o) => {
+            addTrack(o.label, o.ra, o.dec);
+          });
+          const first = res.objects[0];
+          if (first) {
+            setTrackedUuid(first.id);
+            setView({
+              obj: first.id,
+              inspectorTab: "object",
+              selectBoxMode: false,
+            });
+            return;
+          }
+        }
+      } catch {
+        // fallback to client-side tracking
+      }
+    }
+
     const inRa = (ra: number) =>
       box.raMin <= box.raMax
         ? ra >= box.raMin && ra <= box.raMax
@@ -359,5 +453,7 @@ export function useViewerData(search: string, skipSecondary = false) {
       return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
     })(),
     setPausedByVis,
+    ephemerisResult,
+    setEphemerisResult,
   };
 }

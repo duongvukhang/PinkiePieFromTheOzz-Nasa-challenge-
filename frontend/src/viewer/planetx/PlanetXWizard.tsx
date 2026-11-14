@@ -41,7 +41,7 @@ export function PlanetXWizard({ ra, dec, fov, releases, onOpenViewer }: PlanetXW
       const res = await api.searchArchive({
         ra,
         dec,
-        radius: (fov / 2) * 60,
+        radius: fov / 2,
         radius_unit: "arcmin",
         source: "spherex_irsa",
       });

@@ -243,11 +243,12 @@ export function ViewerToolbar({
       <UploadFitsModal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
-        onLoadedField={({ ra: newRa, dec: newDec, fov: newFov }) => {
+        onLoadedField={({ ra: newRa, dec: newDec, fov: newFov, fitsId: newFitsId }) => {
           setView({
             ra: newRa,
             dec: newDec,
             fov: newFov ? Math.min(maxFov, Math.max(1, Math.round(newFov))) : fov,
+            fitsId: newFitsId ?? undefined,
             target: "",
             frame: 0,
           });
@@ -255,6 +256,7 @@ export function ViewerToolbar({
           qs.set("ra", newRa.toFixed(5));
           qs.set("dec", newDec.toFixed(5));
           if (newFov) qs.set("fov", String(Math.min(maxFov, Math.max(1, Math.round(newFov)))));
+          if (newFitsId) qs.set("fitsId", newFitsId);
           navigate(`/v?${qs.toString()}`);
         }}
       />

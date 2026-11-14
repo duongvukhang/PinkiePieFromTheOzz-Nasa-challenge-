@@ -115,6 +115,16 @@ def _parse_bool_flag(val: Any) -> bool | None:
     return None
 
 
+class _TimeoutSession(requests.Session):
+    def __init__(self, timeout: float = 8.0) -> None:
+        super().__init__()
+        self._timeout = timeout
+
+    def request(self, method: str | bytes, url: str | bytes, *args: Any, **kwargs: Any) -> requests.Response:
+        kwargs.setdefault("timeout", self._timeout)
+        return super().request(method, url, *args, **kwargs)
+
+
 class GaiaProvider(Provider):
     """Gaia DR3 TAP catalog provider with mirror fallback and proper-motion propagation."""
 
@@ -133,11 +143,11 @@ class GaiaProvider(Provider):
         sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self._mirrors = _normalize_mirrors(mirrors)
-        self._session = session or requests.Session()
+        self._session = session or _TimeoutSession(timeout=8.0)
         self._tap_services: dict[str, Any] = dict(tap_services or {})
         self._rate_limiter = rate_limiter or RateLimiter(max_concurrent=2, rate_per_sec=2.0)
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
-        self._max_retries = max_retries
+        self._max_retries = 1 if (max_retries == 3 and len(self._mirrors) > 1) else max_retries
         self._sleeper = sleeper
 
     def _service(self, mirror: GaiaMirror) -> Any:

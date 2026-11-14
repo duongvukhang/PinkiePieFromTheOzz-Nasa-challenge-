@@ -10,6 +10,7 @@ import type {
 import { AladinBase } from "../aladin/AladinBase";
 import type { WcsParams } from "../aladin/wcs";
 import { skyToPixel } from "../aladin/wcs";
+import { WebGL2SkyCanvas } from "../gl/WebGL2SkyCanvas";
 import { WcsSvgOverlay } from "../overlays/WcsSvgOverlay";
 import { useViewStore } from "../state/viewStore";
 import { nextTrackLabel } from "../state/useViewerData";
@@ -39,6 +40,14 @@ interface ViewerStageProps {
   suggestions: SuggestionItem[];
   selectBoxMode: boolean;
   objectDetail?: TrackedObjectDetailResponse;
+  predictionData?: {
+    trajectory_points?: Array<{
+      ra_deg: number;
+      dec_deg: number;
+      uncertainty_semi_major_arcsec?: number;
+      uncertainty_semi_minor_arcsec?: number;
+    }>;
+  };
   onBoxSelect?: (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => void;
   onVisibilityPause?: (paused: boolean) => void;
   onSelectEpoch?: (epoch: string) => void;
@@ -53,6 +62,8 @@ export function ViewerStage({
   dec,
   fov,
   frameA,
+  bufA,
+  bufB,
   frames,
   gaiaSources,
   catwiseSources,
@@ -60,12 +71,33 @@ export function ViewerStage({
   suggestions,
   selectBoxMode,
   objectDetail,
+  predictionData,
   onBoxSelect,
+  onVisibilityPause,
   onSelectEpoch,
   loading,
   errorMsg,
 }: ViewerStageProps) {
-  const { hips, track, obj, fps, playing, addTrack, setView, stretch, colormap } = useViewStore();
+  const {
+    hips,
+    track,
+    obj,
+    fps,
+    playing,
+    addTrack,
+    setView,
+    stretch,
+    colormap,
+    op,
+    swipe,
+    isLayersOpen,
+    isInspectorOpen,
+    isTimelineOpen,
+    toggleLayers,
+    toggleTimeline,
+    openInspector,
+    inspectorTab,
+  } = useViewStore();
 
   const displayUrl = useMemo(() => {
     if (!frameA?.display_url) return "";
@@ -81,7 +113,6 @@ export function ViewerStage({
   const [showGrid, setShowGrid] = useState(false);
   const [showTrajectories, setShowTrajectories] = useState(true);
   const [showUncertainty, setShowUncertainty] = useState(false);
-  const [isTimelineVisible, setIsTimelineVisible] = useState(true);
 
   const [cursorInfo, setCursorInfo] = useState<{
     ra: number;
@@ -318,12 +349,26 @@ export function ViewerStage({
         >
           {frameA && (
             <div className="relative inline-block select-none shadow-2xl">
-              <img
-                src={displayUrl}
-                alt={frameA.epoch}
-                draggable={false}
-                className="block max-w-[85vw] max-h-[85vh] object-contain select-none pointer-events-none"
-              />
+              {op !== "none" && bufA ? (
+                <WebGL2SkyCanvas
+                  frameA={bufA}
+                  frameB={bufB}
+                  fallbackUrl={displayUrl}
+                  stretch={stretch}
+                  op={op}
+                  colormap={colormap}
+                  swipe={swipe}
+                  label={frameA.epoch}
+                  onVisibilityPause={onVisibilityPause}
+                />
+              ) : (
+                <img
+                  src={displayUrl}
+                  alt={frameA.epoch}
+                  draggable={false}
+                  className="block max-w-[85vw] max-h-[85vh] object-contain select-none pointer-events-none"
+                />
+              )}
               <WcsSvgOverlay
                 wcs={wcs}
                 gaiaSources={gaiaSources}
@@ -340,6 +385,7 @@ export function ViewerStage({
                 showLabels={showLabels}
                 showTrajectories={showTrajectories}
                 showUncertainty={showUncertainty}
+                predictionData={predictionData}
                 onSelectBox={onBoxSelect}
                 onSelectEpoch={(ep) => {
                   if (onSelectEpoch) {
@@ -375,10 +421,10 @@ export function ViewerStage({
             source={selectedObjInfo}
             wcs={wcs}
             onClose={() => setView({ obj: undefined })}
-            onInspect={() => setView({ inspectorTab: "object" })}
+            onInspect={() => openInspector("object")}
             onCenter={() => centerTarget(selectedObjInfo.ra, selectedObjInfo.dec)}
-            onOpenSpectrum={() => setView({ inspectorTab: "spectrum" })}
-            onPredictMotion={() => setView({ inspectorTab: "object" })}
+            onOpenSpectrum={() => openInspector("spectrum")}
+            onPredictMotion={() => openInspector("object")}
             onTrack={() => {
               const nextLbl = nextTrackLabel(track);
               addTrack(nextLbl, selectedObjInfo.ra, selectedObjInfo.dec);
@@ -388,7 +434,7 @@ export function ViewerStage({
         )}
 
         {/* Bottom-Right Floating Observation Epoch Controller */}
-        {isTimelineVisible && frames && frames.length > 0 && frameA && (
+        {isTimelineOpen && frames && frames.length > 0 && frameA && (
           <TimeController
             frames={frames}
             currentFrame={frameA}
@@ -410,8 +456,8 @@ export function ViewerStage({
             snr={selectedObjInfo.snr}
             isTrack={selectedObjInfo.isTrack}
             onCenter={() => centerTarget(selectedObjInfo.ra, selectedObjInfo.dec)}
-            onInspect={() => setView({ inspectorTab: "object" })}
-            onOpenSpectrum={() => setView({ inspectorTab: "spectrum" })}
+            onInspect={() => openInspector("object")}
+            onOpenSpectrum={() => openInspector("spectrum")}
             onTrack={() => {
               const nextLbl = nextTrackLabel(track);
               addTrack(nextLbl, selectedObjInfo.ra, selectedObjInfo.dec);
@@ -434,13 +480,13 @@ export function ViewerStage({
           showUncertainty={showUncertainty}
           onToggleUncertainty={() => setShowUncertainty((s) => !s)}
           tracksCount={track.length}
-          onToggleTracks={() => setView({ inspectorTab: "tracks" })}
-          isSpectrumOpen={false}
-          onToggleSpectrum={() => setView({ inspectorTab: "spectrum" })}
-          isTimelineOpen={isTimelineVisible}
-          onToggleTimeline={() => setIsTimelineVisible((v) => !v)}
-          isSettingsOpen={false}
-          onToggleSettings={() => setView({ inspectorTab: "layers" })}
+          onToggleTracks={() => openInspector("object")}
+          isSpectrumOpen={isInspectorOpen && inspectorTab === "spectrum"}
+          onToggleSpectrum={() => openInspector("spectrum")}
+          isTimelineOpen={isTimelineOpen}
+          onToggleTimeline={toggleTimeline}
+          isSettingsOpen={isLayersOpen}
+          onToggleSettings={toggleLayers}
         />
 
         {/* Bottom-Left Focal Plane Coordinate HUD */}

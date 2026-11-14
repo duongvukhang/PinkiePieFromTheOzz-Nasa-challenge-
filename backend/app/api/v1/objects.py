@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import math
 from collections.abc import Mapping, Sequence
@@ -220,7 +221,8 @@ async def create_analysis(
     else:
         if is_eager_mode():
             with contextlib.suppress(Exception):
-                execute_run_analysis(
+                await asyncio.to_thread(
+                    execute_run_analysis,
                     job.id,
                     job_params,
                     store=store,
@@ -337,14 +339,14 @@ def _cluster_box_detections(
     return kept
 
 
-def _enqueue_tracks_job(
+async def _enqueue_tracks_job(
     *,
     project_id: UUID,
     object_ids: list[UUID],
     models: list[str],
     run_classification: bool,
-    override_rev: int,
-    user_id: UUID | None,
+    override_rev: int = 0,
+    user_id: UUID | None = None,
     store: JobStore,
     storage: StorageBackend,
     gaia: GaiaProvider,
@@ -376,7 +378,8 @@ def _enqueue_tracks_job(
         return job.id, job.status
     if is_eager_mode():
         with contextlib.suppress(Exception):
-            execute_run_tracks(
+            await asyncio.to_thread(
+                execute_run_tracks,
                 job.id,
                 job_params,
                 store=store,
@@ -556,6 +559,45 @@ async def select_project_objects(
 
 
 @router.post(
+    "/analyses/{analysis_id}/select",
+    status_code=status.HTTP_201_CREATED,
+    tags=["analyses", "objects"],
+    responses=_ANALYSIS_RESPONSES,
+)
+async def select_and_track_analysis_object(
+    analysis_id: UUID,
+    payload: TrackedObjectSelectRequest,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    gaia: Annotated[GaiaProvider, Depends(get_gaia_provider)],
+    wise: Annotated[WiseProvider, Depends(get_wise_provider)],
+    mpc: Annotated[MpcProvider, Depends(get_mpc_provider)],
+    user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
+) -> TrackedObjectSelectResponse:
+    """Select objects from an analysis and automatically fit multi-epoch motion & spectrum."""
+    payload_copy = payload.model_copy(update={"analysis_id": analysis_id})
+    default_proj_id = uuid5(UUID("2e75b5fe-3a8a-4e4e-9f7e-2e5bc8d54a01"), f"analysis:{analysis_id}")
+    resp = await select_project_objects(default_proj_id, payload_copy, store)
+    if resp.objects:
+        obj_ids = [o.id for o in resp.objects]
+        with contextlib.suppress(Exception):
+            await _enqueue_tracks_job(
+                project_id=default_proj_id,
+                object_ids=obj_ids,
+                models=["linear", "astrometric5"],
+                run_classification=True,
+                override_rev=0,
+                user_id=user_id,
+                store=store,
+                storage=storage,
+                gaia=gaia,
+                wise=wise,
+                mpc=mpc,
+            )
+    return resp
+
+
+@router.post(
     "/projects/{project_id}/tracks",
     status_code=status.HTTP_202_ACCEPTED,
     tags=["objects"],
@@ -589,7 +631,7 @@ async def run_project_tracks(
 
     object_ids = [UUID(str(o["id"])) for o in objs]
     override_rev = sum(int(o.get("override_rev", 0)) for o in objs)
-    job_id, job_status = _enqueue_tracks_job(
+    job_id, job_status = await _enqueue_tracks_job(
         project_id=project_id,
         object_ids=object_ids,
         models=list(payload.models),
@@ -683,7 +725,7 @@ async def override_object_association(
         "linear",
         "astrometric5",
     ]
-    refit_job_id, _ = _enqueue_tracks_job(
+    refit_job_id, _ = await _enqueue_tracks_job(
         project_id=bundle["project_id"],
         object_ids=[object_id],
         models=existing_models,
@@ -760,7 +802,7 @@ async def recompute_object_trajectory(
         str(f["model"]) for f in (bundle.get("motion_fits") or [])
     ] or ["linear", "astrometric5"]
 
-    refit_job_id, _ = _enqueue_tracks_job(
+    refit_job_id, _ = await _enqueue_tracks_job(
         project_id=bundle["project_id"],
         object_ids=[object_id],
         models=existing_models,

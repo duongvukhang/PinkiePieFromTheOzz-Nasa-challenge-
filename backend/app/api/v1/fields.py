@@ -77,7 +77,7 @@ async def resolve_target(
     cache: Annotated[CacheBackend, Depends(get_cache)],
 ) -> ResolveResponse:
     """Resolve target name to ICRS coordinates (deg) and proper motion (mas/yr)."""
-    resolved = resolve_target_name(name, simbad=simbad, cache=cache)
+    resolved = await asyncio.to_thread(resolve_target_name, name, simbad=simbad, cache=cache)
     if resolved is None:
         raise APIProblemError(
             status.HTTP_404_NOT_FOUND,
@@ -145,7 +145,8 @@ async def list_field_frames(
 ) -> FieldFramesResponse:
     """List available multi-epoch frames for an ICRS field (deg, FOV arcmin)."""
     enforce_fov_quota(fov, user_id)
-    return list_field_frames_service(
+    return await asyncio.to_thread(
+        list_field_frames_service,
         ra=ra,
         dec=dec,
         fov=fov,
@@ -195,7 +196,8 @@ async def create_cutouts(
     if not deduplicated:
         if is_eager_mode():
             with contextlib.suppress(Exception):
-                execute_build_cutouts(
+                await asyncio.to_thread(
+                    execute_build_cutouts,
                     job.id, job_params, store=store, storage=storage, provider=provider
                 )
         else:
@@ -203,7 +205,8 @@ async def create_cutouts(
                 dispatch_task(build_cutouts, str(job.id), job_params, queue="fast")
             except Exception:
                 with contextlib.suppress(Exception):
-                    execute_build_cutouts(
+                    await asyncio.to_thread(
+                        execute_build_cutouts,
                         job.id, job_params, store=store, storage=storage, provider=provider
                     )
         latest = store.get_job(job.id)
@@ -302,7 +305,7 @@ async def get_cutout_preview_png(
         Literal["asinh", "log", "sqrt", "linear", "zscale"], Query()
     ] = "asinh",
     colormap: Annotated[
-        Literal["inferno", "viridis", "plasma", "magma", "cividis", "hot", "cool", "bone", "gray"],
+        Literal["inferno", "viridis", "plasma", "magma", "cividis", "hot", "cool", "bone", "gray", "sepia"],
         Query(),
     ] = "inferno",
     brightness: Annotated[float, Query(ge=0.1, le=5.0)] = 1.0,
@@ -311,7 +314,8 @@ async def get_cutout_preview_png(
     p_max: Annotated[float, Query(ge=50.0, le=100.0)] = 99.5,
 ) -> Response:
     """Serve dynamic PNG preview with custom astronomical stretch and colormap."""
-    png_bytes = _render_frame_image(
+    png_bytes = await asyncio.to_thread(
+        _render_frame_image,
         cutout_id,
         frame_id,
         store,
@@ -340,7 +344,7 @@ async def get_cutout_display(
         Literal["asinh", "log", "sqrt", "linear", "zscale"] | None, Query()
     ] = None,
     colormap: Annotated[
-        Literal["inferno", "viridis", "plasma", "magma", "cividis", "hot", "cool", "bone", "gray"]
+        Literal["inferno", "viridis", "plasma", "magma", "cividis", "hot", "cool", "bone", "gray", "sepia"]
         | None,
         Query(),
     ] = None,
@@ -358,7 +362,8 @@ async def get_cutout_display(
         or p_min is not None
         or p_max is not None
     ):
-        png_bytes = _render_frame_image(
+        png_bytes = await asyncio.to_thread(
+            _render_frame_image,
             cutout_id,
             frame_id,
             store,
@@ -446,8 +451,15 @@ async def get_catalog_overlay(
     # PHASE2: expand cat literal to 2mass, panstarrs, simbad, sso per ROADMAP §2
     enforce_fov_quota(fov, user_id)
     provider = gaia if cat == "gaia" else wise
-    return get_catalog_overlay_service(
-        cat=cat, ra=ra, dec=dec, fov=fov, epoch=epoch, provider=provider, cache=cache
+    return await asyncio.to_thread(
+        get_catalog_overlay_service,
+        cat=cat,
+        ra=ra,
+        dec=dec,
+        fov=fov,
+        epoch=epoch,
+        provider=provider,
+        cache=cache,
     )
 
 
@@ -458,7 +470,7 @@ async def list_releases(
     cache: Annotated[CacheBackend, Depends(get_cache)],
 ) -> list[DataReleaseRead]:
     """List known mission data releases and indexing status."""
-    return list_releases_service(store=store, provider=provider, cache=cache)
+    return await asyncio.to_thread(list_releases_service, store=store, provider=provider, cache=cache)
 
 
 @router.get("/examples", tags=["examples"])

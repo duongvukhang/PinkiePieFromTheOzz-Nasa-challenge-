@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import io
 import math
 import re
 import zlib
@@ -10,7 +12,8 @@ from pathlib import Path
 from typing import Annotated, Any, NoReturn
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+import numpy as np
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 
 from app.api.deps import (
     APIProblemError,
@@ -226,7 +229,7 @@ async def upload_fits(
         storage.put_bytes(staged_key, raw, content_type="application/octet-stream")
         if is_eager_mode():
             with contextlib.suppress(Exception):
-                execute_validate_upload(job.id, job_params, store=store, storage=storage)
+                await asyncio.to_thread(execute_validate_upload, job.id, job_params, store=store, storage=storage)
         else:
             dispatch_task(validate_upload, str(job.id), job_params, queue="fast")
         latest = store.get_job(job.id)
@@ -248,3 +251,61 @@ async def get_upload_report(
     )
     assert job.outputs is not None
     return UploadCompatibilityReport.model_validate(job.outputs["report"])
+
+
+def _resolve_fits_raw(upload_or_fits_id: UUID, store: JobStore, storage: StorageBackend) -> bytes:
+    rec = store.get_fits_file(upload_or_fits_id)
+    if rec is not None:
+        return storage.get_bytes(rec["storage_path"], verify_checksum=False)
+    job = store.get_upload_job(upload_or_fits_id)
+    if job and job.outputs and "report" in job.outputs:
+        fid = UUID(str(job.outputs["report"]["fits_file_id"]))
+        frec = store.get_fits_file(fid)
+        if frec is not None:
+            return storage.get_bytes(frec["storage_path"], verify_checksum=False)
+    raise APIProblemError(404, "FITS File Not Found", f"No registered FITS file found for {upload_or_fits_id}.")
+
+
+@router.get("/uploads/{upload_or_fits_id}/display.webp")
+async def get_upload_display(
+    upload_or_fits_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+    stretch: str = "asinh",
+    colormap: str = "inferno",
+) -> Response:
+    """Render and serve display WebP image for an uploaded or registered FITS file."""
+    raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
+    from sphx_core.fits import extract_2d_image
+    arr = extract_2d_image(raw)
+    from app.services.image_renderer import image_renderer
+    png_bytes = await asyncio.to_thread(image_renderer.render_to_png_bytes, arr, stretch=stretch, colormap=colormap)
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", quality=90)
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/uploads/{upload_or_fits_id}/science.bin")
+async def get_upload_science(
+    upload_or_fits_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+) -> Response:
+    """Serve raw little-endian float32 science array for an uploaded FITS file."""
+    raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
+    from sphx_core.fits import extract_2d_image
+    arr = extract_2d_image(raw).astype(np.float32)
+    return Response(
+        content=arr.tobytes(),
+        media_type="application/octet-stream",
+        headers={
+            "X-Dtype": "float32",
+            "X-Shape": f"{arr.shape[0]},{arr.shape[1]}",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )

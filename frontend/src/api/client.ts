@@ -121,6 +121,25 @@ export async function fetchScienceFrame(url: string): Promise<ScienceBuffer> {
   return { data, width: shape[1] ?? side, height: shape[0] ?? side };
 }
 
+export interface EphemerisTrajectoryPoint {
+  time_mjd: number;
+  date_iso: string;
+  ra_deg: number;
+  dec_deg: number;
+  uncertainty_semi_major_arcsec: number;
+  uncertainty_semi_minor_arcsec: number;
+  pa_deg: number;
+  is_extrapolated: boolean;
+  method: string;
+}
+
+export interface EphemerisPredictionResult {
+  object_id: string;
+  trajectory: EphemerisTrajectoryPoint[];
+  preferred_model?: string;
+  baseline_days: number;
+}
+
 export const api = {
   resolveTarget: (name: string) =>
     apiJson<Schema<"ResolveResponse">>(buildUrl("/api/v1/resolve", { name })),
@@ -153,6 +172,7 @@ export const api = {
     fov_arcmin?: number;
     release?: string;
     cutout_id?: string;
+    fits_file_ids?: string[];
   }) => postJson<Schema<"AnalysisAcceptedResponse">>("/api/v1/analyses", body),
   getAnalysisSources: (analysisId: string) =>
     apiJson<{ items: DetectionRead[]; next_cursor: string | null }>(
@@ -160,6 +180,19 @@ export const api = {
     ),
   getAnalysisSuggestions: (analysisId: string) =>
     apiJson<Schema<"SuggestionsResponse">>(`/api/v1/analyses/${analysisId}/suggestions`),
+  selectAnalysisObject: (
+    analysisId: string,
+    body: {
+      mode: "box" | "suggestion" | "catalog" | "manual";
+      detection_ids?: number[];
+      box?: { ra_min: number; dec_min: number; ra_max: number; dec_max: number };
+      epoch?: string;
+    },
+  ) =>
+    postJson<{ objects: Array<{ id: string; label: string; ra: number; dec: number }> }>(
+      `/api/v1/analyses/${analysisId}/select`,
+      body,
+    ),
   getObjectDetail: (objectId: string) =>
     apiJson<TrackedObjectDetailResponse>(`/api/v1/objects/${objectId}`),
   getObjectAssociations: (objectId: string) =>
@@ -186,23 +219,7 @@ export const api = {
   predictEphemeris: (
     objectId: string,
     body: { extrapolation_days?: number; steps?: number; start_mjd?: number },
-  ) =>
-    postJson<{
-      object_id: string;
-      trajectory: Array<{
-        time_mjd: number;
-        date_iso: string;
-        ra_deg: number;
-        dec_deg: number;
-        uncertainty_semi_major_arcsec: number;
-        uncertainty_semi_minor_arcsec: number;
-        pa_deg: number;
-        is_extrapolated: boolean;
-        method: string;
-      }>;
-      preferred_model?: string;
-      baseline_days: number;
-    }>(`/api/v1/objects/${objectId}/ephemeris`, body),
+  ) => postJson<EphemerisPredictionResult>(`/api/v1/objects/${objectId}/ephemeris`, body),
   searchArchive: (params: ArchiveSearchParams) =>
     apiJson<ArchiveSearchResponse>(
       buildUrl("/api/v1/archive/search", {

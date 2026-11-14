@@ -4,6 +4,7 @@ import {
   type AssociationHypothesis,
   type CutoutFrame,
   type DetectionRead,
+  type EphemerisPredictionResult,
   type SpectrumResponse,
   type SuggestionItem,
   type TrackedObjectDetailResponse,
@@ -33,6 +34,7 @@ interface InspectorTabsProps {
     reason?: string,
   ) => Promise<void>;
   onRemoveTrack?: (label: string) => void;
+  onEphemerisResult?: (result: EphemerisPredictionResult) => void;
 }
 
 const TABS: Array<[InspectorTab, string]> = [
@@ -54,8 +56,15 @@ export function InspectorTabs({
   onPickSuggestion,
   onOverrideAssociation,
   onRemoveTrack,
+  onEphemerisResult,
 }: InspectorTabsProps) {
   const { inspectorTab, target, setView } = useViewStore();
+  const activeTab: InspectorTab =
+    inspectorTab === "tracks" || inspectorTab === "object"
+      ? "object"
+      : inspectorTab === "layers"
+        ? "flags"
+        : inspectorTab;
   const listRef = useRef<HTMLDivElement>(null);
   const specRef = useRef<HTMLDivElement>(null);
   const flagRef = useRef<HTMLDivElement>(null);
@@ -111,6 +120,7 @@ export function InspectorTabs({
         steps: 10,
       });
       setEphemerisResult(res);
+      onEphemerisResult?.(res);
     } catch (err) {
       console.error("Ephemeris prediction error:", err);
     } finally {
@@ -172,8 +182,8 @@ export function InspectorTabs({
             type="button"
             role="tab"
             className="viewer-tab"
-            aria-selected={inspectorTab === id}
-            tabIndex={inspectorTab === id ? 0 : -1}
+            aria-selected={activeTab === id}
+            tabIndex={activeTab === id ? 0 : -1}
             onClick={() => setView({ inspectorTab: id }, false)}
           >
             {label}
@@ -185,8 +195,8 @@ export function InspectorTabs({
         ref={specRef}
         role="tabpanel"
         aria-labelledby="tab-spectrum"
-        tabIndex={inspectorTab === "spectrum" ? 0 : undefined}
-        hidden={inspectorTab !== "spectrum" ? ("until-found" as unknown as boolean) : false}
+        tabIndex={activeTab === "spectrum" ? 0 : undefined}
+        hidden={activeTab !== "spectrum" ? ("until-found" as unknown as boolean) : false}
       >
         <div className="viewer-tabpanel-body">
           <SpectrumChart
@@ -200,8 +210,8 @@ export function InspectorTabs({
         ref={flagRef}
         role="tabpanel"
         aria-labelledby="tab-flags"
-        tabIndex={inspectorTab === "flags" ? 0 : undefined}
-        hidden={inspectorTab !== "flags" ? ("until-found" as unknown as boolean) : false}
+        tabIndex={activeTab === "flags" ? 0 : undefined}
+        hidden={activeTab !== "flags" ? ("until-found" as unknown as boolean) : false}
       >
         <div className="viewer-tabpanel-body">
           <FlagsMetaPanel
@@ -217,8 +227,8 @@ export function InspectorTabs({
         ref={objRef}
         role="tabpanel"
         aria-labelledby="tab-object"
-        tabIndex={inspectorTab === "object" ? 0 : undefined}
-        hidden={inspectorTab !== "object" ? ("until-found" as unknown as boolean) : false}
+        tabIndex={activeTab === "object" ? 0 : undefined}
+        hidden={activeTab !== "object" ? ("until-found" as unknown as boolean) : false}
       >
         <div className="viewer-tabpanel-body">
           {/* Feature B: Tracked Objects List with persistent IDs */}

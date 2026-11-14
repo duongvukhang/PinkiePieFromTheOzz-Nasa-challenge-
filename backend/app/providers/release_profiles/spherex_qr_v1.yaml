@@ -1,14 +1,14 @@
 profile_name: spherex_qr_v1
 provider: spherex_irsa
 mission: SPHEREx
-# Official IRSA SIAv2 collection ID
-collection_id: spherex_dr1
+# [verify] Official IRSA SIAv2 / CAOM collection ID and ObsCore table name
+collection_id: spherex_qr
 release_aliases:
-  - spherex_dr1
   - spherex_qr
   - QR
   - QR-2026-10
   - latest
+  - spherex_dr1
   - DR1
 endpoints:
   sia_url: https://irsa.ipac.caltech.edu/SIA

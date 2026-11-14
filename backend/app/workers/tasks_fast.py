@@ -24,8 +24,9 @@ from app.services.fields import (
 )
 from app.services.fits_validator import DEFAULT_UPLOAD_MAX_BYTES, validate_fits_upload
 from app.services.jobs import JobStore, compute_params_hash, get_job_store
-from app.services.storage import StorageBackend, get_storage_backend
+from app.services.storage import StorageBackend, compute_sha256, get_storage_backend
 from app.workers.celery_app import celery_app
+from sphx_core.io import inspect_fits
 from sphx_core.wcs import healpix9_nested
 
 _FRAME_UUID_NS = UUID("2e75b5fe-3a8a-4e4e-9f7e-2e5bc8d54a01")
@@ -80,26 +81,71 @@ def render_cutout_products(
     return render_array_products(extract_2d_image(fits_bytes), storage, prefix)
 
 
+def _register_cutout_fits(
+    store: JobStore,
+    fid: UUID,
+    raw: bytes,
+    storage_path: str,
+    *,
+    provider: str = "spherex_irsa",
+    obs_id: str | None = None,
+) -> None:
+    if store.get_fits_file(fid) is not None:
+        return
+    try:
+        insp = inspect_fits(raw)
+        meta = {
+            "origin": "cutout",
+            "provider": provider,
+            "obs_id": obs_id or str(fid),
+            "size_bytes": len(raw),
+            "band_label": insp.band_label,
+            "array_id": insp.array_id,
+            "date_obs_utc": insp.epoch.utc_iso if insp.epoch else None,
+            "mjd_tdb_mid": insp.epoch.mjd_tdb_mid if insp.epoch else None,
+            "exptime_s": insp.epoch.exptime_s if insp.epoch else None,
+            "ra_center": insp.wcs.ra_center_deg if insp.wcs else None,
+            "dec_center": insp.wcs.dec_center_deg if insp.wcs else None,
+            "naxis1": insp.wcs.naxis1 if insp.wcs else None,
+            "naxis2": insp.wcs.naxis2 if insp.wcs else None,
+            "pixscale_arcsec": insp.wcs.pixscale_arcsec if insp.wcs else None,
+            "rotation_deg": insp.wcs.rotation_deg if insp.wcs else None,
+            "wcs_header": insp.wcs.wcs_header if insp.wcs else "",
+            "footprint": list(insp.wcs.footprint) if insp.wcs else None,
+            "healpix9": insp.wcs.healpix9 if insp.wcs else None,
+            "header_summary": insp.header_summary,
+        }
+        store.register_fits_file(
+            fits_file_id=fid,
+            metadata=meta,
+            sha256_hex=compute_sha256(raw),
+            storage_path=storage_path,
+        )
+    except Exception:
+        pass
+
+
 def _build_cutout_frame(
     cutout_id: UUID,
     epoch_label: str,
     stored: StoredFrame,
     rendered: dict[str, Any],
+    frame_id: UUID | None = None,
 ) -> CutoutFrame:
     ref = stored.ref
-    frame_id = uuid5(_FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}")
+    fid = frame_id or uuid5(_FRAME_UUID_NS, f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.mjd_tdb:.6f}")
     utc_mid = Time(ref.mjd_tdb, format="mjd", scale="tdb").utc.to_datetime(timezone=UTC)
     flagged = float(stored.flags_summary.get("flagged_fraction", 0.0))
     return CutoutFrame(
-        frame_id=frame_id,
+        frame_id=fid,
         epoch=epoch_label,
         mjd_tdb_mid=ref.mjd_tdb,
         utc_mid=utc_mid,
         array_id=ref.array_id,
         band_label=ref.band_id,
-        display_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_id}/display.webp",
-        science_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_id}/science.bin",
-        fits_url=f"/api/v1/cutouts/{cutout_id}/frames/{frame_id}/frame.fits",
+        display_url=f"/api/v1/cutouts/{cutout_id}/frames/{fid}/display.webp",
+        science_url=f"/api/v1/cutouts/{cutout_id}/frames/{fid}/science.bin",
+        fits_url=f"/api/v1/cutouts/{cutout_id}/frames/{fid}/frame.fits",
         wcs_header=stored.wcs_header or "",
         stretch=rendered["stretch"],
         flagged_fraction=min(1.0, max(0.0, flagged)),
@@ -116,6 +162,7 @@ def _generate_synthetic_cutouts(
     params_hex: str,
     t0: Time | None = None,
     t1: Time | None = None,
+    store: JobStore | None = None,
 ) -> tuple[list[CutoutFrame], dict[str, dict[str, str]]]:
     """Generate 3-epoch synthetic FITS cutouts for visualization when live IRSA has no coverage."""
     from app.services.synthetic_fits import InjectedSource, generate_synthetic_sequence
@@ -174,6 +221,8 @@ def _generate_synthetic_cutouts(
         frame_uuid = uuid5(_FRAME_UUID_NS, f"{cutout_id}:synthetic:{idx}:{syn.mjd_tdb_mid:.6f}")
         fits_key = f"fits/{hpx}/{params_hex}/{frame_uuid}.fits"
         storage.put_bytes(fits_key, syn.fits_bytes, content_type="application/fits")
+        if store is not None:
+            _register_cutout_fits(store, frame_uuid, syn.fits_bytes, fits_key, provider="synthetic", obs_id=str(frame_uuid))
         rendered = render_cutout_products(
             syn.fits_bytes, storage, f"products/{hpx}/{params_hex}/{frame_uuid}"
         )
@@ -255,7 +304,15 @@ def execute_build_cutouts(
                     storage,
                     f"products/{hpx}/{params_hex}/{frame_uuid}",
                 )
-                cframe = _build_cutout_frame(cutout_id, ep, stored, rendered)
+                cframe = _build_cutout_frame(cutout_id, ep, stored, rendered, frame_id=frame_uuid)
+                _register_cutout_fits(
+                    store,
+                    frame_uuid,
+                    fits_bytes,
+                    stored.storage_path,
+                    provider=ref.provider,
+                    obs_id=ref.obs_id,
+                )
                 out_frames.append(cframe)
                 artifact_keys[str(cframe.frame_id)] = {
                     "display": str(rendered["display_key"]),
@@ -271,7 +328,7 @@ def execute_build_cutouts(
         if not out_frames:
             try:
                 out_frames, artifact_keys = _generate_synthetic_cutouts(
-                    cutout_id, ra, dec, fov, storage, hpx, params_hex, t0=t0, t1=t1
+                    cutout_id, ra, dec, fov, storage, hpx, params_hex, t0=t0, t1=t1, store=store
                 )
                 warnings.append(
                     "Live SPHEREx archive returned no frames; served synthetic field sequence."

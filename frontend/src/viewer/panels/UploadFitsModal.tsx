@@ -4,7 +4,7 @@ import { api, type UploadCompatibilityReport } from "../../api/client";
 interface UploadFitsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoadedField?: (coords: { ra: number; dec: number; fov?: number }) => void;
+  onLoadedField?: (coords: { ra: number; dec: number; fov?: number; fitsId?: string }) => void;
 }
 
 export function UploadFitsModal({ isOpen, onClose, onLoadedField }: UploadFitsModalProps) {
@@ -83,7 +83,7 @@ export function UploadFitsModal({ isOpen, onClose, onLoadedField }: UploadFitsMo
     const ra = report.ra_center_deg ?? 133.79513;
     const dec = report.dec_center_deg ?? -7.24515;
     const fov = report.pixscale_arcsec ? Math.min(60, (report.pixscale_arcsec * 256) / 60) : 10;
-    onLoadedField?.({ ra, dec, fov });
+    onLoadedField?.({ ra, dec, fov, fitsId: report.fits_file_id ?? undefined });
     onClose();
   };
 

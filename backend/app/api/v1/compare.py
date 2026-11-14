@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import Annotated, Any
 from uuid import UUID, uuid4
@@ -104,7 +105,7 @@ async def create_comparison(
         )
         if is_eager_mode():
             with contextlib.suppress(Exception):
-                execute_run_compare(job.id, job_params, store=store, storage=storage)
+                await asyncio.to_thread(execute_run_compare, job.id, job_params, store=store, storage=storage)
         else:
             dispatch_task(run_compare, str(job.id), job_params, queue="heavy")
         latest = store.get_job(job.id)

@@ -34,6 +34,21 @@ const ARCHIVE_SOURCES: { id: ArchiveSourceId; label: string; desc: string }[] = 
     label: "NASA / IPAC IRSA — SPHEREx (ObsCore)",
     desc: "Primary all-sky spectral survey (Bands D1–D6, 0.75–5.0 µm)",
   },
+  {
+    id: "wise_irsa",
+    label: "NASA / IPAC IRSA — AllWISE / NEOWISE",
+    desc: "Mid-infrared sky survey (W1–W4, 3.4–22 µm)",
+  },
+  {
+    id: "twomass_irsa",
+    label: "NASA / IPAC IRSA — 2MASS All-Sky",
+    desc: "Near-infrared Point Source & Image Atlas (J, H, Ks)",
+  },
+  {
+    id: "skyview",
+    label: "NASA / GSFC — SkyView Virtual Observatory",
+    desc: "Multi-wavelength Virtual Telescope spanning gamma to radio",
+  },
 ];
 
 export function ArchiveSearchModal({
