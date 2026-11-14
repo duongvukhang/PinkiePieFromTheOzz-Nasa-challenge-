@@ -1,3 +1,4 @@
+import { api, type CutoutFrame } from "../../api/client";
 import {
   useViewStore,
   type ColormapMode,
@@ -28,14 +29,39 @@ interface LayerSidebarProps {
   selectBoxMode: boolean;
   onToggleSelectBox: () => void;
   flaggedFraction?: number;
+  frames?: CutoutFrame[];
+  onDeleteFrame?: (frameId: string) => void;
+  onAddFits?: () => void;
 }
 
 export function LayerSidebar({
   selectBoxMode,
   onToggleSelectBox,
   flaggedFraction,
+  frames = [],
+  onDeleteFrame,
+  onAddFits,
 }: LayerSidebarProps) {
-  const { bands, op, stretch, colormap, overlay, hips, setView, toggleOverlay } = useViewStore();
+  const { bands, op, stretch, colormap, overlay, hips, frame, setView, toggleOverlay } =
+    useViewStore();
+
+  const handleDelete = (frameId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDeleteFrame) {
+      onDeleteFrame(frameId);
+    } else {
+      api.deleteUpload(frameId).catch(() => {});
+      useViewStore.getState().removeFrame(frameId);
+    }
+  };
+
+  const handleAdd = () => {
+    if (onAddFits) {
+      onAddFits();
+    } else {
+      useViewStore.getState().setUploadModalOpen(true);
+    }
+  };
 
   return (
     <aside className="viewer-panel viewer-left" aria-label="Layers and scientific controls">
@@ -156,6 +182,83 @@ export function LayerSidebar({
         {flaggedFraction !== undefined && (
           <p className="viewer-note">Frame flagged pixels: {(flaggedFraction * 100).toFixed(1)}%</p>
         )}
+      </section>
+
+      <section className="viewer-panel-sec">
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "var(--space-2)",
+          }}
+        >
+          <h2 className="viewer-sec-title" style={{ margin: 0 }}>
+            Active FITS Files (1 per Epoch)
+          </h2>
+          <button
+            type="button"
+            className="viewer-btn"
+            style={{ minBlockSize: "24px", padding: "2px 8px", fontSize: "0.72rem" }}
+            title="Add FITS File"
+            aria-label="Add FITS File"
+            onClick={handleAdd}
+          >
+            + Add FITS
+          </button>
+        </div>
+        <div className="viewer-fits-manager" role="list" aria-label="Loaded FITS epochs">
+          {frames.length === 0 ? (
+            <p className="viewer-note">No FITS epochs loaded</p>
+          ) : (
+            frames.map((f, i) => {
+              const isUpload =
+                f.fits_url?.includes("/uploads/") || f.epoch.toLowerCase().includes("upload");
+              const isArchive =
+                f.epoch.toLowerCase().includes("archive") || f.fits_url?.includes("archive");
+              const originLabel = isUpload ? "Uploaded" : isArchive ? "Live Archive" : "Cutout";
+              const badgeClass = isUpload
+                ? "viewer-fits-badge viewer-fits-badge-upload"
+                : isArchive
+                  ? "viewer-fits-badge viewer-fits-badge-archive"
+                  : "viewer-fits-badge viewer-fits-badge-cutout";
+
+              return (
+                <div
+                  key={`${f.frame_id}-${i}`}
+                  className="viewer-fits-item"
+                  role="listitem"
+                  style={{
+                    borderColor: i === frame ? "var(--sky-text)" : undefined,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setView({ frame: i, playing: false })}
+                >
+                  <div className="viewer-fits-info">
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span className={badgeClass}>{originLabel}</span>
+                      <span className="viewer-fits-name" title={f.epoch}>
+                        {f.epoch}
+                      </span>
+                    </div>
+                    <span className="viewer-fits-meta">
+                      {f.utc_mid?.slice(0, 10)} · MJD {f.mjd_tdb_mid.toFixed(2)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="viewer-fits-del-btn"
+                    title={`Delete ${f.epoch}`}
+                    aria-label={`Delete ${f.epoch}`}
+                    onClick={(e) => handleDelete(f.frame_id, e)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
       </section>
     </aside>
   );

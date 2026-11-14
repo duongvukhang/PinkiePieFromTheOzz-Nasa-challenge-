@@ -67,6 +67,11 @@ Conventions: JSON; angles in decimal deg (`RaDeg` in `[0, 360)`, `DecDeg` in `[-
 | GET | `/cutouts/{cutout_id}/frames/{frame_id}/science.bin` | Little-endian `float32` science array (`X-Dtype`, `X-Shape` headers) |
 | GET | `/cutouts/{cutout_id}/frames/{frame_id}/frame.fits` | Downloadable FITS cutout |
 | POST | `/uploads` (`multipart/form-data`) | Upload FITS (`file` + optional `user_epoch`, reference field/upload, `project_id`) → `202` |
+| GET | `/uploads` | List active registered user uploads & archive-loaded FITS files with WCS/epoch metadata |
+| DELETE | `/uploads/{fits_id}` | Delete a registered FITS file record and storage artifact (`204`) |
+| GET | `/uploads/{fits_id}/frame.fits` | Raw FITS file download for inspection |
+| GET | `/uploads/{upload_or_fits_id}/display.webp` | 8-bit asinh-stretched WebP display tile |
+| GET | `/uploads/{upload_or_fits_id}/science.bin` | Little-endian `float32` science array (`X-Dtype`, `X-Shape` headers) |
 | GET | `/uploads/{upload_id}/report` | FITS validation & multi-epoch compatibility report |
 | POST | `/analyses` | Run registration → extraction → suggestion on `fits_file_ids`, `cutout_id`, or `ra`/`dec` (+ optional `fov_arcmin`, `release`) (`202`) |
 | GET | `/analyses/{analysis_id}/sources?bbox=&cursor=&limit=` | Extracted detections (`bbox=ra_min,dec_min,ra_max,dec_max`) |

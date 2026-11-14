@@ -28,6 +28,45 @@ export type UploadCompatibilityReport = Schema<"UploadCompatibilityReport"> & {
 
 export type ArchiveLoadRequest = Schema<"ArchiveLoadRequest">;
 export type ArchiveSourceId = NonNullable<ArchiveLoadRequest["source"]>;
+
+export interface UploadedFitsSummary {
+  fits_file_id: string;
+  filename: string;
+  obs_id?: string;
+  origin: string;
+  epoch: string;
+  mjd_tdb_mid: number;
+  utc_mid: string;
+  ra_center?: number;
+  dec_center?: number;
+  naxis1?: number;
+  naxis2?: number;
+  wcs_header: string;
+  display_url: string;
+  science_url: string;
+  fits_url: string;
+  band_label?: string;
+  stretch?: { vmin?: number; vmax?: number; shape?: [number, number] };
+}
+
+export interface ArchiveLoadResponse {
+  obs_id: string;
+  storage_key: string;
+  status: string;
+  source: string;
+  fits_file_id?: string;
+  mjd_tdb_mid?: number;
+  utc_mid?: string;
+  ra_center?: number;
+  dec_center?: number;
+  naxis1?: number;
+  naxis2?: number;
+  wcs_header?: string;
+  band_label?: string;
+  display_url?: string;
+  science_url?: string;
+  fits_url?: string;
+}
 export type EpochProduct = Schema<"EpochProduct">;
 export type ObservationEpoch = Schema<"ObservationEpoch">;
 export type ArchiveRecord = Schema<"ArchiveRecord">;
@@ -235,10 +274,15 @@ export const api = {
       }),
     ),
   loadArchiveProduct: (body: ArchiveLoadRequest) =>
-    postJson<{ obs_id: string; storage_key: string; status: string; source: string }>(
-      "/api/v1/archive/load",
-      body,
-    ),
+    postJson<ArchiveLoadResponse>("/api/v1/archive/load", body),
+  listUploads: () => apiJson<UploadedFitsSummary[]>("/api/v1/uploads"),
+  deleteUpload: async (fitsId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/uploads/${fitsId}`, { method: "DELETE" });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.detail || "Delete upload failed", err.title);
+    }
+  },
   uploadFits: async (file: File, userEpoch?: string, refRa?: number, refDec?: number) => {
     const form = new FormData();
     form.append("file", file);

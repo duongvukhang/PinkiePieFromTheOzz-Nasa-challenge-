@@ -104,6 +104,28 @@ class UploadResponse(JobAcceptedResponse):
     fits_file_id: UUID
 
 
+class UploadedFitsSummary(BaseModel):
+    """Registered user upload or archive FITS frame summary."""
+
+    fits_file_id: UUID
+    filename: str
+    obs_id: str | None = None
+    origin: str = "upload"
+    epoch: str
+    mjd_tdb_mid: float
+    utc_mid: str
+    ra_center: float | None = None
+    dec_center: float | None = None
+    naxis1: int | None = None
+    naxis2: int | None = None
+    wcs_header: str = ""
+    display_url: str
+    science_url: str
+    fits_url: str
+    band_label: str | None = None
+    stretch: dict[str, Any] = Field(default_factory=dict)
+
+
 class UploadCompatibilityReport(BaseModel):
     """FITS validation report (overlap %, arcsec/px, deg, MJD TDB)."""
 

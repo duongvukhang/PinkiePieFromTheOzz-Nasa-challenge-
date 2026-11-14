@@ -18,6 +18,9 @@ export interface ViewState {
   bands: string;
   source?: string;
   fitsId?: string;
+  fitsIds: string[];
+  excludedFrameIds: string[];
+  isUploadModalOpen: boolean;
   mode: ViewerMode;
   op: ImageOp;
   a?: string;
@@ -101,6 +104,20 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     .filter(Boolean);
   const frameNum = Number(q.get("frame"));
   const fpsNum = Number(q.get("fps"));
+  const singleFits = q.get("fitsId");
+  const multiFits = q.get("fitsIds");
+  const parsedFitsIds = multiFits
+    ? multiFits
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : singleFits
+      ? [singleFits]
+      : [];
+  const excluded = (q.get("excluded") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   return {
     target: q.get("target") ?? "",
@@ -112,7 +129,10 @@ export function parseViewParams(search: string, authenticated = false): Partial<
     release: q.get("release") ?? "latest",
     bands: q.get("bands") ?? "all",
     source: q.get("source") ?? undefined,
-    fitsId: q.get("fitsId") ?? undefined,
+    fitsId: parsedFitsIds[0] ?? singleFits ?? undefined,
+    fitsIds: parsedFitsIds,
+    excludedFrameIds: excluded,
+    isUploadModalOpen: false,
     mode: mode && MODES.has(mode) ? mode : "blink",
     op: op && OPS.has(op) ? op : "none",
     a: q.get("a") ?? undefined,
@@ -143,7 +163,15 @@ export function toViewQuery(s: Partial<ViewState>): string {
   if (s.release && s.release !== "latest") q.set("release", s.release);
   if (s.bands && s.bands !== "all") q.set("bands", s.bands);
   if (s.source && s.source !== "spherex_irsa") q.set("source", s.source);
-  if (s.fitsId) q.set("fitsId", s.fitsId);
+  if (s.fitsIds && s.fitsIds.length > 0) {
+    if (s.fitsIds[0]) q.set("fitsId", s.fitsIds[0]);
+    if (s.fitsIds.length > 1) q.set("fitsIds", s.fitsIds.join(","));
+  } else if (s.fitsId) {
+    q.set("fitsId", s.fitsId);
+  }
+  if (s.excludedFrameIds && s.excludedFrameIds.length > 0) {
+    q.set("excluded", s.excludedFrameIds.join(","));
+  }
   if (s.mode && s.mode !== "blink") q.set("mode", s.mode);
   if (s.op && s.op !== "none") q.set("op", s.op);
   if (s.a) q.set("a", s.a);
@@ -169,6 +197,9 @@ const DEFAULT_STATE: ViewState = {
   release: "latest",
   bands: "all",
   source: "spherex_irsa",
+  fitsIds: [],
+  excludedFrameIds: [],
+  isUploadModalOpen: false,
   mode: "blink",
   op: "none",
   frame: 0,
@@ -198,6 +229,10 @@ interface ViewStore extends ViewState {
   openInspector: (tab?: InspectorTab) => void;
   addTrack: (label: string, ra: number, dec: number) => void;
   removeTrack: (label: string) => void;
+  addFitsId: (id: string) => void;
+  removeFitsId: (id: string) => void;
+  removeFrame: (frameId: string) => void;
+  setUploadModalOpen: (open: boolean) => void;
 }
 
 function syncReplaceUrl(next: ViewState) {
@@ -280,4 +315,42 @@ export const useViewStore = create<ViewStore>((set) => ({
       syncReplaceUrl(next);
       return next;
     }),
+  addFitsId: (id) =>
+    set((prev) => {
+      const nextFitsIds = Array.from(new Set([...prev.fitsIds, id]));
+      const next = {
+        ...prev,
+        fitsIds: nextFitsIds,
+        fitsId: prev.fitsId || id,
+        excludedFrameIds: prev.excludedFrameIds.filter((f) => f !== id),
+      };
+      syncReplaceUrl(next);
+      return next;
+    }),
+  removeFitsId: (id) =>
+    set((prev) => {
+      const nextFitsIds = prev.fitsIds.filter((f) => f !== id);
+      const next = {
+        ...prev,
+        fitsIds: nextFitsIds,
+        fitsId: prev.fitsId === id ? (nextFitsIds[0] ?? undefined) : prev.fitsId,
+        excludedFrameIds: Array.from(new Set([...prev.excludedFrameIds, id])),
+      };
+      syncReplaceUrl(next);
+      return next;
+    }),
+  removeFrame: (frameId) =>
+    set((prev) => {
+      const nextFitsIds = prev.fitsIds.filter((f) => f !== frameId);
+      const nextExcluded = Array.from(new Set([...prev.excludedFrameIds, frameId]));
+      const next = {
+        ...prev,
+        fitsIds: nextFitsIds,
+        fitsId: prev.fitsId === frameId ? (nextFitsIds[0] ?? undefined) : prev.fitsId,
+        excludedFrameIds: nextExcluded,
+      };
+      syncReplaceUrl(next);
+      return next;
+    }),
+  setUploadModalOpen: (open) => set(() => ({ isUploadModalOpen: open })),
 }));

@@ -52,6 +52,23 @@ export function useViewerData(search: string, skipSecondary = false) {
     setView,
   } = view;
   const fitsId = view.fitsId;
+  const fitsIds = view.fitsIds;
+  const excludedFrameIds = view.excludedFrameIds;
+
+  const allFitsIds = useMemo(() => {
+    const s = new Set<string>();
+    if (fitsId) s.add(fitsId);
+    for (const fid of fitsIds || []) {
+      if (fid) s.add(fid);
+    }
+    return Array.from(s);
+  }, [fitsId, fitsIds]);
+
+  const uploadsQ = useQuery({
+    queryKey: ["uploads", allFitsIds],
+    queryFn: () => api.listUploads(),
+    enabled: allFitsIds.length > 0,
+  });
 
   const [pausedByVis, setPausedByVis] = useState(false);
   const [trackedUuid, setTrackedUuid] = useState<string | null>(null);
@@ -148,28 +165,71 @@ export function useViewerData(search: string, skipSecondary = false) {
   });
 
   const frames: CutoutFrame[] = useMemo(() => {
-    const raw = cutoutQ.data?.frames ?? [];
-    if (raw.length > 0) {
-      return [...raw].sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
-    }
-    if (fitsId) {
-      return [
-        {
-          frame_id: fitsId,
-          epoch: "Uploaded FITS",
+    const excluded = new Set(excludedFrameIds || []);
+    const userUploadedList = uploadsQ.data ?? [];
+    const matchedUploads = userUploadedList.filter((u) => allFitsIds.includes(u.fits_file_id));
+    const matchedIds = new Set(matchedUploads.map((m) => m.fits_file_id));
+
+    const userFrames: CutoutFrame[] = matchedUploads.map((u) => ({
+      frame_id: u.fits_file_id,
+      epoch: u.epoch || u.band_label || "Uploaded FITS",
+      mjd_tdb_mid: u.mjd_tdb_mid,
+      utc_mid: u.utc_mid,
+      array_id: undefined,
+      band_label: u.band_label,
+      display_url: u.display_url,
+      science_url: u.science_url,
+      fits_url: u.fits_url,
+      wcs_header: u.wcs_header || "",
+      stretch: u.stretch || { vmin: 0, vmax: 1000, shape: [u.naxis2 || 128, u.naxis1 || 128] },
+      flagged_fraction: 0,
+    }));
+
+    for (const fid of allFitsIds) {
+      if (!matchedIds.has(fid) && !excluded.has(fid)) {
+        userFrames.push({
+          frame_id: fid,
+          epoch: "FITS Frame",
           mjd_tdb_mid: 60000.0,
           utc_mid: "2025-01-01T00:00:00Z",
-          display_url: `/api/v1/uploads/${fitsId}/display.webp`,
-          science_url: `/api/v1/uploads/${fitsId}/science.bin`,
-          fits_url: `/api/v1/uploads/${fitsId}/report`,
+          display_url: `/api/v1/uploads/${fid}/display.webp`,
+          science_url: `/api/v1/uploads/${fid}/science.bin`,
+          fits_url: `/api/v1/uploads/${fid}/frame.fits`,
           wcs_header: "",
-          stretch: { vmin: 0, vmax: 1000 },
+          stretch: { vmin: 0, vmax: 1000, shape: [128, 128] },
           flagged_fraction: 0,
-        },
-      ];
+        });
+      }
     }
-    return [];
-  }, [cutoutQ.data?.frames, fitsId]);
+
+    const rawCutouts = cutoutQ.data?.frames ?? [];
+    const isSyntheticCutout =
+      cutoutQ.data?.warnings?.some((w) => w.toLowerCase().includes("synthetic")) ||
+      Boolean(rawCutouts[0]?.epoch.startsWith("E"));
+    const eligibleCutouts =
+      userFrames.length > 0 && isSyntheticCutout
+        ? []
+        : rawCutouts.filter((f) => !excluded.has(f.frame_id));
+
+    const seenEpochs = new Set<string>();
+    const combined: CutoutFrame[] = [];
+
+    for (const uf of userFrames) {
+      if (excluded.has(uf.frame_id)) continue;
+      combined.push(uf);
+      seenEpochs.add(uf.epoch.toLowerCase());
+    }
+
+    for (const cf of eligibleCutouts) {
+      if (excluded.has(cf.frame_id)) continue;
+      if (!seenEpochs.has(cf.epoch.toLowerCase())) {
+        combined.push(cf);
+        seenEpochs.add(cf.epoch.toLowerCase());
+      }
+    }
+
+    return combined.sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
+  }, [cutoutQ.data, uploadsQ.data, allFitsIds, excludedFrameIds]);
   const safeIdx = frames.length ? ((frame % frames.length) + frames.length) % frames.length : 0;
   const frameA = frames.find((f) => f.frame_id === a) ?? frames[safeIdx];
   const frameB =

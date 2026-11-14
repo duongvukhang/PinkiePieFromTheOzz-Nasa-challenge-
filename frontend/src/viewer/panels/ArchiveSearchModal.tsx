@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useViewStore } from "../state/viewStore";
 import {
   api,
   type ArchiveSearchParams,
@@ -140,7 +141,7 @@ export function ArchiveSearchModal({
     }
   };
 
-  const handleLoadEpoch = (ep: ObservationEpoch) => {
+  const handleLoadEpoch = async (ep: ObservationEpoch) => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
     let fromVal = startDate || undefined;
@@ -159,16 +160,21 @@ export function ArchiveSearchModal({
       (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ??
       (ep.products ?? [])[0];
     if (activeProd) {
-      api
-        .loadArchiveProduct({
+      try {
+        const loaded = await api.loadArchiveProduct({
           obs_id: activeProd.obs_id,
           access_url: activeProd.access_url || undefined,
           source,
           band: activeProd.band || undefined,
           ra_deg: raNum,
           dec_deg: decNum,
-        })
-        .catch(() => {});
+        });
+        if (loaded?.fits_file_id) {
+          useViewStore.getState().addFitsId(loaded.fits_file_id);
+        }
+      } catch (err) {
+        console.warn("Failed to load archive product:", err);
+      }
     }
 
     onApplyInterval({
@@ -182,7 +188,7 @@ export function ArchiveSearchModal({
     onClose();
   };
 
-  const handleLoadAllInterval = () => {
+  const handleLoadAllInterval = async () => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
 
@@ -191,16 +197,21 @@ export function ArchiveSearchModal({
         (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ??
         (ep.products ?? [])[0];
       if (activeProd) {
-        api
-          .loadArchiveProduct({
+        try {
+          const loaded = await api.loadArchiveProduct({
             obs_id: activeProd.obs_id,
             access_url: activeProd.access_url || undefined,
             source,
             band: activeProd.band || undefined,
             ra_deg: raNum,
             dec_deg: decNum,
-          })
-          .catch(() => {});
+          });
+          if (loaded?.fits_file_id) {
+            useViewStore.getState().addFitsId(loaded.fits_file_id);
+          }
+        } catch {
+          // ignore individual failed product
+        }
       }
     }
 

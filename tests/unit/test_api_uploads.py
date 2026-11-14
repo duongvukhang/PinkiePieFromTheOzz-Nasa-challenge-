@@ -418,3 +418,123 @@ def test_upload_display_and_science_bin(upload_env: dict[str, Any]) -> None:
     r_unk = client.get(f"/api/v1/uploads/{uuid4()}/science.bin")
     assert r_unk.status_code == 404
 
+
+def test_upload_crud_list_delete_and_raw_fits(upload_env: dict[str, Any]) -> None:
+    client: TestClient = upload_env["client"]
+    store: InMemoryJobStore = upload_env["store"]
+    storage: LocalStorageBackend = upload_env["storage"]
+
+    fits_bytes = _make_fits(nx=32, ny=32, ra_deg=133.795, dec_deg=-7.245)
+    r_up = client.post(
+        "/api/v1/uploads",
+        files={"file": ("epoch1.fits", fits_bytes, "application/fits")},
+    )
+    assert r_up.status_code == 202
+    fits_id = r_up.json()["fits_file_id"]
+
+    # 1. GET /api/v1/uploads
+    r_list = client.get("/api/v1/uploads")
+    assert r_list.status_code == 200
+    items = r_list.json()
+    assert any(item["fits_file_id"] == fits_id for item in items)
+    matched = next(item for item in items if item["fits_file_id"] == fits_id)
+    assert matched["display_url"] == f"/api/v1/uploads/{fits_id}/display.webp"
+    assert matched["science_url"] == f"/api/v1/uploads/{fits_id}/science.bin"
+    assert matched["fits_url"] == f"/api/v1/uploads/{fits_id}/frame.fits"
+    assert "wcs_header" in matched
+    assert matched["mjd_tdb_mid"] > 0
+
+    # 2. GET /api/v1/uploads/{fits_id}/frame.fits
+    r_raw = client.get(f"/api/v1/uploads/{fits_id}/frame.fits")
+    assert r_raw.status_code == 200
+    assert r_raw.headers["content-type"] == "application/fits"
+    assert r_raw.content.startswith(b"SIMPLE")
+
+    # 3. DELETE /api/v1/uploads/{fits_id}
+    r_del = client.delete(f"/api/v1/uploads/{fits_id}")
+    assert r_del.status_code == 204
+    assert store.get_fits_file(UUID(fits_id)) is None
+
+    # Subsequent GET /frame.fits returns 404
+    assert client.get(f"/api/v1/uploads/{fits_id}/frame.fits").status_code == 404
+
+
+def test_execute_build_cutouts_one_frame_per_epoch(upload_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.providers.base import FrameRef, Provider, StoredFrame
+    from app.workers.tasks_fast import execute_build_cutouts
+
+    store: InMemoryJobStore = upload_env["store"]
+    storage: LocalStorageBackend = upload_env["storage"]
+
+    fits_bytes = _make_fits(nx=32, ny=32)
+
+    class MultiCandidateProvider(Provider):
+        name = "mock_multi"
+        kind = {"images"}
+
+        def search_frames(self, center, radius, **kwargs):
+            return [
+                FrameRef(
+                    provider=self.name,
+                    obs_id="obs_ep1_a",
+                    access_url="https://example.com/obs_ep1_a.fits",
+                    t_mid=Time(60000.0, format="mjd", scale="tdb"),
+                    array_id=1,
+                    band_id="arr1",
+                    release="latest",
+                ),
+                FrameRef(
+                    provider=self.name,
+                    obs_id="obs_ep1_b",
+                    access_url="https://example.com/obs_ep1_b.fits",
+                    t_mid=Time(60000.05, format="mjd", scale="tdb"),
+                    array_id=1,
+                    band_id="arr1",
+                    release="latest",
+                ),
+                FrameRef(
+                    provider=self.name,
+                    obs_id="obs_ep2_a",
+                    access_url="https://example.com/obs_ep2_a.fits",
+                    t_mid=Time(60100.0, format="mjd", scale="tdb"),
+                    array_id=1,
+                    band_id="arr1",
+                    release="latest",
+                ),
+            ]
+
+        def fetch_to_storage(self, ref, stor, **kwargs):
+            path = f"mock/{ref.obs_id}.fits"
+            stor.put_bytes(path, fits_bytes, content_type="application/fits")
+            return StoredFrame(
+                ref=ref,
+                storage_path=path,
+                sha256="0" * 64,
+                size_bytes=len(fits_bytes),
+                is_cutout=True,
+                cache_hit=False,
+            )
+
+        def describe_releases(self):
+            return []
+
+    job, _ = store.create_or_get_job(
+        task="build_cutouts",
+        queue="fast",
+        params={"ra": 133.795, "dec": -7.245, "fov_arcmin": 10.0},
+        params_hash=b"mock-cutouts-hash",
+    )
+
+    res = execute_build_cutouts(
+        job.id,
+        {"cutout_id": str(uuid4()), "ra": 133.795, "dec": -7.245, "fov_arcmin": 10.0},
+        store=store,
+        storage=storage,
+        provider=MultiCandidateProvider(),
+    )
+    frames = res["cutout_set"]["frames"]
+    # Verify exactly 1 frame per epoch (ep1 and ep2 -> 2 frames total, not 3)
+    epochs = [f["epoch"] for f in frames]
+    assert len(epochs) == len(set(epochs))
+    assert len(frames) == 2
+

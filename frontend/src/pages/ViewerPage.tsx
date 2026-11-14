@@ -168,6 +168,7 @@ export function ViewerPage() {
                 selectBoxMode={v.selectBoxMode}
                 onToggleSelectBox={v.toggleSelectBox}
                 flaggedFraction={v.frameA?.flagged_fraction}
+                frames={v.frames}
               />
             </aside>
           )}

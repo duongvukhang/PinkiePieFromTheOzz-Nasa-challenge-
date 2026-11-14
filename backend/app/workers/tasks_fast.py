@@ -284,45 +284,45 @@ def execute_build_cutouts(
         store.update_job(job_id, progress=0.20)
 
         epoch_groups = group_frames_into_epochs(frames)
-        # Select candidate frames per epoch (trying top overlapping frames per epoch, max 6 epochs)
-        flat: list[tuple[Any, Any]] = []
-        for ep, grp in epoch_groups[:6]:
-            flat.extend([(ep, ref) for ref in grp[:2]])
+        # Select candidate frames per epoch (1 frame per epoch, max 6 epochs)
         params_hex = compute_params_hash("build_cutouts", params, release).hex()[:16]
 
         out_frames: list[CutoutFrame] = []
+        used_refs: list[Any] = []
         artifact_keys: dict[str, dict[str, str]] = {}
-        total = max(len(flat), 1)
-        for idx, (ep, ref) in enumerate(flat):
-            try:
-                stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
-                fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
-                frame_seed = f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.array_id}:{ref.band_id}:{ref.mjd_tdb:.6f}:{idx}"
-                frame_uuid = uuid5(_FRAME_UUID_NS, frame_seed)
-                rendered = render_cutout_products(
-                    fits_bytes,
-                    storage,
-                    f"products/{hpx}/{params_hex}/{frame_uuid}",
-                )
-                cframe = _build_cutout_frame(cutout_id, ep, stored, rendered, frame_id=frame_uuid)
-                _register_cutout_fits(
-                    store,
-                    frame_uuid,
-                    fits_bytes,
-                    stored.storage_path,
-                    provider=ref.provider,
-                    obs_id=ref.obs_id,
-                )
-                out_frames.append(cframe)
-                artifact_keys[str(cframe.frame_id)] = {
-                    "display": str(rendered["display_key"]),
-                    "science": str(rendered["science_key"]),
-                    "fits": stored.storage_path,
-                }
-            except Exception:
-                continue
-            finally:
-                store.update_job(job_id, progress=0.20 + 0.75 * ((idx + 1) / total))
+        total_epochs = max(len(epoch_groups[:6]), 1)
+        for ep_idx, (ep, grp) in enumerate(epoch_groups[:6]):
+            for ref in grp:
+                try:
+                    stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
+                    fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
+                    frame_seed = f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.array_id}:{ref.band_id}:{ref.mjd_tdb:.6f}:{ep}"
+                    frame_uuid = uuid5(_FRAME_UUID_NS, frame_seed)
+                    rendered = render_cutout_products(
+                        fits_bytes,
+                        storage,
+                        f"products/{hpx}/{params_hex}/{frame_uuid}",
+                    )
+                    cframe = _build_cutout_frame(cutout_id, ep, stored, rendered, frame_id=frame_uuid)
+                    _register_cutout_fits(
+                        store,
+                        frame_uuid,
+                        fits_bytes,
+                        stored.storage_path,
+                        provider=ref.provider,
+                        obs_id=ref.obs_id,
+                    )
+                    out_frames.append(cframe)
+                    used_refs.append(ref)
+                    artifact_keys[str(cframe.frame_id)] = {
+                        "display": str(rendered["display_key"]),
+                        "science": str(rendered["science_key"]),
+                        "fits": stored.storage_path,
+                    }
+                    break  # Stop after first succeeding frame for this epoch (1 frame per epoch)
+                except Exception:
+                    continue
+            store.update_job(job_id, progress=0.20 + 0.75 * ((ep_idx + 1) / total_epochs))
 
         warnings: list[str] = []
         if not out_frames:
@@ -350,8 +350,12 @@ def execute_build_cutouts(
             processing_job_id=job_id,
             entity_table="processing_jobs",
             entity_id=str(job_id),
-            inputs=[{"obs_id": ref.obs_id, "release": ref.release} for _, ref in flat],
-            release_ids=sorted({ref.release for _, ref in flat}) or None,
+            inputs=[
+                {"obs_id": ref.obs_id, "release": getattr(ref, "release", release)}
+                for ref in used_refs
+            ],
+            release_ids=sorted({ref.release for ref in used_refs if getattr(ref, "release", None)})
+            or None,
             params=params,
         )
         outputs = {"cutout_set": payload, "artifacts": artifact_keys}
@@ -425,9 +429,12 @@ def execute_validate_upload(
         store.update_job(job_id, progress=0.80)
 
         if res.compatibility.valid and res.storage_path and res.sha256 and res.fits_file_metadata:
+            meta = dict(res.fits_file_metadata)
+            meta["filename"] = params.get("filename")
+            meta["obs_id"] = meta.get("obs_id") or params.get("filename") or str(fits_file_id)
             store.register_fits_file(
                 fits_file_id=fits_file_id,
-                metadata=res.fits_file_metadata,
+                metadata=meta,
                 sha256_hex=res.sha256,
                 storage_path=res.storage_path,
                 uploader_id=user_id,

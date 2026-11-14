@@ -123,10 +123,11 @@ async def search_nasa_archive(
 async def load_archive_product(
     payload: ArchiveLoadRequest,
     storage: Annotated[StorageBackend, Depends(get_storage)],
+    store: Annotated[JobStore, Depends(get_store)],
 ) -> dict[str, Any]:
     """Stream download and register an authentic NASA archive FITS into the active workspace."""
     try:
-        return await asyncio.to_thread(irsa_search_service.load_archive_product, payload, storage)
+        return await asyncio.to_thread(irsa_search_service.load_archive_product, payload, storage, store)
     except ValueError as exc:
         raise APIProblemError(status.HTTP_400_BAD_REQUEST, "Invalid Archive Request", str(exc)) from exc
 

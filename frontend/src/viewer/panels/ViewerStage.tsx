@@ -348,7 +348,7 @@ export function ViewerStage({
         <AladinBase wcs={wcs} ra={ra} dec={dec} fov={fov} enabled={hips} />
 
         <div
-          className="viewer-transform-layer absolute inset-0 pointer-events-none"
+          className="viewer-transform-layer"
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
             transformOrigin: "0 0",
@@ -357,7 +357,7 @@ export function ViewerStage({
         >
           {frameA && (
             <div
-              className="relative inline-block select-none shadow-2xl pointer-events-auto"
+              className="viewer-frame-box"
               style={{
                 width: `min(90vw, 90vh, 768px)`,
                 height: `min(90vw, 90vh, 768px)`,
@@ -381,7 +381,7 @@ export function ViewerStage({
                   src={displayUrl}
                   alt={frameA.epoch}
                   draggable={false}
-                  className="block w-full h-full object-contain select-none pointer-events-none"
+                  className="viewer-fits-img"
                   style={{ imageRendering: "pixelated" }}
                 />
               )}

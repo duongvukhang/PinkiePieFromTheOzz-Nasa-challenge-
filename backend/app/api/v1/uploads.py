@@ -23,7 +23,7 @@ from app.api.deps import (
     require_succeeded_job,
 )
 from app.schemas.common import JobStatus, ProblemDetail
-from app.schemas.fields import UploadCompatibilityReport, UploadResponse
+from app.schemas.fields import UploadCompatibilityReport, UploadedFitsSummary, UploadResponse
 from app.services.fields import extract_2d_image
 from app.services.fits_validator import get_upload_max_bytes
 from app.services.jobs import JobStore, compute_params_hash
@@ -307,6 +307,81 @@ async def get_upload_science(
         headers={
             "X-Dtype": "float32",
             "X-Shape": f"{arr.shape[0]},{arr.shape[1]}",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
+@router.get("/uploads", response_model=list[UploadedFitsSummary])
+async def list_uploads(
+    store: Annotated[JobStore, Depends(get_store)],
+    project_id: UUID | None = None,
+    user_id: Annotated[UUID | None, Depends(get_optional_user_id)] = None,
+) -> list[UploadedFitsSummary]:
+    """List active registered user uploads and archive-loaded FITS files."""
+    files = store.list_fits_files(user_id=user_id, project_id=project_id)
+    out: list[UploadedFitsSummary] = []
+    for f in files:
+        fid = f["id"]
+        obs_id = f.get("obs_id") or str(fid)
+        mjd = float(f.get("mjd_tdb_mid") or 60000.0)
+        utc = str(f.get("date_obs_utc") or "2025-01-01T00:00:00Z")
+        n1 = f.get("naxis1")
+        n2 = f.get("naxis2")
+        shape = [n2, n1] if n1 and n2 else [128, 128]
+        out.append(
+            UploadedFitsSummary(
+                fits_file_id=fid,
+                filename=f.get("filename") or obs_id,
+                obs_id=obs_id,
+                origin=f.get("origin") or "upload",
+                epoch=f.get("band_label") or obs_id,
+                mjd_tdb_mid=mjd,
+                utc_mid=utc,
+                ra_center=f.get("ra_center"),
+                dec_center=f.get("dec_center"),
+                naxis1=n1,
+                naxis2=n2,
+                wcs_header=f.get("wcs_header") or "",
+                display_url=f"/api/v1/uploads/{fid}/display.webp",
+                science_url=f"/api/v1/uploads/{fid}/science.bin",
+                fits_url=f"/api/v1/uploads/{fid}/frame.fits",
+                band_label=f.get("band_label"),
+                stretch={"vmin": 0.0, "vmax": 1000.0, "shape": shape},
+            )
+        )
+    return out
+
+
+@router.delete("/uploads/{fits_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_upload(
+    fits_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+) -> Response:
+    """Delete a registered FITS file record and its storage artifact."""
+    rec = store.get_fits_file(fits_id)
+    if rec:
+        sp = rec.get("storage_path")
+        if sp and storage.exists(sp):
+            storage.delete(sp)
+        store.delete_fits_file(fits_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/uploads/{fits_id}/frame.fits")
+async def get_upload_fits_raw(
+    fits_id: UUID,
+    store: Annotated[JobStore, Depends(get_store)],
+    storage: Annotated[StorageBackend, Depends(get_storage)],
+) -> Response:
+    """Serve raw FITS bytes for download and inspection."""
+    raw = _resolve_fits_raw(fits_id, store, storage)
+    return Response(
+        content=raw,
+        media_type="application/fits",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fits_id}.fits"',
             "Cache-Control": "public, max-age=86400",
         },
     )

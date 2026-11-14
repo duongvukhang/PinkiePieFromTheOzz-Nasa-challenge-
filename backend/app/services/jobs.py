@@ -178,6 +178,16 @@ class JobStore(WorkspaceStore, ABC):
         """Fetch persisted FITS file metadata by `fits_file_id`."""
 
     @abstractmethod
+    def list_fits_files(
+        self, user_id: UUID | None = None, project_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
+        """List persisted FITS files optionally filtered by user or project."""
+
+    @abstractmethod
+    def delete_fits_file(self, fits_file_id: UUID) -> bool:
+        """Delete persisted FITS file record by `fits_file_id`."""
+
+    @abstractmethod
     def update_job(
         self,
         job_id: UUID,
@@ -391,6 +401,22 @@ class InMemoryJobStore(InMemoryWorkspaceMixin, InMemoryObjectMixin, JobStore):
         with self._lock:
             rec = self._fits_files.get(fits_file_id)
             return dict(rec) if rec is not None else None
+
+    def list_fits_files(
+        self, user_id: UUID | None = None, project_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self._fits_files.values())
+        if user_id is not None:
+            items = [f for f in items if f.get("uploader_id") == user_id]
+        if project_id is not None:
+            items = [f for f in items if f.get("project_id") == project_id]
+        items.sort(key=lambda x: float(x.get("mjd_tdb_mid") or 0.0))
+        return [dict(f) for f in items]
+
+    def delete_fits_file(self, fits_file_id: UUID) -> bool:
+        with self._lock:
+            return self._fits_files.pop(fits_file_id, None) is not None
 
     def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
         saved: list[DetectionRead] = []
@@ -689,8 +715,10 @@ class SqlAlchemyJobStore(SqlAlchemyWorkspaceMixin, SqlAlchemyObjectMixin, JobSto
             return {
                 "id": row.id,
                 "origin": row.origin,
+                "provider": row.provider,
+                "obs_id": row.obs_id,
                 "storage_path": row.storage_path,
-                "sha256": row.sha256.hex(),
+                "sha256": row.sha256.hex() if hasattr(row.sha256, "hex") else str(row.sha256 or ""),
                 "size_bytes": row.size_bytes,
                 "band_label": row.band_label,
                 "array_id": row.array_id,
@@ -711,6 +739,61 @@ class SqlAlchemyJobStore(SqlAlchemyWorkspaceMixin, SqlAlchemyObjectMixin, JobSto
                 "header_summary": row.header_summary,
                 "validation": row.validation,
             }
+
+    def list_fits_files(
+        self, user_id: UUID | None = None, project_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
+        with self._session_factory() as session:
+            stmt = select(FitsFile)
+            if project_id is not None:
+                stmt = stmt.join(ProjectFile, ProjectFile.fits_file_id == FitsFile.id).where(
+                    ProjectFile.project_id == project_id
+                )
+            if user_id is not None:
+                stmt = stmt.where(FitsFile.uploader_id == user_id)
+            stmt = stmt.order_by(FitsFile.mjd_tdb_mid.asc().nulls_last())
+            rows = session.scalars(stmt).all()
+            return [
+                {
+                    "id": row.id,
+                    "origin": row.origin,
+                    "provider": row.provider,
+                    "obs_id": row.obs_id,
+                    "storage_path": row.storage_path,
+                    "sha256": row.sha256.hex() if hasattr(row.sha256, "hex") else str(row.sha256 or ""),
+                    "size_bytes": row.size_bytes,
+                    "band_label": row.band_label,
+                    "array_id": row.array_id,
+                    "wavelength_min_um": row.wavelength_min_um,
+                    "wavelength_max_um": row.wavelength_max_um,
+                    "date_obs_utc": row.date_obs_utc,
+                    "mjd_tdb_mid": row.mjd_tdb_mid,
+                    "exptime_s": row.exptime_s,
+                    "ra_center": row.ra_center,
+                    "dec_center": row.dec_center,
+                    "naxis1": row.naxis1,
+                    "naxis2": row.naxis2,
+                    "pixscale_arcsec": row.pixscale_arcsec,
+                    "rotation_deg": row.rotation_deg,
+                    "wcs_header": row.wcs_header,
+                    "footprint": row.footprint,
+                    "healpix9": row.healpix9,
+                    "header_summary": row.header_summary,
+                    "validation": row.validation,
+                }
+                for row in rows
+            ]
+
+    def delete_fits_file(self, fits_file_id: UUID) -> bool:
+        with self._session_factory() as session:
+            row = session.get(FitsFile, fits_file_id)
+            if row is None:
+                return False
+            for pf in session.query(ProjectFile).filter(ProjectFile.fits_file_id == fits_file_id).all():
+                session.delete(pf)
+            session.delete(row)
+            session.commit()
+            return True
 
     def save_detections(self, detections: Sequence[Mapping[str, Any]]) -> list[DetectionRead]:
         if not detections:

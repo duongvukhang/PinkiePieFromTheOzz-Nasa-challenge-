@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
-import type { CutoutFrame } from "../../api/client";
+import { api, type CutoutFrame } from "../../api/client";
 import { useViewStore } from "../state/viewStore";
 
 interface FrameStripProps {
   frames: CutoutFrame[];
   compact?: boolean;
+  onDeleteFrame?: (frameId: string) => void;
+  onAddFits?: () => void;
 }
 
 /** Formats time offset from baseline epoch t0 into human-readable hours or days. */
@@ -20,10 +22,33 @@ export function formatTimeDelta(mjd: number, mjd0: number): string {
   return `${sign}${absDays.toFixed(1)}d`;
 }
 
-export function FrameStrip({ frames, compact = false }: FrameStripProps) {
+export function FrameStrip({
+  frames,
+  compact = false,
+  onDeleteFrame,
+  onAddFits,
+}: FrameStripProps) {
   const { frame, fps, playing, op, swipe, setView } = useViewStore();
   const barRef = useRef<HTMLDivElement>(null);
   const sliderRef = useRef<HTMLInputElement>(null);
+
+  const handleDelete = (frameId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDeleteFrame) {
+      onDeleteFrame(frameId);
+    } else {
+      api.deleteUpload(frameId).catch(() => {});
+      useViewStore.getState().removeFrame(frameId);
+    }
+  };
+
+  const handleAddFits = () => {
+    if (onAddFits) {
+      onAddFits();
+    } else {
+      useViewStore.getState().setUploadModalOpen(true);
+    }
+  };
 
   const count = frames.length;
   const safeIdx = count > 0 ? ((frame % count) + count) % count : 0;
@@ -176,22 +201,41 @@ export function FrameStrip({ frames, compact = false }: FrameStripProps) {
           const dt = formatTimeDelta(f.mjd_tdb_mid, mjd0);
 
           return (
-            <button
-              key={`${f.frame_id}-${i}`}
-              type="button"
-              className="viewer-epoch-btn"
-              aria-pressed={i === safeIdx}
-              title={`Epoch ${f.epoch}: ${f.utc_mid.slice(0, 10)}, MJD ${f.mjd_tdb_mid.toFixed(2)} (${dt})`}
-              onClick={() => setView({ frame: i, playing: false })}
-            >
-              <span>{f.epoch}</span>
-              <span className="viewer-epoch-meta">{f.utc_mid.slice(0, 7)}</span>
-              <span className="viewer-epoch-delta" style={{ opacity: 0.8, fontSize: "0.68rem" }}>
-                {dt}
-              </span>
-            </button>
+            <div key={`${f.frame_id}-${i}`} className="viewer-epoch-pill-wrap">
+              <button
+                type="button"
+                className="viewer-epoch-btn"
+                aria-pressed={i === safeIdx}
+                title={`Epoch ${f.epoch}: ${f.utc_mid.slice(0, 10)}, MJD ${f.mjd_tdb_mid.toFixed(2)} (${dt})`}
+                onClick={() => setView({ frame: i, playing: false })}
+              >
+                <span>{f.epoch}</span>
+                <span className="viewer-epoch-meta">{f.utc_mid.slice(0, 7)}</span>
+                <span className="viewer-epoch-delta" style={{ opacity: 0.8, fontSize: "0.68rem" }}>
+                  {dt}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="viewer-epoch-del-btn"
+                title={`Delete epoch ${f.epoch}`}
+                aria-label={`Delete epoch ${f.epoch}`}
+                onClick={(e) => handleDelete(f.frame_id, e)}
+              >
+                ✕
+              </button>
+            </div>
           );
         })}
+        <button
+          type="button"
+          className="viewer-epoch-add-btn"
+          title="Add new FITS epoch"
+          aria-label="Add new FITS epoch"
+          onClick={handleAddFits}
+        >
+          + Add FITS
+        </button>
       </div>
 
       <p role="status" className="visually-hidden" aria-live="polite">

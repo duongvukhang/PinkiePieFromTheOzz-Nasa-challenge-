@@ -32,9 +32,23 @@ export function ViewerToolbar({
   onToggleInspector,
 }: ViewerToolbarProps) {
   const navigate = useNavigate();
-  const { target, ra, dec, fov, from, to, release, mode, setView } = useViewStore();
+  const {
+    target,
+    ra,
+    dec,
+    fov,
+    from,
+    to,
+    release,
+    mode,
+    isUploadModalOpen: storeUploadOpen,
+    setView,
+    setUploadModalOpen,
+    addFitsId,
+  } = useViewStore();
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const effectiveUploadOpen = isUploadModalOpen || storeUploadOpen;
 
   const skyMeta = ra !== undefined && dec !== undefined ? toGalacticAndEcliptic(ra, dec) : null;
   const maxFov = authenticated ? 60 : 15;
@@ -241,9 +255,15 @@ export function ViewerToolbar({
       />
 
       <UploadFitsModal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
+        isOpen={effectiveUploadOpen}
+        onClose={() => {
+          setIsUploadModalOpen(false);
+          setUploadModalOpen(false);
+        }}
         onLoadedField={({ ra: newRa, dec: newDec, fov: newFov, fitsId: newFitsId }) => {
+          if (newFitsId) {
+            addFitsId(newFitsId);
+          }
           setView({
             ra: newRa,
             dec: newDec,
@@ -252,11 +272,20 @@ export function ViewerToolbar({
             target: "",
             frame: 0,
           });
-          const qs = new URLSearchParams();
+          const qs = new URLSearchParams(window.location.search);
           qs.set("ra", newRa.toFixed(5));
           qs.set("dec", newDec.toFixed(5));
           if (newFov) qs.set("fov", String(Math.min(maxFov, Math.max(1, Math.round(newFov)))));
-          if (newFitsId) qs.set("fitsId", newFitsId);
+          if (newFitsId) {
+            qs.set("fitsId", newFitsId);
+            const curIds = (qs.get("fitsIds") ?? "").split(",").filter(Boolean);
+            if (!curIds.includes(newFitsId)) {
+              curIds.push(newFitsId);
+            }
+            if (curIds.length > 1) {
+              qs.set("fitsIds", curIds.join(","));
+            }
+          }
           navigate(`/v?${qs.toString()}`);
         }}
       />
