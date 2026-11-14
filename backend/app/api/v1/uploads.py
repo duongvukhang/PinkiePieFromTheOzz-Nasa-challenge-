@@ -24,9 +24,10 @@ from app.api.deps import (
 )
 from app.schemas.common import JobStatus, ProblemDetail
 from app.schemas.fields import UploadCompatibilityReport, UploadResponse
+from app.services.fields import extract_2d_image
 from app.services.fits_validator import get_upload_max_bytes
 from app.services.jobs import JobStore, compute_params_hash
-from app.services.storage import StorageBackend, compute_sha256
+from app.services.storage import StorageBackend, StorageError, compute_sha256
 from app.workers.celery_app import dispatch_task, is_eager_mode
 from app.workers.tasks_fast import UPLOAD_TASK_NAME, execute_validate_upload, validate_upload
 from sphx_core.timeutil import parse_user_epoch
@@ -255,15 +256,17 @@ async def get_upload_report(
 
 def _resolve_fits_raw(upload_or_fits_id: UUID, store: JobStore, storage: StorageBackend) -> bytes:
     rec = store.get_fits_file(upload_or_fits_id)
-    if rec is not None:
+    if rec is None:
+        job = store.get_upload_job(upload_or_fits_id)
+        if job and job.outputs and "report" in job.outputs:
+            fid = UUID(str(job.outputs["report"]["fits_file_id"]))
+            rec = store.get_fits_file(fid)
+    if rec is None:
+        raise APIProblemError(404, "FITS File Not Found", f"No registered FITS file found for {upload_or_fits_id}.")
+    try:
         return storage.get_bytes(rec["storage_path"], verify_checksum=False)
-    job = store.get_upload_job(upload_or_fits_id)
-    if job and job.outputs and "report" in job.outputs:
-        fid = UUID(str(job.outputs["report"]["fits_file_id"]))
-        frec = store.get_fits_file(fid)
-        if frec is not None:
-            return storage.get_bytes(frec["storage_path"], verify_checksum=False)
-    raise APIProblemError(404, "FITS File Not Found", f"No registered FITS file found for {upload_or_fits_id}.")
+    except (FileNotFoundError, StorageError) as exc:
+        raise APIProblemError(404, "FITS File Not Found", f"FITS artifact missing in storage for {upload_or_fits_id}.") from exc
 
 
 @router.get("/uploads/{upload_or_fits_id}/display.webp")
@@ -276,7 +279,6 @@ async def get_upload_display(
 ) -> Response:
     """Render and serve display WebP image for an uploaded or registered FITS file."""
     raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
-    from sphx_core.fits import extract_2d_image
     arr = extract_2d_image(raw)
     from app.services.image_renderer import image_renderer
     png_bytes = await asyncio.to_thread(image_renderer.render_to_png_bytes, arr, stretch=stretch, colormap=colormap)
@@ -298,10 +300,9 @@ async def get_upload_science(
 ) -> Response:
     """Serve raw little-endian float32 science array for an uploaded FITS file."""
     raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
-    from sphx_core.fits import extract_2d_image
-    arr = extract_2d_image(raw).astype(np.float32)
+    arr = extract_2d_image(raw)
     return Response(
-        content=arr.tobytes(),
+        content=np.asarray(arr, dtype="<f4").tobytes(),
         media_type="application/octet-stream",
         headers={
             "X-Dtype": "float32",

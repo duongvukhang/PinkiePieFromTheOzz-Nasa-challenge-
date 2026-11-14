@@ -366,3 +366,55 @@ def test_upload_security_size_caps_gzip_bomb_filename_and_status_errors(
     )
     store.update_job(failed_job.id, status="failed", error={"detail": "disk error"})
     assert client.get(f"/api/v1/uploads/{failed_uid}/report").status_code == 502
+
+
+def test_upload_display_and_science_bin(upload_env: dict[str, Any]) -> None:
+    client: TestClient = upload_env["client"]
+    store: InMemoryJobStore = upload_env["store"]
+    storage: LocalStorageBackend = upload_env["storage"]
+
+    nx, ny = 40, 50
+    fits_bytes = _make_fits(nx=nx, ny=ny)
+    res = client.post(
+        "/api/v1/uploads",
+        files={"file": ("test_display.fits", fits_bytes, "application/fits")},
+    )
+    assert res.status_code == 202
+    upload_id = res.json()["upload_id"]
+    fits_file_id = res.json()["fits_file_id"]
+
+    # 1. GET display.webp works via upload_id and fits_file_id
+    resp_disp = client.get(f"/api/v1/uploads/{upload_id}/display.webp")
+    assert resp_disp.status_code == 200
+    assert resp_disp.headers["content-type"] == "image/webp"
+    assert resp_disp.content[:4] == b"RIFF"
+
+    resp_disp_fid = client.get(f"/api/v1/uploads/{fits_file_id}/display.webp")
+    assert resp_disp_fid.status_code == 200
+
+    # 2. GET science.bin works via upload_id and fits_file_id
+    resp_sci = client.get(f"/api/v1/uploads/{upload_id}/science.bin")
+    assert resp_sci.status_code == 200
+    assert resp_sci.headers["content-type"] == "application/octet-stream"
+    assert resp_sci.headers["x-dtype"] == "float32"
+    assert resp_sci.headers["x-shape"] == f"{ny},{nx}"
+    sci_arr = np.frombuffer(resp_sci.content, dtype="<f4").reshape((ny, nx))
+    assert sci_arr.shape == (ny, nx)
+    assert np.allclose(sci_arr, 1.0)
+
+    # 3. Missing storage artifact returns 404
+    missing_fid = uuid4()
+    store.register_fits_file(
+        fits_file_id=missing_fid,
+        metadata={"obs_id": "missing"},
+        sha256_hex="0" * 64,
+        storage_path="uploads/nonexistent/missing.fits",
+    )
+    r_miss = client.get(f"/api/v1/uploads/{missing_fid}/science.bin")
+    assert r_miss.status_code == 404
+    assert r_miss.json()["title"] == "FITS File Not Found"
+
+    # 4. Unknown UUID returns 404
+    r_unk = client.get(f"/api/v1/uploads/{uuid4()}/science.bin")
+    assert r_unk.status_code == 404
+
