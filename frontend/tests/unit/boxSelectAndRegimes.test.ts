@@ -71,7 +71,7 @@ describe("Box-Scoped Selection & 2-Object Tracking Cap", () => {
     const activeEpochIndex = trajPoints.findIndex((p) => p.epoch === currentEpoch);
     expect(activeEpochIndex).toBe(1);
 
-    const segments = trajPoints.slice(1).map((pt, idx) => {
+    const segments = trajPoints.slice(1).map((_pt, idx) => {
       const segIndex = idx + 1;
       const isDrawn = !playing || segIndex <= activeEpochIndex;
       const isLeading = playing && segIndex === activeEpochIndex;
@@ -92,7 +92,7 @@ describe("Box-Scoped Selection & 2-Object Tracking Cap", () => {
     expect(useViewStore.getState().activeBox).not.toBeNull();
 
     // Re-syncing with the exact same coordinates preserves activeBox
-    store.syncFromSearch("?ra=133.795&dec=-7.245");
+    store.syncFromSearch("?ra=133.795&dec=-7.245", false);
     expect(useViewStore.getState().activeBox).toEqual({
       raMin: 133.7,
       raMax: 133.8,
@@ -101,7 +101,7 @@ describe("Box-Scoped Selection & 2-Object Tracking Cap", () => {
     });
 
     // Navigating to completely new coordinates resets activeBox
-    store.syncFromSearch("?ra=200.0&dec=30.0");
+    store.syncFromSearch("?ra=200.0&dec=30.0", false);
     expect(useViewStore.getState().activeBox).toBeNull();
   });
 

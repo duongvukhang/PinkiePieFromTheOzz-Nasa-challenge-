@@ -222,7 +222,7 @@ const DEFAULT_STATE: ViewState = {
   activeBox: null,
   isLayersOpen: false,
   isInspectorOpen: false,
-  isTimelineOpen: false,
+  isTimelineOpen: true,
 };
 
 interface ViewStore extends ViewState {

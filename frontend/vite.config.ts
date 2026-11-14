@@ -13,6 +13,13 @@ export default defineConfig(({ mode }) => {
         "/health": { target: apiTarget, changeOrigin: true },
       },
     },
+    preview: {
+      port: 4173,
+      proxy: {
+        "/api": { target: apiTarget, changeOrigin: true },
+        "/health": { target: apiTarget, changeOrigin: true },
+      },
+    },
     test: {
       environment: "jsdom",
       passWithNoTests: true,

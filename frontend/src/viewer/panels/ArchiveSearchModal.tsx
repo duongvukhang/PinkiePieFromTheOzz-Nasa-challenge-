@@ -203,7 +203,7 @@ export function ArchiveSearchModal({
     try {
       const refEpoch = epochs[0];
       const refProd =
-        (refEpoch?.products ?? []).find((p) => p.obs_id === refEpoch.selected_product_id) ??
+        (refEpoch?.products ?? []).find((p) => p.obs_id === refEpoch?.selected_product_id) ??
         (refEpoch?.products ?? [])[0];
       const refBand = refProd?.detector || refProd?.band;
       if (refBand) {

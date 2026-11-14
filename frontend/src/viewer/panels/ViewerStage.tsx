@@ -72,7 +72,7 @@ export function ViewerStage({
   onVisibilityPause,
   onSelectEpoch,
   onTrackDetection,
-  onRemoveTrack,
+  onRemoveTrack: _onRemoveTrack,
   loading,
   loadingText,
   errorMsg,

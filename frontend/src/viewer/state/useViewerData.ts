@@ -214,8 +214,11 @@ export function useViewerData(search: string, skipSecondary = false) {
           if (b) bandCounts.set(b, (bandCounts.get(b) ?? 0) + 1);
         }
         if (bandCounts.size > 1) {
-          const dominantUserBand = [...bandCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-          filteredUserFrames = userFrames.filter((uf) => !uf.band_label || uf.band_label === dominantUserBand);
+          const sorted = [...bandCounts.entries()].sort((a, b) => b[1] - a[1]);
+          const dominantUserBand = sorted[0]?.[0];
+          if (dominantUserBand) {
+            filteredUserFrames = userFrames.filter((uf) => !uf.band_label || uf.band_label === dominantUserBand);
+          }
         }
       }
       const seen = new Set<string>();
@@ -234,17 +237,19 @@ export function useViewerData(search: string, skipSecondary = false) {
     if (bands === "all" && rawCutouts.length > 0) {
       const bandCounts = new Map<string, number>();
       for (const cf of rawCutouts) {
-        const b = cf.array_id || cf.band_label || "";
+        const b = String(cf.array_id || cf.band_label || "");
         if (b) bandCounts.set(b, (bandCounts.get(b) ?? 0) + 1);
       }
       if (bandCounts.size > 0) {
-        targetBand = [...bandCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const sorted = [...bandCounts.entries()].sort((a, b) => b[1] - a[1]);
+        targetBand = sorted[0]?.[0] ?? null;
       }
     }
 
     for (const cf of rawCutouts) {
       if (excluded.has(cf.frame_id) || seenFrameIds.has(cf.frame_id)) continue;
-      if (targetBand && (cf.array_id || cf.band_label) && (cf.array_id || cf.band_label) !== targetBand) {
+      const frameBand = String(cf.array_id ?? cf.band_label ?? "");
+      if (targetBand && frameBand && frameBand !== targetBand) {
         continue;
       }
       if (!seenEpochs.has(cf.epoch.toLowerCase())) {
@@ -499,12 +504,12 @@ export function useViewerData(search: string, skipSecondary = false) {
       return gaiaList.map((g, idx) => ({
         id: idx + 1,
         fits_file_id: frameA?.frame_id || "",
-        ra: g.ra_deg,
-        dec: g.dec_deg,
+        ra: g.ra,
+        dec: g.dec,
         x_pix: null,
         y_pix: null,
-        flux_ujy: g.g_mag ? Math.pow(10, (23.9 - g.g_mag) / 2.5) : 1000,
-        mag_ab: g.g_mag,
+        flux_ujy: g.mag ? Math.pow(10, (23.9 - g.mag) / 2.5) : 1000,
+        mag_ab: g.mag,
         fwhm_arcsec: 6.2,
         flags: 0,
         real_bogus: 0.99,

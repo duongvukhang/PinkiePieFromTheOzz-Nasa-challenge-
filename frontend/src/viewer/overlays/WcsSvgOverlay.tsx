@@ -425,7 +425,8 @@ export function WcsSvgOverlay({
               return null;
             }
             const isConflict = Boolean(trackLabel && matchedTrack?.includes("CONFLICT"));
-            const isAmbiguous = Boolean((d.flags && d.flags & 4) || (d.confidence != null && d.confidence < 0.90));
+            const conf = (d as { confidence?: number }).confidence;
+            const isAmbiguous = Boolean((d.flags && d.flags & 4) || (conf != null && conf < 0.90));
             const targetColor = trackLabel === "B" ? "#f97316" : trackLabel === "A" ? "#38bdf8" : "#22c55e";
             const detStroke = isConflict
               ? "#f59e0b"

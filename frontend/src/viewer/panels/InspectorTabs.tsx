@@ -430,7 +430,8 @@ export function InspectorTabs({
                                         );
                                       });
                                       if (match) {
-                                        onRemoveTrack(match.split(":")[0]);
+                                        const label = match.split(":")[0];
+                                        if (label) onRemoveTrack(label);
                                       }
                                     }}
                                   >
