@@ -123,12 +123,42 @@ def test_api_archive_load_endpoint():
             "band": "D1",
             "ra_deg": 133.79513,
             "dec_deg": -7.24515,
+            "mjd_obs": 60555.25,
+            "fov_arcmin": 5.0,
         },
     )
     assert res.status_code == 200
     data = res.json()
     assert data["obs_id"] == "test_obs_001"
     assert "storage_key" in data
+    assert data["mjd_tdb_mid"] == 60555.25
+    first_fid = data["fits_file_id"]
+
+    # Re-loading the same archive product must deduplicate and reuse the fits_file_id
+    res2 = client.post(
+        "/api/v1/archive/load",
+        json={
+            "obs_id": "test_obs_001",
+            "source": "spherex_irsa",
+            "band": "D1",
+            "ra_deg": 133.79513,
+            "dec_deg": -7.24515,
+            "mjd_obs": 60555.25,
+        },
+    )
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["fits_file_id"] == first_fid
+    assert data2["status"] == "already_loaded"
+
+    # Listed uploads must have distinct epoch label and matching mjd
+    res3 = client.get("/api/v1/uploads")
+    assert res3.status_code == 200
+    uploads = res3.json()
+    matched = [u for u in uploads if u["fits_file_id"] == first_fid]
+    assert len(matched) == 1
+    assert matched[0]["epoch"] == "Archive test_obs_001"
+    assert matched[0]["mjd_tdb_mid"] == 60555.25
 
 
 def test_validate_url_security_rules():

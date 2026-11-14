@@ -270,7 +270,7 @@ export function ViewerToolbar({
           bands: newBands,
           source: newSource,
         }) => {
-          setView({
+          const nextView = {
             ra: newRa,
             dec: newDec,
             from: newFrom || "",
@@ -279,15 +279,10 @@ export function ViewerToolbar({
             source: newSource || "spherex_irsa",
             target: "",
             frame: 0,
-          });
-          const qs = new URLSearchParams();
-          qs.set("ra", newRa.toFixed(5));
-          qs.set("dec", newDec.toFixed(5));
-          if (newFrom) qs.set("from", newFrom);
-          if (newTo) qs.set("to", newTo);
-          if (newBands && newBands !== "all") qs.set("bands", newBands);
-          if (newSource && newSource !== "spherex_irsa") qs.set("source", newSource);
-          navigate(`/v?${qs.toString()}`);
+          };
+          setView(nextView);
+          const qs = toViewQuery({ ...useViewStore.getState(), ...nextView });
+          navigate(`/v${qs}`);
         }}
       />
 

@@ -325,7 +325,7 @@ def format_uploaded_fits(f: dict[str, Any]) -> UploadedFitsSummary:
         filename=f.get("filename") or obs_id,
         obs_id=obs_id,
         origin=f.get("origin") or "upload",
-        epoch=f.get("band_label") or obs_id,
+        epoch=f.get("epoch") or f.get("epoch_label") or f.get("band_label") or obs_id,
         mjd_tdb_mid=mjd,
         utc_mid=utc,
         ra_center=f.get("ra_center"),

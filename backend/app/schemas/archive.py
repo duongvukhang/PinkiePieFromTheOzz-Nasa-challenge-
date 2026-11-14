@@ -102,3 +102,5 @@ class ArchiveLoadRequest(BaseModel):
     band: str | None = None
     ra_deg: float | None = None
     dec_deg: float | None = None
+    mjd_obs: float | None = None
+    fov_arcmin: float = 10.0

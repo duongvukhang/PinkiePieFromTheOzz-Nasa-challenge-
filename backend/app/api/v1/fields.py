@@ -180,6 +180,7 @@ async def create_cutouts(
         "bands": sorted(payload.bands),
         "from_utc": payload.from_utc.isoformat() if payload.from_utc else None,
         "to_utc": payload.to_utc.isoformat() if payload.to_utc else None,
+        "source": payload.source,
     }
     params_hash = compute_params_hash("build_cutouts", norm_params, payload.release)
     job_params = {**norm_params, "cutout_id": str(cutout_id)}

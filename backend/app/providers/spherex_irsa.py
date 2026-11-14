@@ -239,13 +239,6 @@ def _crop_hdul_to_cutout(
     wcs = WCS(ref_hdu.header)
     if not wcs.has_celestial:
         return None
-    pix_scale_deg = float(u.Quantity(wcs.proj_plane_pixel_scales()).to_value(u.deg).mean())
-    req_px = float(size.to_value(u.deg)) / max(pix_scale_deg, 1e-9)
-    if (
-        profile.cutout_mode != "local"
-        and max(ref_hdu.data.shape) <= req_px * profile.cutout_oversize_factor
-    ):
-        return None
 
     ref_shape = ref_hdu.data.shape
     out_hdus: list[fits.hdu.base.ExtensionHDU | fits.PrimaryHDU] = []

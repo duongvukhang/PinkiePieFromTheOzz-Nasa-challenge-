@@ -272,7 +272,9 @@ def execute_build_cutouts(
         t0 = parse_utc_query(params.get("from_utc"))
         t1 = parse_utc_query(params.get("to_utc"))
 
-        prov = provider or default_registry.get("spherex_irsa")
+        prov_name = str(params.get("source") or "spherex_irsa")
+        source_key = "wise" if "wise" in prov_name else prov_name
+        prov = provider or default_registry.get(source_key) or default_registry.get("spherex_irsa")
         center = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
         hpx = healpix9_nested(ra, dec)
         try:
@@ -290,11 +292,15 @@ def execute_build_cutouts(
         out_frames: list[CutoutFrame] = []
         used_refs: list[Any] = []
         artifact_keys: dict[str, dict[str, str]] = {}
+        seen_paths: set[str] = set()
         total_epochs = max(len(epoch_groups[:6]), 1)
         for ep_idx, (ep, grp) in enumerate(epoch_groups[:6]):
             for ref in grp:
                 try:
                     stored = prov.fetch_to_storage(ref, storage, cutout=(center, fov * u.arcmin))
+                    if stored.storage_path in seen_paths:
+                        continue
+                    seen_paths.add(stored.storage_path)
                     fits_bytes = storage.get_bytes(stored.storage_path, verify_checksum=False)
                     frame_seed = f"{cutout_id}:{ref.provider}:{ref.obs_id}:{ref.array_id}:{ref.band_id}:{ref.mjd_tdb:.6f}:{ep}"
                     frame_uuid = uuid5(_FRAME_UUID_NS, frame_seed)

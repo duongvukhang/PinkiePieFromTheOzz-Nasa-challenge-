@@ -141,6 +141,7 @@ export function useViewerData(search: string, skipSecondary = false) {
         bands: bands === "all" ? ["all"] : [bands],
         from_utc: from ? `${from}T00:00:00Z` : undefined,
         to_utc: to ? `${to}T23:59:59Z` : undefined,
+        source: source || "spherex_irsa",
       });
       let status = accepted.status;
       let delay = 150;
@@ -211,19 +212,27 @@ export function useViewerData(search: string, skipSecondary = false) {
         ? []
         : rawCutouts.filter((f) => !excluded.has(f.frame_id));
 
+    const seenFrameIds = new Set<string>();
     const seenEpochs = new Set<string>();
     const combined: CutoutFrame[] = [];
 
     for (const uf of userFrames) {
-      if (excluded.has(uf.frame_id)) continue;
+      if (excluded.has(uf.frame_id) || seenFrameIds.has(uf.frame_id)) continue;
       combined.push(uf);
+      seenFrameIds.add(uf.frame_id);
       seenEpochs.add(uf.epoch.toLowerCase());
     }
 
     for (const cf of eligibleCutouts) {
-      if (excluded.has(cf.frame_id)) continue;
+      if (excluded.has(cf.frame_id) || seenFrameIds.has(cf.frame_id)) continue;
+      const isReplacedByArchive = userFrames.some(
+        (uf) => !excluded.has(uf.frame_id) && Math.abs(cf.mjd_tdb_mid - uf.mjd_tdb_mid) < 0.5,
+      );
+      if (isReplacedByArchive) continue;
+
       if (!seenEpochs.has(cf.epoch.toLowerCase())) {
         combined.push(cf);
+        seenFrameIds.add(cf.frame_id);
         seenEpochs.add(cf.epoch.toLowerCase());
       }
     }

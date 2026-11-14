@@ -1073,6 +1073,10 @@ export interface components {
             ra_deg?: number | null;
             /** Dec Deg */
             dec_deg?: number | null;
+            /** Mjd Obs */
+            mjd_obs?: number | null;
+            /** Fov Arcmin */
+            fov_arcmin?: number;
         };
         /**
          * ArchiveRecord
@@ -1664,6 +1668,8 @@ export interface components {
             from_utc?: string | null;
             /** To Utc */
             to_utc?: string | null;
+            /** Source */
+            source?: string;
         };
         /**
          * CutoutSetResponse

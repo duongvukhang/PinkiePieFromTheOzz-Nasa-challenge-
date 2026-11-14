@@ -203,6 +203,48 @@ def group_records_into_epochs(records: list[ArchiveRecord], source_name: str) ->
     return epochs
 
 
+def _crop_archive_fits(
+    raw_fits: bytes,
+    ra_deg: float | None,
+    dec_deg: float | None,
+    fov_arcmin: float = 10.0,
+) -> bytes:
+    if ra_deg is None or dec_deg is None:
+        return raw_fits
+    try:
+        from astropy.io import fits
+        from astropy.nddata import Cutout2D
+        from astropy.wcs import WCS
+
+        with fits.open(io.BytesIO(raw_fits)) as hdul:
+            ref = next((h for h in hdul if getattr(getattr(h, "data", None), "ndim", 0) == 2), None)
+            if ref is None:
+                return raw_fits
+            wcs = WCS(ref.header)
+            if not wcs.has_celestial or max(ref.data.shape) <= 256:
+                return raw_fits
+            center = SkyCoord(ra_deg * u.deg, dec_deg * u.deg, frame="icrs")
+            size = (fov_arcmin * u.arcmin, fov_arcmin * u.arcmin)
+            out_hdus: list[fits.PrimaryHDU | fits.ImageHDU] = []
+            for idx, hdu in enumerate(hdul):
+                data = getattr(hdu, "data", None)
+                if data is not None and getattr(data, "ndim", 0) == 2 and data.shape == ref.data.shape:
+                    hw = WCS(hdu.header)
+                    cut = Cutout2D(data, position=center, size=size, wcs=hw if hw.has_celestial else wcs, mode="trim")
+                    hdr = hdu.header.copy()
+                    hdr.update(cut.wcs.to_header(relax=True))
+                    cls_hdu = fits.PrimaryHDU if idx == 0 else fits.ImageHDU
+                    out_hdus.append(cls_hdu(data=cut.data.astype(data.dtype), header=hdr, name=hdu.name if idx > 0 else None))
+                else:
+                    out_hdus.append(hdu.copy())
+            buf = io.BytesIO()
+            fits.HDUList(out_hdus).writeto(buf, overwrite=True)
+            return buf.getvalue()
+    except Exception:
+        pass
+    return raw_fits
+
+
 class IRSASearchService:
     """Service querying NASA IRSA SIAv2, TAP, WISE, 2MASS, and SkyView services."""
 
@@ -619,6 +661,35 @@ class IRSASearchService:
 
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", req.obs_id)
         storage_key = f"archive/{req.source}/{safe_id}.fits"
+
+        def _out_dict(f_id: Any, m: dict[str, Any], st: str) -> dict[str, Any]:
+            return {
+                "obs_id": req.obs_id,
+                "storage_key": storage_key,
+                "status": st,
+                "source": req.source,
+                "fits_file_id": str(f_id),
+                "mjd_tdb_mid": m.get("mjd_tdb_mid"),
+                "utc_mid": m.get("date_obs_utc") or "2025-01-01T00:00:00Z",
+                "ra_center": m.get("ra_center"),
+                "dec_center": m.get("dec_center"),
+                "naxis1": m.get("naxis1") or 64,
+                "naxis2": m.get("naxis2") or 64,
+                "wcs_header": m.get("wcs_header") or "",
+                "band_label": m.get("band_label"),
+                "display_url": f"/api/v1/uploads/{f_id}/display.webp",
+                "science_url": f"/api/v1/uploads/{f_id}/science.bin",
+                "fits_url": f"/api/v1/uploads/{f_id}/frame.fits",
+            }
+
+        if store is not None:
+            existing = next(
+                (f for f in store.list_fits_files() if f.get("storage_path") == storage_key or (f.get("provider") == req.source and f.get("obs_id") == req.obs_id)),
+                None,
+            )
+            if existing is not None and storage.exists(storage_key):
+                return _out_dict(existing["id"], existing, "already_loaded")
+
         content: bytes | None = None
         status = "ready_for_cutout"
 
@@ -635,7 +706,6 @@ class IRSASearchService:
             if not local_path.is_file():
                 raise ValueError(f"Sample file not found: {local_path}")
             content = local_path.read_bytes()
-            storage.put_bytes(storage_key, content, content_type="application/fits")
             status = "loaded_sample"
 
         # If access URL provided, stream download with size cap and re-validate redirects
@@ -657,24 +727,28 @@ class IRSASearchService:
                             downloaded = b"".join(chunks)
                             if downloaded.startswith(b"SIMPLE"):
                                 content = downloaded
-                                storage.put_bytes(storage_key, content, content_type="application/fits")
                                 status = "loaded_live"
             except ValueError:
                 raise
             except Exception:
                 pass
 
+        if content is not None and status != "already_loaded":
+            content = _crop_archive_fits(content, req.ra_deg, req.dec_deg, req.fov_arcmin)
+            storage.put_bytes(storage_key, content, content_type="application/fits")
+
         if content is None:
             # Fallback to authentic synthetic cutout matching requested coordinates & band
             from app.services.synthetic_fits import generate_synthetic_cutout
 
             seed = abs(hash(req.obs_id)) % 100000
+            mjd_val = float(req.mjd_obs) if req.mjd_obs is not None else 60000.0
             syn = generate_synthetic_cutout(
                 seed=seed,
                 sources=[],
                 ra_center_deg=float(req.ra_deg or 133.79513),
                 dec_center_deg=float(req.dec_deg or -7.24515),
-                mjd_tdb_mid=60000.0,
+                mjd_tdb_mid=mjd_val,
                 band_id="B1",
             )
             content = syn.fits_bytes
@@ -689,10 +763,11 @@ class IRSASearchService:
         meta["obs_id"] = req.obs_id
         meta["filename"] = f"{safe_id}.fits"
         meta["size_bytes"] = len(content)
-        meta["band_label"] = req.band or meta.get("band_label") or "Archive"
+        meta["epoch"] = f"Archive {req.obs_id}"
+        meta["band_label"] = req.band or f"Archive {req.obs_id}"
         meta["ra_center"] = meta.get("ra_center") or req.ra_deg
         meta["dec_center"] = meta.get("dec_center") or req.dec_deg
-        meta["mjd_tdb_mid"] = meta.get("mjd_tdb_mid") or 60000.0
+        meta["mjd_tdb_mid"] = float(req.mjd_obs) if req.mjd_obs is not None else meta.get("mjd_tdb_mid") or 60000.0
 
         if store is not None:
             store.register_fits_file(
@@ -702,24 +777,7 @@ class IRSASearchService:
                 storage_path=storage_key,
             )
 
-        return {
-            "obs_id": req.obs_id,
-            "storage_key": storage_key,
-            "status": status,
-            "source": req.source,
-            "fits_file_id": str(fid),
-            "mjd_tdb_mid": meta.get("mjd_tdb_mid"),
-            "utc_mid": meta.get("date_obs_utc") or "2025-01-01T00:00:00Z",
-            "ra_center": meta.get("ra_center"),
-            "dec_center": meta.get("dec_center"),
-            "naxis1": meta.get("naxis1") or 64,
-            "naxis2": meta.get("naxis2") or 64,
-            "wcs_header": meta.get("wcs_header") or "",
-            "band_label": meta.get("band_label"),
-            "display_url": f"/api/v1/uploads/{fid}/display.webp",
-            "science_url": f"/api/v1/uploads/{fid}/science.bin",
-            "fits_url": f"/api/v1/uploads/{fid}/frame.fits",
-        }
+        return _out_dict(fid, meta, status)
 
 
 irsa_search_service = IRSASearchService()

@@ -7,6 +7,7 @@ import {
   type ArchiveSourceId,
   type ExampleTargetSummary,
   type ObservationEpoch,
+  type EpochProduct,
 } from "../../api/client";
 
 export interface ArchiveSearchApplyParams {
@@ -72,6 +73,8 @@ export function ArchiveSearchModal({
   const [band, setBand] = useState("ALL");
 
   const [loading, setLoading] = useState(false);
+  const [loadingEpoch, setLoadingEpoch] = useState<string | null>(null);
+  const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<ArchiveSearchResponse | null>(null);
 
@@ -160,6 +163,7 @@ export function ArchiveSearchModal({
       (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ??
       (ep.products ?? [])[0];
     if (activeProd) {
+      setLoadingEpoch(ep.epoch_id);
       try {
         const loaded = await api.loadArchiveProduct({
           obs_id: activeProd.obs_id,
@@ -168,12 +172,16 @@ export function ArchiveSearchModal({
           band: activeProd.band || undefined,
           ra_deg: raNum,
           dec_deg: decNum,
+          mjd_obs: ep.mjd_obs ?? undefined,
+          fov_arcmin: useViewStore.getState().fov || 10.0,
         });
         if (loaded?.fits_file_id) {
           useViewStore.getState().addFitsId(loaded.fits_file_id);
         }
       } catch (err) {
         console.warn("Failed to load archive product:", err);
+      } finally {
+        setLoadingEpoch(null);
       }
     }
 
@@ -191,28 +199,40 @@ export function ArchiveSearchModal({
   const handleLoadAllInterval = async () => {
     const raNum = Number.parseFloat(ra);
     const decNum = Number.parseFloat(dec);
+    const fovArcmin = useViewStore.getState().fov || 10.0;
+    const epochs = searchResult?.epochs ?? [];
 
-    for (const ep of searchResult?.epochs ?? []) {
-      const activeProd =
-        (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ??
-        (ep.products ?? [])[0];
-      if (activeProd) {
-        try {
-          const loaded = await api.loadArchiveProduct({
-            obs_id: activeProd.obs_id,
-            access_url: activeProd.access_url || undefined,
+    setLoadingAll(true);
+    try {
+      const prodsToLoad = epochs
+        .map((ep) => ({
+          prod: (ep.products ?? []).find((p) => p.obs_id === ep.selected_product_id) ?? (ep.products ?? [])[0],
+          mjd_obs: ep.mjd_obs,
+        }))
+        .filter((item): item is { prod: EpochProduct; mjd_obs: number | null | undefined } => Boolean(item.prod));
+
+      const results = await Promise.allSettled(
+        prodsToLoad.map(({ prod, mjd_obs }) =>
+          api.loadArchiveProduct({
+            obs_id: prod.obs_id,
+            access_url: prod.access_url || undefined,
             source,
-            band: activeProd.band || undefined,
+            band: prod.band || undefined,
             ra_deg: raNum,
             dec_deg: decNum,
-          });
-          if (loaded?.fits_file_id) {
-            useViewStore.getState().addFitsId(loaded.fits_file_id);
-          }
-        } catch {
-          // ignore individual failed product
+            mjd_obs: mjd_obs ?? undefined,
+            fov_arcmin: fovArcmin,
+          }),
+        ),
+      );
+
+      for (const res of results) {
+        if (res.status === "fulfilled" && res.value?.fits_file_id) {
+          useViewStore.getState().addFitsId(res.value.fits_file_id);
         }
       }
+    } finally {
+      setLoadingAll(false);
     }
 
     onApplyInterval({
@@ -485,9 +505,10 @@ export function ArchiveSearchModal({
                     type="button"
                     className="viewer-btn viewer-btn-primary"
                     style={{ fontSize: "0.75rem", padding: "4px 10px" }}
+                    disabled={Boolean(loadingEpoch || loadingAll)}
                     onClick={handleLoadAllInterval}
                   >
-                    Load All in Interval →
+                    {loadingAll ? "Loading All FITS…" : "Load All in Interval →"}
                   </button>
                 )}
               </div>
@@ -537,9 +558,10 @@ export function ArchiveSearchModal({
                         type="button"
                         className="viewer-btn"
                         style={{ fontSize: "0.75rem", minBlockSize: "28px" }}
+                        disabled={Boolean(loadingEpoch || loadingAll)}
                         onClick={() => handleLoadEpoch(ep)}
                       >
-                        Load Epoch
+                        {loadingEpoch === ep.epoch_id ? "Loading FITS…" : "Load Epoch"}
                       </button>
                     </div>
                   );

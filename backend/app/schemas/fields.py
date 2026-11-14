@@ -62,6 +62,7 @@ class CutoutRequest(BaseModel):
     bands: list[str] = Field(default_factory=lambda: ["all"])
     from_utc: datetime | None = None
     to_utc: datetime | None = None
+    source: str = "spherex_irsa"
 
 
 class CutoutAcceptedResponse(JobAcceptedResponse):
