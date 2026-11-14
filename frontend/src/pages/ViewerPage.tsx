@@ -201,6 +201,7 @@ export function ViewerPage() {
                 detections={v.detections}
                 tracks={v.track}
                 onPickSuggestion={v.onTrackSuggestion}
+                onTrackDetection={v.onTrackDetection}
                 onOverrideAssociation={v.overrideAssociation}
                 onRemoveTrack={v.removeTrack}
                 onEphemerisResult={v.setEphemerisResult}

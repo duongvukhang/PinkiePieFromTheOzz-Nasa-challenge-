@@ -7,6 +7,8 @@ export type ColormapMode = "gray" | "sepia" | "viridis";
 export type CatalogName = "gaia" | "catwise";
 export type InspectorTab = "spectrum" | "flags" | "object" | "tracks" | "layers";
 
+export const MAX_TRACKED_OBJECTS = 2;
+
 export interface ViewState {
   target: string;
   ra?: number;
@@ -38,6 +40,7 @@ export interface ViewState {
   swipe: number;
   inspectorTab: InspectorTab;
   selectBoxMode: boolean;
+  activeBox?: { raMin: number; raMax: number; decMin: number; decMax: number } | null;
   isLayersOpen: boolean;
   isInspectorOpen: boolean;
   isTimelineOpen: boolean;
@@ -216,6 +219,7 @@ const DEFAULT_STATE: ViewState = {
   swipe: 0.5,
   inspectorTab: "spectrum",
   selectBoxMode: false,
+  activeBox: null,
   isLayersOpen: false,
   isInspectorOpen: false,
   isTimelineOpen: false,
@@ -226,6 +230,7 @@ interface ViewStore extends ViewState {
   setView: (patch: Partial<ViewState>, syncUrl?: boolean) => void;
   toggleOverlay: (cat: CatalogName) => void;
   toggleSelectBox: () => void;
+  setActiveBox: (box: { raMin: number; raMax: number; decMin: number; decMax: number } | null) => void;
   toggleLayers: () => void;
   toggleInspector: () => void;
   toggleTimeline: () => void;
@@ -285,6 +290,7 @@ export const useViewStore = create<ViewStore>((set) => ({
       return next;
     }),
   toggleSelectBox: () => set((prev) => ({ selectBoxMode: !prev.selectBoxMode })),
+  setActiveBox: (box) => set(() => ({ activeBox: box })),
   toggleLayers: () => set((prev) => ({ isLayersOpen: !prev.isLayersOpen })),
   toggleInspector: () => set((prev) => ({ isInspectorOpen: !prev.isInspectorOpen })),
   toggleTimeline: () => set((prev) => ({ isTimelineOpen: !prev.isTimelineOpen })),

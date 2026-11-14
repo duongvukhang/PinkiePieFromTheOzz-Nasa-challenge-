@@ -7,6 +7,7 @@ import type {
 } from "../../api/client";
 import type { WcsParams } from "../aladin/wcs";
 import { pixelToSky, skyToPixel } from "../aladin/wcs";
+import { useViewStore } from "../state/viewStore";
 export interface SelectedSourceData {
   id: string;
   label: string;
@@ -94,6 +95,20 @@ export function WcsSvgOverlay({
 }: WcsSvgOverlayProps) {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurr, setDragCurr] = useState<{ x: number; y: number } | null>(null);
+  const { activeBox, setActiveBox } = useViewStore();
+
+  const isInActiveBox = (ra: number, dec: number) => {
+    if (!activeBox) return false;
+    const inRa =
+      activeBox.raMin <= activeBox.raMax
+        ? ra >= activeBox.raMin && ra <= activeBox.raMax
+        : ra >= activeBox.raMin || ra <= activeBox.raMax;
+    const inDec =
+      activeBox.decMin <= activeBox.decMax
+        ? dec >= activeBox.decMin && dec <= activeBox.decMax
+        : dec >= activeBox.decMax && dec <= activeBox.decMin;
+    return inRa && inDec;
+  };
 
   const pxScale = wcs.naxis1 / 128;
   const toSvg = (e: PointerEvent<SVGSVGElement>) => {
@@ -243,6 +258,7 @@ export function WcsSvgOverlay({
                 raMin <= raMax ? 0.5 * (raMin + raMax) : (0.5 * (raMin + raMax + 360.0)) % 360.0;
               onSelectCoord(midRa, 0.5 * (decMin + decMax));
             }
+            setActiveBox({ raMin, raMax, decMin, decMax });
           }
           setDragStart(null);
           setDragCurr(null);
@@ -387,8 +403,12 @@ export function WcsSvgOverlay({
             });
             const trackLabel = matchedTrack ? matchedTrack.split(":")[0] : null;
             const isConfirmed = Boolean(trackLabel);
+            const inBox = isInActiveBox(d.ra, d.dec);
+            if (!isSelected && !isConfirmed && !inBox) {
+              return null;
+            }
             const isConflict = Boolean(trackLabel && matchedTrack?.includes("CONFLICT"));
-            const isAmbiguous = Boolean(d.flags && d.flags & 4);
+            const isAmbiguous = Boolean((d.flags && d.flags & 4) || (d.confidence != null && d.confidence < 0.90));
             const detStroke = isConflict
               ? "#f59e0b"
               : isAmbiguous
@@ -431,6 +451,18 @@ export function WcsSvgOverlay({
                   strokeDasharray={isAmbiguous ? "3,2" : undefined}
                   vectorEffect="non-scaling-stroke"
                 />
+                {isAmbiguous && (
+                  <text
+                    x={screenX + half + 2 * pxScale}
+                    y={screenY + 2.5 * pxScale}
+                    fill="#fbbf24"
+                    fontSize={6 * pxScale}
+                    fontWeight="bold"
+                    aria-label="Uncertain match"
+                  >
+                    ⚠
+                  </text>
+                )}
                 {showUncertainty && (
                   <circle
                     cx={screenX}
@@ -850,18 +882,65 @@ export function WcsSvgOverlay({
         })}
 
         {dragStart && dragCurr && (
-          <rect
-            className="selection-box"
-            x={Math.min(dragStart.x, dragCurr.x)}
-            y={Math.min(dragStart.y, dragCurr.y)}
-            width={Math.abs(dragCurr.x - dragStart.x)}
-            height={Math.abs(dragCurr.y - dragStart.y)}
-            fill="rgba(46, 125, 166, 0.25)"
-            stroke="var(--oi-sky)"
-            strokeWidth={1.2 * pxScale}
-            strokeDasharray={`${3 * pxScale} ${2 * pxScale}`}
-          />
+          <g className="selection-box-group">
+            <rect
+              className="selection-box-outer"
+              x={Math.min(dragStart.x, dragCurr.x)}
+              y={Math.min(dragStart.y, dragCurr.y)}
+              width={Math.abs(dragCurr.x - dragStart.x)}
+              height={Math.abs(dragCurr.y - dragStart.y)}
+              fill="rgba(255, 255, 255, 0.04)"
+              stroke="#ffffff"
+              strokeWidth={1 * pxScale}
+            />
+            <rect
+              className="selection-box-inner"
+              x={Math.min(dragStart.x, dragCurr.x) + 1 * pxScale}
+              y={Math.min(dragStart.y, dragCurr.y) + 1 * pxScale}
+              width={Math.max(0, Math.abs(dragCurr.x - dragStart.x) - 2 * pxScale)}
+              height={Math.max(0, Math.abs(dragCurr.y - dragStart.y) - 2 * pxScale)}
+              fill="none"
+              stroke="#000000"
+              strokeWidth={1 * pxScale}
+            />
+          </g>
         )}
+
+        {!dragStart && activeBox && (() => {
+          const p1 = skyToPixel(activeBox.raMin, activeBox.decMin, wcs);
+          const p2 = skyToPixel(activeBox.raMax, activeBox.decMax, wcs);
+          const bx = Math.min(p1.x, p2.x);
+          const by = Math.min(p1.y, p2.y);
+          const bw = Math.abs(p2.x - p1.x);
+          const bh = Math.abs(p2.y - p1.y);
+          if (bw < 1 || bh < 1) return null;
+          return (
+            <g className="active-selection-box-group">
+              <rect
+                className="selection-box-outer"
+                x={bx}
+                y={by}
+                width={bw}
+                height={bh}
+                fill="rgba(255, 255, 255, 0.03)"
+                stroke="#ffffff"
+                strokeWidth={1 * pxScale}
+                strokeDasharray={`${3 * pxScale} ${2 * pxScale}`}
+              />
+              <rect
+                className="selection-box-inner"
+                x={bx + 1 * pxScale}
+                y={by + 1 * pxScale}
+                width={Math.max(0, bw - 2 * pxScale)}
+                height={Math.max(0, bh - 2 * pxScale)}
+                fill="none"
+                stroke="#000000"
+                strokeWidth={1 * pxScale}
+                strokeDasharray={`${3 * pxScale} ${2 * pxScale}`}
+              />
+            </g>
+          );
+        })()}
       </svg>
 
       {/* Accessible mirror table for screen readers (FRONTEND.md §5) */}

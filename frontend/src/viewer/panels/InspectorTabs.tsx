@@ -9,7 +9,7 @@ import {
   type SuggestionItem,
   type TrackedObjectDetailResponse,
 } from "../../api/client";
-import { useViewStore, type InspectorTab } from "../state/viewStore";
+import { useViewStore, MAX_TRACKED_OBJECTS, type InspectorTab } from "../state/viewStore";
 import { nextTrackLabel } from "../state/useViewerData";
 import { FlagsMetaPanel } from "./FlagsMetaPanel";
 import { SpectrumChart } from "./SpectrumChart";
@@ -27,6 +27,7 @@ interface InspectorTabsProps {
   detections: DetectionRead[];
   tracks?: string[];
   onPickSuggestion: (s: SuggestionItem) => void;
+  onTrackDetection?: (d: DetectionRead) => void;
   onOverrideAssociation?: (
     epoch: string,
     action: "accept" | "reject" | "reassign",
@@ -54,11 +55,13 @@ export function InspectorTabs({
   detections,
   tracks = [],
   onPickSuggestion,
+  onTrackDetection,
   onOverrideAssociation,
   onRemoveTrack,
   onEphemerisResult,
 }: InspectorTabsProps) {
-  const { inspectorTab, target, setView } = useViewStore();
+  const { inspectorTab, target, setView, activeBox, setActiveBox } = useViewStore();
+  const [boxSortKey, setBoxSortKey] = useState<"flux" | "snr" | "dist" | "pm">("flux");
   const activeTab: InspectorTab =
     inspectorTab === "tracks" || inspectorTab === "object"
       ? "object"
@@ -271,6 +274,183 @@ export function InspectorTabs({
               </div>
             </div>
           )}
+
+          {/* Box Candidate Selection Panel with Sorting & 2-Object Tracking Cap */}
+          {activeBox && (() => {
+            const inRa = (ra: number) =>
+              activeBox.raMin <= activeBox.raMax
+                ? ra >= activeBox.raMin && ra <= activeBox.raMax
+                : ra >= activeBox.raMin || ra <= activeBox.raMax;
+            const inDec = (dec: number) =>
+              activeBox.decMin <= activeBox.decMax
+                ? dec >= activeBox.decMin && dec <= activeBox.decMax
+                : dec >= activeBox.decMax && dec <= activeBox.decMin;
+
+            const boxCenterRa =
+              activeBox.raMin <= activeBox.raMax
+                ? 0.5 * (activeBox.raMin + activeBox.raMax)
+                : (0.5 * (activeBox.raMin + activeBox.raMax + 360.0)) % 360.0;
+            const boxCenterDec = 0.5 * (activeBox.decMin + activeBox.decMax);
+
+            const inBoxDets = (detections || []).filter((d) => inRa(d.ra) && inDec(d.dec));
+            const sortedBoxDets = [...inBoxDets].sort((a, b) => {
+              if (boxSortKey === "flux") return (b.flux_ujy ?? 0) - (a.flux_ujy ?? 0);
+              if (boxSortKey === "snr") return (b.snr ?? 0) - (a.snr ?? 0);
+              if (boxSortKey === "dist") {
+                const da = Math.hypot(a.ra - boxCenterRa, a.dec - boxCenterDec);
+                const db = Math.hypot(b.ra - boxCenterRa, b.dec - boxCenterDec);
+                return da - db;
+              }
+              return 0;
+            });
+
+            return (
+              <div
+                className="box-selection-panel"
+                style={{
+                  marginTop: "var(--space-3)",
+                  marginBottom: "var(--space-3)",
+                  padding: "10px",
+                  background: "rgba(255,255,255,0.03)",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "8px",
+                  }}
+                >
+                  <h3 className="viewer-sec-title" style={{ margin: 0 }}>
+                    Objects in Box ({inBoxDets.length})
+                  </h3>
+                  <button
+                    type="button"
+                    className="viewer-btn"
+                    style={{ fontSize: "0.75rem", padding: "2px 8px" }}
+                    onClick={() => setActiveBox(null)}
+                  >
+                    Clear Box
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    marginBottom: "10px",
+                  }}
+                >
+                  <label
+                    htmlFor="box-sort-select"
+                    className="viewer-label"
+                    style={{ fontSize: "0.75rem" }}
+                  >
+                    Sort:
+                  </label>
+                  <select
+                    id="box-sort-select"
+                    className="viewer-input"
+                    style={{ fontSize: "0.75rem", padding: "2px 6px" }}
+                    value={boxSortKey}
+                    onChange={(e) => setBoxSortKey(e.target.value as any)}
+                  >
+                    <option value="flux">Highest Flux / Brightness</option>
+                    <option value="snr">Highest S/N</option>
+                    <option value="dist">Closest to Box Center</option>
+                    <option value="pm" disabled={!objectDetail?.motion_fit}>
+                      Proper-Motion Significance (requires trajectory fit)
+                    </option>
+                  </select>
+                </div>
+
+                {sortedBoxDets.length > 0 ? (
+                  <ul className="suggestion-list" style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                    {sortedBoxDets.map((d) => {
+                      const isTracked = tracks.some((t) => {
+                        const [, coords] = t.split(":");
+                        const [r, dec] = (coords ?? "").split(",").map(Number);
+                        return (
+                          r != null &&
+                          dec != null &&
+                          Math.abs(r - d.ra) < 0.001 &&
+                          Math.abs(dec - d.dec) < 0.001
+                        );
+                      });
+                      const capReached = tracks.length >= MAX_TRACKED_OBJECTS;
+
+                      return (
+                        <li
+                          key={d.id}
+                          className="suggestion-card"
+                          style={{ marginBottom: "6px", padding: "8px" }}
+                        >
+                          <div className="suggestion-head">
+                            <span style={{ fontSize: "0.8rem" }}>
+                              <strong>Det #{d.id}</strong> · {d.ra.toFixed(4)}°, {d.dec.toFixed(4)}°
+                            </span>
+                            <span className="viewer-chip" style={{ fontSize: "0.7rem" }}>
+                              SNR {d.snr != null ? d.snr.toFixed(1) : "—"}
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--text-muted)",
+                              marginTop: "4px",
+                            }}
+                          >
+                            Flux: {d.flux_ujy != null ? `${d.flux_ujy.toFixed(1)} µJy` : "—"}
+                          </div>
+                          <div style={{ marginTop: "6px" }}>
+                            {isTracked ? (
+                              <span className="viewer-chip" style={{ color: "var(--oi-green)" }}>
+                                Tracked
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="viewer-btn viewer-btn-primary"
+                                style={{ fontSize: "0.75rem", padding: "3px 8px" }}
+                                disabled={capReached}
+                                title={
+                                  capReached
+                                    ? "Maximum 2 objects can be tracked concurrently. Untrack an existing object first."
+                                    : undefined
+                                }
+                                onClick={() => {
+                                  if (onTrackDetection) {
+                                    onTrackDetection(d);
+                                  } else {
+                                    const lbl = nextTrackLabel(tracks);
+                                    useViewStore.getState().addTrack(lbl, d.ra, d.dec);
+                                    useViewStore.getState().setView({
+                                      obj: String(d.id),
+                                      inspectorTab: "object",
+                                    });
+                                  }
+                                }}
+                              >
+                                {capReached ? "Cap Reached (Max 2)" : `Track ${nextTrackLabel(tracks)}`}
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="viewer-muted" style={{ fontSize: "0.8rem" }}>
+                    No detections inside selected box area.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {objectDetail ? (
             <div className="object-dossier">
@@ -674,9 +854,17 @@ export function InspectorTabs({
                 <button
                   type="button"
                   className="viewer-btn viewer-btn-primary"
+                  disabled={tracks.length >= MAX_TRACKED_OBJECTS}
+                  title={
+                    tracks.length >= MAX_TRACKED_OBJECTS
+                      ? "Maximum 2 objects can be tracked concurrently. Untrack an existing object first."
+                      : undefined
+                  }
                   onClick={() => onPickSuggestion(s)}
                 >
-                  Track {nextTrackLabel(tracks)}
+                  {tracks.length >= MAX_TRACKED_OBJECTS
+                    ? "Cap Reached (Max 2)"
+                    : `Track ${nextTrackLabel(tracks)}`}
                 </button>
               </li>
             ))}

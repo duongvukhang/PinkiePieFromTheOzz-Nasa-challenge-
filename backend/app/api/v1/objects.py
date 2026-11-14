@@ -76,6 +76,7 @@ from sphx_core.orbits import predict_ephemeris
 _ALLOWED_MOTION_MODELS = frozenset(
     {"static", "linear", "astrometric5", "astrometric5_prior", "keplerian", "shift_stack"}
 )
+MAX_TRACKED_OBJECTS = 2
 
 router = APIRouter()
 _ANALYSIS_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -493,18 +494,27 @@ async def select_project_objects(
     if payload.mode == "box":
         if payload.box is None:
             raise APIProblemError(422, "Missing Sky Box", "box is required when mode='box'.")
-        b = payload.box
-        in_box = [
-            d
-            for d in filtered_dets
-            if in_sky_box(d.ra, d.dec, b.ra_min, b.ra_max, b.dec_min, b.dec_max)
-        ]
-        clean_in_box = [
-            d for d in in_box if not d.is_difference and not (d.flags & HARD_BAD_MASK)
-        ] or in_box
-        selected_dets = (
-            clean_in_box if payload.epoch is not None else _cluster_box_detections(clean_in_box)
-        )
+        if payload.detection_ids is not None:
+            selected_dets = _resolve_detection_ids(payload.detection_ids[:MAX_TRACKED_OBJECTS], det_by_id)
+        else:
+            b = payload.box
+            in_box = [
+                d
+                for d in filtered_dets
+                if in_sky_box(d.ra, d.dec, b.ra_min, b.ra_max, b.dec_min, b.dec_max)
+            ]
+            clean_in_box = [
+                d for d in in_box if not d.is_difference and not (d.flags & HARD_BAD_MASK)
+            ] or in_box
+            selected_dets = (
+                clean_in_box if payload.epoch is not None else _cluster_box_detections(clean_in_box)
+            )
+            if len(selected_dets) > MAX_TRACKED_OBJECTS:
+                selected_dets = sorted(
+                    selected_dets,
+                    key=lambda d: (float(d.flux_ujy or 0.0), float(d.snr or 0.0)),
+                    reverse=True,
+                )[:MAX_TRACKED_OBJECTS]
     elif payload.mode == "suggestion":
         if payload.detection_ids is not None:
             selected_dets = _resolve_detection_ids(payload.detection_ids, det_by_id)
@@ -589,6 +599,8 @@ async def select_project_objects(
         )
     if manual_seed is not None:
         candidates.append(manual_seed)
+    if len(candidates) > MAX_TRACKED_OBJECTS:
+        candidates = candidates[:MAX_TRACKED_OBJECTS]
 
     try:
         summaries = store.select_tracked_objects(

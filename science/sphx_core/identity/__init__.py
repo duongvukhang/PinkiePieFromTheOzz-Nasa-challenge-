@@ -50,6 +50,89 @@ _BIG_COST = 1e6
 _REF_PATH = Path(__file__).resolve().parents[3] / "tests" / "science" / "reference_values.json"
 _OPTICAL_BANDS = frozenset({"B1", "B2", "B3"})
 _IR_RED_BANDS = frozenset({"B5", "B6"})
+MAX_TRACKED_OBJECTS = 2
+REGIME_THRESHOLD_LAMBDA = 0.05
+
+
+def compute_annulus_density(
+    detections: Sequence[EpochDetection | Any],
+    center_ra: float,
+    center_dec: float,
+    *,
+    r_in_arcsec: float = 15.0,
+    r_out_arcsec: float = 180.0,
+) -> float:
+    """Compute local clutter density rho [arcsec^-2] in an annulus around center (r_in <= r <= r_out)."""
+    area_as2 = math.pi * max(r_out_arcsec**2 - r_in_arcsec**2, 1.0)
+    n_match = 0
+    for d in detections:
+        ra = getattr(d, "ra_deg", getattr(d, "ra", None))
+        dec = getattr(d, "dec_deg", getattr(d, "dec", None))
+        flags = getattr(d, "flags", 0)
+        if ra is None or dec is None or (flags & HARD_BAD_MASK):
+            continue
+        xi, eta = sky_to_tangent_arcsec(ra, dec, center_ra, center_dec)
+        if r_in_arcsec <= math.hypot(float(xi), float(eta)) <= r_out_arcsec:
+            n_match += 1
+    if n_match == 0:
+        return 1e-4
+    return max(1e-5, min(0.05, n_match / area_as2))
+
+
+def compute_confusion_parameters(
+    rho_annulus: float,
+    delta_t_yr: float,
+    *,
+    mu_max_arcsec_yr: float = 25.0,
+    sigma_mu_arcsec_yr: float = 0.15,
+) -> tuple[float, float, str]:
+    """Compute prior confusion Lambda0 (regime choice) and post-initiation Lambda1 (confidence)."""
+    dt = max(abs(delta_t_yr), 1e-4)
+    gate_0_as = mu_max_arcsec_yr * dt
+    lambda_0 = float(rho_annulus * math.pi * (gate_0_as**2))
+    gate_1_as = max(sigma_mu_arcsec_yr * dt, 0.5)
+    lambda_1 = float(rho_annulus * math.pi * (gate_1_as**2))
+    regime = "REGIME_A" if lambda_0 < REGIME_THRESHOLD_LAMBDA else "REGIME_B"
+    return lambda_0, lambda_1, regime
+
+
+def compute_differential_astrometry_offset(
+    curr_dets: Sequence[EpochDetection | Any],
+    ref_dets: Sequence[EpochDetection | Any],
+    center_ra: float,
+    center_dec: float,
+    *,
+    max_radius_arcsec: float = 120.0,
+    max_drift_arcsec: float = 0.50,
+) -> tuple[float, float, int]:
+    """Compute frame common-mode registration offset delta_reg (xi, eta) [arcsec] from static reference stars."""
+    offsets_xi: list[float] = []
+    offsets_eta: list[float] = []
+    for rd in ref_dets:
+        r_ra = getattr(rd, "ra_deg", getattr(rd, "ra", None))
+        r_dec = getattr(rd, "dec_deg", getattr(rd, "dec", None))
+        if r_ra is None or r_dec is None or (getattr(rd, "flags", 0) & HARD_BAD_MASK):
+            continue
+        xi_0, eta_0 = sky_to_tangent_arcsec(r_ra, r_dec, center_ra, center_dec)
+        if math.hypot(float(xi_0), float(eta_0)) > max_radius_arcsec:
+            continue
+        best_cd, best_dr = None, max_drift_arcsec
+        for cd in curr_dets:
+            c_ra = getattr(cd, "ra_deg", getattr(cd, "ra", None))
+            c_dec = getattr(cd, "dec_deg", getattr(cd, "dec", None))
+            if c_ra is None or c_dec is None or (getattr(cd, "flags", 0) & HARD_BAD_MASK):
+                continue
+            xi_c, eta_c = sky_to_tangent_arcsec(c_ra, c_dec, center_ra, center_dec)
+            dr = math.hypot(float(xi_c) - float(xi_0), float(eta_c) - float(eta_0))
+            if dr < best_dr:
+                best_dr, best_cd = dr, (float(xi_c), float(eta_c))
+        if best_cd is not None:
+            offsets_xi.append(best_cd[0] - float(xi_0))
+            offsets_eta.append(best_cd[1] - float(eta_0))
+
+    if not offsets_xi:
+        return 0.0, 0.0, 0
+    return float(np.median(offsets_xi)), float(np.median(offsets_eta)), len(offsets_xi)
 
 
 @dataclass(frozen=True)
@@ -192,6 +275,9 @@ class TrackedSource:
     merged_into: str | None = None
     forced_measurements: list[EpochDetection] = field(default_factory=list)
     user_locked_pairs: dict[int, tuple[str, str | None]] = field(default_factory=dict)
+    regime: str | None = None
+    lambda_0: float | None = None
+    lambda_1: float | None = None
 
     @property
     def notes_text(self) -> str:
@@ -1122,6 +1208,20 @@ def _seed_tracks(
                         or db.ra_deg is None
                     ):
                         continue
+                    # Flux & colour consistency check between pair detections (§G.1, Problem 5)
+                    if (
+                        da.flux is not None
+                        and db.flux is not None
+                        and va.band_id
+                        and vb.band_id
+                        and va.band_id == vb.band_id
+                    ):
+                        f_a, f_b = float(da.flux), float(db.flux)
+                        e_a = float(da.flux_err) if da.flux_err is not None else 0.1 * abs(f_a)
+                        e_b = float(db.flux_err) if db.flux_err is not None else 0.1 * abs(f_b)
+                        if abs(f_a - f_b) > 3.0 * math.hypot(e_a, e_b) + 0.25 * max(f_a, f_b, 1.0):
+                            continue
+
                     xi_b, eta_b = sky_to_tangent_arcsec(db.ra_deg, db.dec_deg, da.ra_deg, da.dec_deg)
                     mu_a, mu_d = float(xi_b) / dt_ab, float(eta_b) / dt_ab
                     if math.hypot(mu_a, mu_d) > max_pm_arcsec_yr:
@@ -1149,7 +1249,10 @@ def _seed_tracks(
                     if len(chain) > len(best_chain):
                         best_chain = chain
                         best_mu = (mu_a, mu_d)
-            if len(best_chain) >= 2:
+            # Stand above background random pair pedestal (Poisson test §G.1, Problem 5)
+            rho_local = max(da.local_density or 1e-4, 1e-4)
+            lambda_ped = float(rho_local * math.pi * max((0.5 * 0.5) ** 2, 0.25))
+            if len(best_chain) >= 3 or (len(best_chain) == 2 and lambda_ped < 0.10):
                 _add_seed(best_chain, best_mu, max(0.50, 0.15 * math.hypot(*best_mu)))
             else:
                 _add_seed([(va, da)], (0.0, 0.0), init_sig_mu)
@@ -1351,13 +1454,23 @@ def _solve_epoch_hungarian(
         alt_total = float(c_alt[r2, c2].sum())
         dc_2nd = max(0.0, alt_total - opt_total)
 
-        # Multi-rival marginal posterior confidence over all gated candidates and miss hypothesis (§G.1).
-        rival_sum = sum(
-            math.exp(-min(float(cost[rk, col]) - c_val, 50.0))
-            for col in range(cost.shape[1])
-            if col != cj and cost[rk, col] < 0.5 * _BIG_COST
-        )
-        prob = 1.0 / (1.0 + rival_sum)
+        # Multi-rival marginal posterior confidence over all gated candidates and miss hypothesis (§G.1, Problem 3).
+        c_miss = float(cost[rk, j_cnt + rk])
+        if j_sel >= 0:
+            rival_sum = sum(
+                math.exp(-min(float(cost[rk, col]) - c_val, 50.0))
+                for col in range(j_cnt)
+                if col != j_sel and cost[rk, col] < 0.5 * _BIG_COST
+            )
+            miss_rival = math.exp(-min(c_miss - c_val, 50.0))
+            prob = 1.0 / (1.0 + rival_sum + miss_rival)
+        else:
+            det_rivals = sum(
+                math.exp(-min(float(cost[rk, col]) - c_val, 50.0))
+                for col in range(j_cnt)
+                if cost[rk, col] < 0.5 * _BIG_COST
+            )
+            prob = 1.0 / (1.0 + det_rivals)
 
         if (
             tracks[k].user_locks.get(view.epoch_index, ("", None))[0] in ("accept", "reassign")
@@ -1708,6 +1821,19 @@ def link_epochs(
             vim_r=tr.vim_r,
             flags=all_flags,
         )
+        # Compute Lambda0 and Lambda1 from background annulus density (§G.1, Problem 1)
+        rho_ann = compute_annulus_density(
+            ordered[0].detections, tr.ra0_deg, tr.dec0_deg, r_in_arcsec=15.0, r_out_arcsec=180.0
+        )
+        dt_span_yr = max(
+            abs(ordered[-1].mjd_tdb - ordered[0].mjd_tdb) / 365.25 if len(ordered) > 1 else 0.5,
+            0.05,
+        )
+        sig_mu_est = math.hypot(math.sqrt(max(tr.cov[2, 2], 1e-4)), math.sqrt(max(tr.cov[3, 3], 1e-4)))
+        l0, l1, reg = compute_confusion_parameters(
+            rho_ann, dt_span_yr, mu_max_arcsec_yr=max_pm_arcsec_yr, sigma_mu_arcsec_yr=sig_mu_est
+        )
+
         # Order linked detections monotonically by epoch_index.
         dets_ordered.sort(key=lambda d: d.epoch_index)
         out.append(
@@ -1729,6 +1855,9 @@ def link_epochs(
                 user_locked_pairs={
                     ei: lock for ei, lock in tr.user_locks.items() if ei in view_by_idx
                 },
+                regime=reg,
+                lambda_0=l0,
+                lambda_1=l1,
             )
         )
     return out

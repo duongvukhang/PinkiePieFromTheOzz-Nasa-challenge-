@@ -5,12 +5,13 @@ import {
   ApiError,
   fetchScienceFrame,
   type CutoutFrame,
+  type DetectionRead,
   type EphemerisPredictionResult,
   type SuggestionItem,
 } from "../../api/client";
 import { useAuthStore } from "../../app/authStore";
 import { parseFitsWcs } from "../aladin/wcs";
-import { useViewStore } from "./viewStore";
+import { useViewStore, MAX_TRACKED_OBJECTS } from "./viewStore";
 
 export const isUuid = (val?: string | null): boolean =>
   Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
@@ -386,6 +387,7 @@ export function useViewerData(search: string, skipSecondary = false) {
   };
 
   const onTrackSuggestion = async (s: SuggestionItem) => {
+    if (track.length >= MAX_TRACKED_OBJECTS) return;
     if (analysisQ.data?.analysisId) {
       try {
         const res = await api.selectAnalysisObject(analysisQ.data.analysisId, {
@@ -408,84 +410,37 @@ export function useViewerData(search: string, skipSecondary = false) {
     setView({ obj: String(s.detection_id), inspectorTab: "object" });
   };
 
-  const onBoxSelect = async (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
+  const onTrackDetection = async (d: DetectionRead) => {
+    if (track.length >= MAX_TRACKED_OBJECTS) return;
     if (analysisQ.data?.analysisId) {
       try {
         const res = await api.selectAnalysisObject(analysisQ.data.analysisId, {
           mode: "box",
-          box: {
-            ra_min: Math.min(box.raMin, box.raMax),
-            dec_min: Math.min(box.decMin, box.decMax),
-            ra_max: Math.max(box.raMin, box.raMax),
-            dec_max: Math.max(box.decMin, box.decMax),
-          },
+          detection_ids: [d.id],
         });
-        if (res.objects && res.objects.length > 0) {
-          res.objects.forEach((o) => {
-            addTrack(o.label, o.ra, o.dec);
-          });
-          const first = res.objects[0];
-          if (first) {
-            setTrackedUuid(first.id);
-            setView({
-              obj: first.id,
-              inspectorTab: "object",
-              selectBoxMode: false,
-            });
-            return;
-          }
+        const created = res.objects?.[0];
+        if (created) {
+          setTrackedUuid(created.id);
+          addTrack(created.label, d.ra, d.dec);
+          setView({ obj: created.id, inspectorTab: "object" });
+          return;
         }
       } catch {
         // fallback to client-side tracking
       }
     }
+    const lbl = nextTrackLabel(track);
+    addTrack(lbl, d.ra, d.dec);
+    setView({ obj: String(d.id), inspectorTab: "object" });
+  };
 
-    const inRa = (ra: number) =>
-      box.raMin <= box.raMax
-        ? ra >= box.raMin && ra <= box.raMax
-        : ra >= box.raMin || ra <= box.raMax;
-    const inDec = (dec: number) =>
-      box.decMin <= box.decMax
-        ? dec >= box.decMin && dec <= box.decMax
-        : dec >= box.decMax && dec <= box.decMin;
-
-    const inBoxDetections = (analysisQ.data?.detections ?? []).filter(
-      (d) => inRa(d.ra) && inDec(d.dec),
-    );
-    const inBoxGaia = (gaiaQ.data?.sources ?? []).filter((s) => inRa(s.ra) && inDec(s.dec));
-    const inBoxCatwise = (catwiseQ.data?.sources ?? []).filter((s) => inRa(s.ra) && inDec(s.dec));
-
-    if (inBoxDetections.length > 0) {
-      let cur = track;
-      inBoxDetections.forEach((d) => {
-        const lbl = nextTrackLabel(cur);
-        cur = [...cur, `${lbl}:${d.ra.toFixed(5)},${d.dec.toFixed(5)}`];
-        addTrack(lbl, d.ra, d.dec);
-      });
-      const first = inBoxDetections[0];
-      setView({
-        obj: first ? String(first.id) : undefined,
-        inspectorTab: "object",
-        selectBoxMode: false,
-      });
-    } else if (inBoxGaia.length > 0 || inBoxCatwise.length > 0) {
-      const catSources = [...inBoxGaia, ...inBoxCatwise];
-      let cur = track;
-      catSources.forEach((s) => {
-        const lbl = nextTrackLabel(cur);
-        cur = [...cur, `${lbl}:${s.ra.toFixed(5)},${s.dec.toFixed(5)}`];
-        addTrack(lbl, s.ra, s.dec);
-      });
-      const firstLbl = cur[track.length]?.split(":")[0];
-      setView({
-        obj: firstLbl,
-        inspectorTab: "object",
-        selectBoxMode: false,
-      });
-    } else {
-      // Empty box: no detections or catalog sources; do not create empty track
-      setView({ selectBoxMode: false });
-    }
+  const onBoxSelect = async (box: { raMin: number; raMax: number; decMin: number; decMax: number }) => {
+    setActiveBox(box);
+    setView({
+      activeBox: box,
+      inspectorTab: "object",
+      selectBoxMode: false,
+    });
   };
 
   return {
@@ -508,6 +463,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     associations: associationsQ.data?.associations ?? [],
     overrideAssociation,
     onTrackSuggestion,
+    onTrackDetection,
     onBoxSelect,
     track,
     removeTrack,

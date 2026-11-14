@@ -742,15 +742,50 @@ def fit_motion(
     dof = max(2 * len(active) - k_use, 1)
     is_mover = (chi2_mu > 25.0) and (delta_bic > 10.0) and (not vim_flagged)
     if len(active) == 2 and is_mover:
-        has_cat = (
-            bool(
-                getattr(source, "catalog_id", None)
-                or getattr(source, "gaia_id", None)
-                or getattr(source, "catalog_matches", None)
-            )
-            or all(active_meas[i].source != "spherex" for i in range(len(active_meas)))
-        )
-        if not (corroborated or has_cat):
+        m0, m1 = active_meas[0], active_meas[1]
+        dt = (m1.mjd_tdb - m0.mjd_tdb) / 365.25
+        cat_matches = getattr(source, "catalog_matches", None) or []
+        cat_pm_corroborated = False
+        for cm in cat_matches:
+            pmra_cat = getattr(cm, "pmra_arcsec_yr", None)
+            pmdec_cat = getattr(cm, "pmdec_arcsec_yr", None)
+            if pmra_cat is not None and pmdec_cat is not None and abs(dt) > 1e-4:
+                d_xi, d_eta = sky_to_tangent_arcsec(m1.ra_deg, m1.dec_deg, m0.ra_deg, m0.dec_deg)
+                pred_xi, pred_eta = pmra_cat * dt, pmdec_cat * dt
+                e_ra = float(getattr(cm, "pmra_err_arcsec_yr", 0.05) or 0.05)
+                e_dec = float(getattr(cm, "pmdec_err_arcsec_yr", 0.05) or 0.05)
+                sig_xi = math.sqrt(
+                    m0.cov_sky_arcsec2[0] + m1.cov_sky_arcsec2[0] + (e_ra * dt) ** 2
+                )
+                sig_eta = math.sqrt(
+                    m0.cov_sky_arcsec2[1] + m1.cov_sky_arcsec2[1] + (e_dec * dt) ** 2
+                )
+                d_cat = math.hypot(
+                    (float(d_xi) - pred_xi) / max(sig_xi, 1e-4),
+                    (float(d_eta) - pred_eta) / max(sig_eta, 1e-4),
+                )
+                if d_cat < 3.0:
+                    cat_pm_corroborated = True
+                    break
+
+        sed_corroborated = False
+        if (
+            m0.band_id
+            and m1.band_id
+            and m0.band_id == m1.band_id
+            and m0.flux is not None
+            and m1.flux is not None
+        ):
+            f0_val, f1_val = float(m0.flux), float(m1.flux)
+            e0 = float(m0.flux_err) if m0.flux_err is not None else 0.1 * abs(f0_val)
+            e1 = float(m1.flux_err) if m1.flux_err is not None else 0.1 * abs(f1_val)
+            f_mean = 0.5 * (f0_val + f1_val)
+            chi2_sed = ((f0_val - f1_val) ** 2) / max(e0**2 + e1**2 + (0.15 * f_mean) ** 2, 1e-6)
+            if chi2_sed <= 9.21:
+                sed_corroborated = True
+
+        has_ext_anchors = all(active_meas[i].source != "spherex" for i in range(len(active_meas)))
+        if not (corroborated or cat_pm_corroborated or sed_corroborated or has_ext_anchors):
             is_mover = False
             notes.append("unvalidated: N=2 epochs (dof=0, chi2=0) without corroboration")
 
