@@ -30,6 +30,7 @@ export interface EpochWaypoint {
   flags?: number | null;
   sigRaMas?: number | null;
   sigDecMas?: number | null;
+  fwhmArcsec?: number | null;
 }
 
 export interface TrackedTrajectory {
@@ -605,6 +606,7 @@ export function useViewerData(search: string, skipSecondary = false) {
             flags: bMeas.flags,
             sigRaMas: bMeas.sig_ra_mas,
             sigDecMas: bMeas.sig_dec_mas,
+            fwhmArcsec: (bMeas as any).fwhm_arcsec ?? undefined,
           };
         }
 
@@ -638,6 +640,7 @@ export function useViewerData(search: string, skipSecondary = false) {
             flags: bestDet.flags ?? 0,
             sigRaMas: bestDet.sig_ra_mas ?? undefined,
             sigDecMas: bestDet.sig_dec_mas ?? undefined,
+            fwhmArcsec: bestDet.fwhm_arcsec ?? undefined,
           };
         }
 

@@ -40,6 +40,35 @@ export function computeShortestArcRaBounds(
   return { raMin: Math.max(n1, n2), raMax: Math.min(n1, n2) };
 }
 
+/** Computes dynamic square bounding size (in SVG/pixel units) fitting the astronomical object's PSF extent. */
+export function getDynamicObjectSize(
+  ra: number,
+  dec: number,
+  wcs: WcsParams,
+  pxScale: number,
+  detections?: DetectionRead[],
+  fwhmArcsec?: number | null,
+  snr?: number | null,
+): number {
+  const degPerPx = Math.abs(wcs.cd11) || 0.0026;
+  const arcsecPerPx = degPerPx * 3600;
+  let fwhm = fwhmArcsec;
+  let s = snr;
+  if ((fwhm == null || fwhm <= 0) && detections?.length) {
+    const cosDec = Math.cos((dec * Math.PI) / 180);
+    const d = detections.find(
+      (det) => Math.hypot((det.ra - ra) * cosDec, det.dec - dec) < 0.005,
+    );
+    if (d) {
+      if (d.fwhm_arcsec && d.fwhm_arcsec > 0) fwhm = d.fwhm_arcsec;
+      if (d.snr != null) s = d.snr;
+    }
+  }
+  const fwhmPx = (fwhm && fwhm > 0 ? fwhm : Math.max(4.0, arcsecPerPx * 2.2)) / arcsecPerPx;
+  const scale = s && s > 20 ? 2.3 : s && s > 8 ? 2.0 : 1.7;
+  return Math.max(10 * pxScale, Math.min(44 * pxScale, fwhmPx * scale * pxScale));
+}
+
 interface WcsSvgOverlayProps {
   wcs: WcsParams;
   gaiaSources: CatalogOverlaySource[];
@@ -457,8 +486,6 @@ export function WcsSvgOverlay({
             const fwhmArcsec = d.fwhm_arcsec != null && d.fwhm_arcsec > 0 ? d.fwhm_arcsec : degPerPx * 3600 * 2.2;
             const fwhmPx = fwhmArcsec / (3600 * degPerPx);
             const baseFitPx = Math.max(8, Math.min(24, fwhmPx * 1.6));
-            const size = isSelected ? Math.max(baseFitPx * 1.3, 14) : baseFitPx;
-            const half = size / 2;
 
             const matchedTraj = trackedTrajectories?.find((tr) => {
               const curWpt = tr.currentWaypoint;
@@ -495,22 +522,21 @@ export function WcsSvgOverlay({
             const isConflict = Boolean(trackLabel && matchedTrack?.isConflict);
             const conf = (d as { confidence?: number }).confidence;
             const isAmbiguous = Boolean((d.flags && d.flags & 4) || (conf != null && conf < 0.90));
-            const targetColor = matchedTraj
-              ? matchedTraj.color
-              : trackLabel === "B"
-                ? "#f97316"
-                : trackLabel === "A"
-                  ? "#38bdf8"
-                  : "#22c55e";
             const detStroke = isConflict
               ? "#f59e0b"
               : isAmbiguous
                 ? "#fbbf24"
                 : isConfirmed
-                  ? targetColor
+                  ? "#22c55e"
                   : isSelected
                     ? "#4ade80"
                     : "#22c55e";
+            const size = isConfirmed
+              ? getDynamicObjectSize(d.ra, d.dec, wcs, pxScale, detections, d.fwhm_arcsec, d.snr)
+              : isSelected
+                ? Math.max(baseFitPx * 1.3, 14)
+                : baseFitPx;
+            const half = size / 2;
             const displayLabel = trackLabel
               ? `${trackLabel} (${dLabel})${isConflict ? " [CONFLICT]" : isAmbiguous ? " [REVIEW]" : ""}`
               : dLabel;
@@ -556,9 +582,9 @@ export function WcsSvgOverlay({
                   y={screenY - half}
                   width={size}
                   height={size}
-                  fill={isSelected ? "rgba(34, 197, 94, 0.15)" : isConfirmed ? (trackLabel === "B" ? "rgba(249, 115, 22, 0.15)" : "rgba(56, 189, 248, 0.15)") : inBox ? "rgba(34, 197, 94, 0.06)" : "none"}
+                  fill={isConfirmed ? "rgba(34, 197, 94, 0.04)" : isSelected ? "rgba(34, 197, 94, 0.15)" : inBox ? "rgba(34, 197, 94, 0.06)" : "none"}
                   stroke={detStroke}
-                  strokeWidth={isSelected ? 1.5 : 1}
+                  strokeWidth={isConfirmed ? 1.5 * pxScale : isSelected ? 1.5 : 1}
                   strokeDasharray={isAmbiguous ? "3,2" : undefined}
                   vectorEffect="non-scaling-stroke"
                 />
