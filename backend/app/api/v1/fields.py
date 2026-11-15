@@ -200,34 +200,22 @@ async def create_cutouts(
     if not deduplicated or (job.status == "queued" and is_eager_mode()):
         run_params = (store.get_job_params(job.id) or job_params) if deduplicated else job_params
         if is_eager_mode():
-            try:
-                await asyncio.to_thread(
+            asyncio.create_task(
+                asyncio.to_thread(
                     execute_build_cutouts,
                     job.id, run_params, store=store, storage=storage, provider=provider
                 )
-            except Exception as exc:
-                store.update_job(
-                    job.id,
-                    status="failed",
-                    error={"type": type(exc).__name__, "detail": str(exc)},
-                    finished_at=datetime.now(UTC),
-                )
+            )
         else:
             try:
                 dispatch_task(build_cutouts, str(job.id), run_params, queue="fast")
             except Exception:
-                try:
-                    await asyncio.to_thread(
+                asyncio.create_task(
+                    asyncio.to_thread(
                         execute_build_cutouts,
                         job.id, run_params, store=store, storage=storage, provider=provider
                     )
-                except Exception as exc:
-                    store.update_job(
-                        job.id,
-                        status="failed",
-                        error={"type": type(exc).__name__, "detail": str(exc)},
-                        finished_at=datetime.now(UTC),
-                    )
+                )
         latest = store.get_job(job.id)
         if latest and latest.outputs and "cutout_set" in latest.outputs:
             resolved_cutout_id = UUID(str(latest.outputs["cutout_set"]["cutout_id"]))

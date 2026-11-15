@@ -1,12 +1,12 @@
 ## Current phase: 1 (FITS Display Pipeline & Production Infrastructure)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | IRSA TAP Timeout & 500 Unhandled CORS Error Handler Fix
+## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Asynchronous Cutouts Execution & Docker Layer Caching
 Done:
-- Fixed `/api/v1/releases` 500 error by returning active profile descriptor directly in `SpherexIrsaProvider.describe_releases` instead of slow unindexed TAP table scan.
-- Added catch-all exception handler in `backend/app/main.py` ensuring every 500 internal error returns ProblemDetail JSON with CORS headers.
-- Shrunk provider release descriptor logic by 23 lines with instantaneous response time.
-- Validated with pytest (passed 2/2) and TestClient verifying 200 OK on `/api/v1/releases`.
-Files touched: backend/app/main.py, backend/app/providers/spherex_irsa.py, backend/app/services/fields.py, docs/STATUS.md
-Verified by: pytest tests/unit/test_production_config_and_rate_limit.py (passed), TestClient (200 OK)   Lines before -> after: 36 lines -> 13 lines in describe_releases (-23 lines shrink pass)
+- Made `create_cutouts` execute `execute_build_cutouts` in background task via `asyncio.create_task` instead of blocking HTTP request for 68 seconds, preventing gateway timeouts.
+- Optimized `infra/backend.Dockerfile` layer caching by installing heavy scientific dependencies prior to copying application source.
+- Shrunk `create_cutouts` dispatch logic by 12 lines.
+- Validated with pytest (passed 2/2).
+Files touched: backend/app/api/v1/fields.py, infra/backend.Dockerfile, docs/STATUS.md
+Verified by: pytest tests/unit/test_production_config_and_rate_limit.py (passed)   Lines before -> after: 31 lines -> 19 lines in create_cutouts dispatch (-12 lines shrink pass)
 ## Next task: Verify live end-to-end integration on Vercel and Render
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).
