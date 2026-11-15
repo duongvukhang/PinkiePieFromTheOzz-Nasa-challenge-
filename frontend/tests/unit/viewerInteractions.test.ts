@@ -171,6 +171,7 @@ describe("Viewer interactions & navigation", () => {
           fwhm_arcsec: 8.5,
           snr: 18,
           flags: 0,
+          is_difference: false,
         },
       ];
 
@@ -188,6 +189,7 @@ describe("Viewer interactions & navigation", () => {
           fwhm_arcsec: 35.0,
           snr: 25,
           flags: 0,
+          is_difference: false,
         },
       ];
       const sizeWide = getDynamicObjectSize(133.795, -7.245, mockWcs, pxScale, detectionsWide);

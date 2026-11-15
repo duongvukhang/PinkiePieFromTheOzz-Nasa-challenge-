@@ -46,7 +46,7 @@ export function getDynamicObjectSize(
   dec: number,
   wcs: WcsParams,
   pxScale: number,
-  detections?: DetectionRead[],
+  detections?: Array<Pick<DetectionRead, "ra" | "dec"> & Partial<DetectionRead>>,
   fwhmArcsec?: number | null,
   snr?: number | null,
 ): number {
