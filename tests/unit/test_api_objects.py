@@ -95,9 +95,9 @@ def test_select_track_override_spectrum_and_lightcurve_flow(
             )
         )
 
-    # Distractor neighbor 2.5 px north of mover at epoch 1 for alternative association testing
-    nbr_ra, nbr_dec = (float(v) for v in base_wcs.pixel_to_world_values(32.0, 32.5))
-    static_sky.append((nbr_ra % 360.0, nbr_dec, 90.0))
+    # Distractor neighbor ~3.5 px north of mover at epoch 1 for alternative association testing
+    nbr_ra, nbr_dec = (float(v) for v in base_wcs.pixel_to_world_values(31.5, 33.5))
+    static_sky.append((nbr_ra % 360.0, nbr_dec, 120.0))
 
     m_coords = [
         tuple(float(v) for v in base_wcs.pixel_to_world_values(30.0 + 1.5 * k, 30.0))

@@ -8,6 +8,7 @@ import type {
 import type { WcsParams } from "../aladin/wcs";
 import { pixelToSky, skyToPixel } from "../aladin/wcs";
 import { useViewStore } from "../state/viewStore";
+import type { TrackedTrajectory } from "../state/useViewerData";
 export interface SelectedSourceData {
   id: string;
   label: string;
@@ -46,6 +47,7 @@ interface WcsSvgOverlayProps {
   detections: DetectionRead[];
   suggestions: SuggestionItem[];
   tracks: string[];
+  trackedTrajectories?: TrackedTrajectory[];
   selectBoxMode: boolean;
   objectDetail?: TrackedObjectDetailResponse;
   selectedTarget?: SelectedSourceData | null;
@@ -78,6 +80,7 @@ export function WcsSvgOverlay({
   detections,
   suggestions = [],
   tracks,
+  trackedTrajectories,
   selectBoxMode,
   objectDetail,
   selectedTarget,
@@ -316,6 +319,28 @@ export function WcsSvgOverlay({
             <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--oi-orange)" />
           </marker>
           <marker
+            id="trajArrowA"
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto"
+          >
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8" />
+          </marker>
+          <marker
+            id="trajArrowB"
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto"
+          >
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#f97316" />
+          </marker>
+          <marker
             id="predArrow"
             viewBox="0 0 10 10"
             refX="6"
@@ -435,27 +460,48 @@ export function WcsSvgOverlay({
             const size = isSelected ? Math.max(baseFitPx * 1.3, 14) : baseFitPx;
             const half = size / 2;
 
-            const matchedTrack = parsedTracks.find(
-              (t) =>
-                t.ra != null &&
-                t.dec != null &&
-                Math.abs(t.ra - d.ra) < 0.003 &&
-                Math.abs(t.dec - d.dec) < 0.003,
-            );
+            const matchedTraj = trackedTrajectories?.find((tr) => {
+              const curWpt = tr.currentWaypoint;
+              if (!curWpt) return false;
+              if (curWpt.detectionId && curWpt.detectionId === d.id) return true;
+              const dSep = Math.hypot(
+                (curWpt.ra - d.ra) * Math.cos((d.dec * Math.PI) / 180),
+                curWpt.dec - d.dec,
+              );
+              return dSep < 0.0035;
+            });
+
+            const matchedTrack = matchedTraj
+              ? { lbl: matchedTraj.label, isConflict: false }
+              : parsedTracks.find(
+                  (t) =>
+                    t.ra != null &&
+                    t.dec != null &&
+                    Math.abs(t.ra - d.ra) < 0.003 &&
+                    Math.abs(t.dec - d.dec) < 0.003,
+                );
             const isObjectMeasurement = measCoords.some(
               (m) => Math.abs(m.ra - d.ra) < 0.003 && Math.abs(m.dec - d.dec) < 0.003,
             );
-            const trackLabel = matchedTrack
-              ? matchedTrack.lbl
-              : isObjectMeasurement
-                ? objectDetail?.label
-                : null;
+            const trackLabel = matchedTraj
+              ? matchedTraj.label
+              : matchedTrack
+                ? matchedTrack.lbl
+                : isObjectMeasurement
+                  ? objectDetail?.label
+                  : null;
             const isConfirmed = Boolean(trackLabel);
             const inBox = isInActiveBox(d.ra, d.dec);
             const isConflict = Boolean(trackLabel && matchedTrack?.isConflict);
             const conf = (d as { confidence?: number }).confidence;
             const isAmbiguous = Boolean((d.flags && d.flags & 4) || (conf != null && conf < 0.90));
-            const targetColor = trackLabel === "B" ? "#f97316" : trackLabel === "A" ? "#38bdf8" : "#22c55e";
+            const targetColor = matchedTraj
+              ? matchedTraj.color
+              : trackLabel === "B"
+                ? "#f97316"
+                : trackLabel === "A"
+                  ? "#38bdf8"
+                  : "#22c55e";
             const detStroke = isConflict
               ? "#f59e0b"
               : isAmbiguous
@@ -581,6 +627,44 @@ export function WcsSvgOverlay({
             );
           })}
 
+        {/* Persistent predicted/dropout bounding boxes for tracked objects in current epoch */}
+        {trackedTrajectories?.map((tr) => {
+          const wpt = tr.currentWaypoint;
+          if (!wpt || wpt.isDetected) return null;
+          const pos = skyToPixel(wpt.ra, wpt.dec, wcs);
+          const size = 18;
+          const half = size / 2;
+          return (
+            <g key={`pred-box-${tr.label}`} className="pointer-events-none">
+              <rect
+                x={pos.x - half}
+                y={pos.y - half}
+                width={size}
+                height={size}
+                fill={tr.color === "#f97316" ? "rgba(249, 115, 22, 0.12)" : "rgba(56, 189, 248, 0.12)"}
+                stroke={tr.color}
+                strokeWidth={1.4}
+                strokeDasharray="3,2"
+                vectorEffect="non-scaling-stroke"
+              />
+              <g transform={`translate(${pos.x - half}, ${pos.y - half - 12})`}>
+                <rect x={0} y={0} width={46} height={10} rx={2} fill={tr.color} opacity={0.9} />
+                <text
+                  x={23}
+                  y={7.5}
+                  fill="#ffffff"
+                  fontSize={6.5}
+                  fontWeight="bold"
+                  textAnchor="middle"
+                  fontFamily="monospace"
+                >
+                  {tr.label} (Pred)
+                </text>
+              </g>
+            </g>
+          );
+        })}
+
         {/* Suggestions Overlay — dashed purple reticles */}
         {showSources &&
           suggestions?.map((s) => {
@@ -611,8 +695,185 @@ export function WcsSvgOverlay({
             );
           })}
 
-        {/* 2. Directional Trajectory Vectors with Arrowheads and Glow (Feature C) */}
+        {/* 2. Directional Trajectory Vectors & Motion Vector (Feature C) */}
         {showTrajectories &&
+          trackedTrajectories &&
+          trackedTrajectories.length > 0 &&
+          trackedTrajectories.map((tr) => {
+            const wptsPx = tr.waypoints.map((w, wIdx) => ({
+              ...w,
+              ...skyToPixel(w.ra, w.dec, wcs),
+              idx: wIdx,
+            }));
+            const markerId = tr.label === "B" ? "url(#trajArrowB)" : "url(#trajArrowA)";
+
+            return (
+              <g key={`tr-group-${tr.label}`}>
+                {/* A. Full trajectory lines between consecutive waypoints */}
+                {wptsPx.map((pt, idx) => {
+                  if (idx === 0) return null;
+                  const prev = wptsPx[idx - 1]!;
+                  return (
+                    <g key={`tr-seg-${tr.label}-${idx}`} className="pointer-events-none">
+                      <line
+                        x1={prev.x}
+                        y1={prev.y}
+                        x2={pt.x}
+                        y2={pt.y}
+                        stroke={tr.color}
+                        strokeWidth={2.5 * pxScale}
+                        strokeOpacity={0.2}
+                      />
+                      <line
+                        x1={prev.x}
+                        y1={prev.y}
+                        x2={pt.x}
+                        y2={pt.y}
+                        stroke={tr.color}
+                        strokeWidth={1.2 * pxScale}
+                        strokeOpacity={0.7}
+                        strokeDasharray="3,2"
+                      />
+                    </g>
+                  );
+                })}
+
+                {/* B. ACTIVE MOTION VECTOR between previous and current epoch */}
+                {tr.motionVector && (() => {
+                  const fromPt = skyToPixel(tr.motionVector.from.ra, tr.motionVector.from.dec, wcs);
+                  const toPt = skyToPixel(tr.motionVector.to.ra, tr.motionVector.to.dec, wcs);
+                  const midX = 0.5 * (fromPt.x + toPt.x);
+                  const midY = 0.5 * (fromPt.y + toPt.y);
+
+                  return (
+                    <g key={`tr-mv-${tr.label}`} className="pointer-events-none">
+                      {/* Atmospheric vector glow */}
+                      <line
+                        x1={fromPt.x}
+                        y1={fromPt.y}
+                        x2={toPt.x}
+                        y2={toPt.y}
+                        stroke={tr.color}
+                        strokeWidth={4.5 * pxScale}
+                        strokeOpacity={0.5}
+                      />
+                      {/* Directional trajectory vector motion arrow */}
+                      <line
+                        x1={fromPt.x}
+                        y1={fromPt.y}
+                        x2={toPt.x}
+                        y2={toPt.y}
+                        stroke={tr.color}
+                        strokeWidth={2.2 * pxScale}
+                        strokeOpacity={0.95}
+                        markerEnd={markerId}
+                      />
+                      {/* Motion displacement and velocity badge */}
+                      <g transform={`translate(${midX}, ${midY - 8 * pxScale})`} className="select-none">
+                        <rect
+                          x={-38 * pxScale}
+                          y={-7 * pxScale}
+                          width={76 * pxScale}
+                          height={13 * pxScale}
+                          rx={3 * pxScale}
+                          fill="rgba(15, 23, 42, 0.92)"
+                          stroke={tr.color}
+                          strokeWidth={0.8 * pxScale}
+                        />
+                        <text
+                          x={0}
+                          y={2 * pxScale}
+                          fill={tr.color}
+                          fontSize={5.2 * pxScale}
+                          fontWeight="bold"
+                          fontFamily="monospace"
+                          textAnchor="middle"
+                        >
+                          {tr.motionVector.isMoving
+                            ? `${tr.label}: Δθ ${tr.motionVector.deltaArcsec.toFixed(2)}" · ${Math.round(tr.motionVector.pmTotalMasYr)} mas/yr`
+                            : `${tr.label}: Stationary`}
+                        </text>
+                      </g>
+                    </g>
+                  );
+                })()}
+
+                {/* C. Clickable Waypoint Badges along Trajectory */}
+                {wptsPx.map((pt, idx) => {
+                  const isCurrent = pt.epoch === currentEpoch;
+                  return (
+                    <g
+                      key={`tr-wpt-${tr.label}-${idx}`}
+                      transform={`translate(${pt.x},${pt.y})`}
+                      style={{ pointerEvents: selectBoxMode ? "none" : "auto", cursor: "pointer" }}
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (pt.epoch) onSelectEpoch?.(pt.epoch);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.stopPropagation();
+                          if (pt.epoch) onSelectEpoch?.(pt.epoch);
+                        }
+                      }}
+                      aria-label={`Jump to ${tr.label} in ${pt.epoch}`}
+                    >
+                      {isCurrent && (
+                        <circle
+                          r={7 * pxScale}
+                          fill="none"
+                          stroke={tr.color}
+                          strokeWidth={1.5 * pxScale}
+                          strokeDasharray={`${2 * pxScale},${2 * pxScale}`}
+                          opacity={0.85}
+                        />
+                      )}
+                      <circle
+                        r={(isCurrent ? 4.5 : 3) * pxScale}
+                        fill={isCurrent ? tr.color : "rgba(15, 23, 42, 0.85)"}
+                        stroke={tr.color}
+                        strokeWidth={1 * pxScale}
+                      />
+                      <text
+                        x={5 * pxScale}
+                        y={-3 * pxScale}
+                        fill={isCurrent ? "#ffffff" : tr.color}
+                        fontSize={5 * pxScale}
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                        className="select-none pointer-events-none"
+                        style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95)" }}
+                      >
+                        {pt.epoch}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* D. Annual Proper Motion Vector */}
+                {tr.pmVector && tr.currentWaypoint && (() => {
+                  const p = skyToPixel(tr.currentWaypoint.ra, tr.currentWaypoint.dec, wcs);
+                  const degPerPx = Math.abs(wcs.cd11) || 0.0026;
+                  const len = Math.max(10 * pxScale, (tr.pmVector.pmTotalMasYr / 3.6e6 / degPerPx) * 0.8);
+                  const rad = (tr.pmVector.paDeg * Math.PI) / 180;
+                  const x2 = p.x - Math.sin(rad) * len;
+                  const y2 = p.y - Math.cos(rad) * len;
+                  return (
+                    <g className="pm-arrow pointer-events-none">
+                      <line x1={p.x} y1={p.y} x2={x2} y2={y2} stroke={tr.color} strokeWidth={1.6 * pxScale} />
+                      <circle cx={x2} cy={y2} r={2.2 * pxScale} fill={tr.color} />
+                    </g>
+                  );
+                })()}
+              </g>
+            );
+          })}
+
+        {/* Fallback legacy trajectory vectors if trackedTrajectories not provided */}
+        {showTrajectories &&
+          (!trackedTrajectories || trackedTrajectories.length === 0) &&
           trajPoints.length >= 2 &&
           trajPoints.map((pt, idx) => {
             if (idx === 0) return null;

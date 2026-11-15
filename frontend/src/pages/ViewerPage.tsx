@@ -134,6 +134,7 @@ export function ViewerPage() {
             suggestions={v.suggestions}
             selectBoxMode={v.selectBoxMode}
             objectDetail={v.objectDetail}
+            trackedTrajectories={v.trackedTrajectories}
             predictionData={v.ephemerisResult ? { trajectory_points: v.ephemerisResult.trajectory } : undefined}
             onBoxSelect={v.onBoxSelect}
             onTrackDetection={v.onTrackDetection}

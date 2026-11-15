@@ -409,13 +409,17 @@ export function InspectorTabs({
                     disabled={capReached}
                     title={capReached ? "Maximum 2 objects can be tracked. Untrack one first." : undefined}
                     onClick={() => {
-                      const lbl = nextTrackLabel(tracks);
-                      useViewStore.getState().addTrack(lbl, primaryCoord.ra, primaryCoord.dec);
-                      useViewStore.getState().setView({
-                        obj: lbl,
-                        inspectorTab: "object",
-                        isTimelineOpen: true,
-                      });
+                      if (sortedBoxDets.length > 0 && sortedBoxDets[0] && onTrackDetection) {
+                        onTrackDetection(sortedBoxDets[0]);
+                      } else {
+                        const lbl = nextTrackLabel(tracks);
+                        useViewStore.getState().addTrack(lbl, primaryCoord.ra, primaryCoord.dec);
+                        useViewStore.getState().setView({
+                          obj: lbl,
+                          inspectorTab: "object",
+                          isTimelineOpen: true,
+                        });
+                      }
                     }}
                   >
                     {capReached ? "Cap Reached (Max 2)" : `Track ${nextTrackLabel(tracks)}`}

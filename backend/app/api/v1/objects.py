@@ -543,7 +543,7 @@ async def select_project_objects(
                 if not d.is_difference
                 and in_sky_box(d.ra, d.dec, b.ra_min, b.ra_max, b.dec_min, b.dec_max)
             ]
-            if not selected_dets and payload.mode == "manual":
+            if not selected_dets and payload.mode in {"manual", "catalog"}:
                 ra_mid = (
                     0.5 * (b.ra_min + b.ra_max)
                     if b.ra_min <= b.ra_max

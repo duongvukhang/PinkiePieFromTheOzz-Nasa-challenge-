@@ -12,7 +12,7 @@ import type { WcsParams } from "../aladin/wcs";
 import { WebGL2SkyCanvas } from "../gl/WebGL2SkyCanvas";
 import { WcsSvgOverlay, type SelectedSourceData } from "../overlays/WcsSvgOverlay";
 import { useViewStore } from "../state/viewStore";
-import { nextTrackLabel } from "../state/useViewerData";
+import { nextTrackLabel, type TrackedTrajectory } from "../state/useViewerData";
 import {
   clientToSkyCoords,
   computeZoomAtPoint,
@@ -33,6 +33,7 @@ interface ViewerStageProps {
   suggestions: SuggestionItem[];
   selectBoxMode: boolean;
   objectDetail?: TrackedObjectDetailResponse;
+  trackedTrajectories?: TrackedTrajectory[];
   predictionData?: {
     trajectory_points?: Array<{
       ra_deg: number;
@@ -67,6 +68,7 @@ export function ViewerStage({
   suggestions,
   selectBoxMode,
   objectDetail,
+  trackedTrajectories,
   predictionData,
   onBoxSelect,
   onVisibilityPause,
@@ -409,6 +411,7 @@ export function ViewerStage({
                 detections={detections}
                 suggestions={suggestions}
                 tracks={track}
+                trackedTrajectories={trackedTrajectories}
                 selectBoxMode={selectBoxMode}
                 objectDetail={objectDetail}
                 selectedTarget={selectedObjInfo}

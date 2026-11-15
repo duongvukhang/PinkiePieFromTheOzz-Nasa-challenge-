@@ -143,4 +143,38 @@ describe("Box-Scoped Selection & 2-Object Tracking Cap", () => {
 
     store.removeTrack(assignedLabel);
   });
+
+  it("maintains consistent cross-epoch tracking and computes trajectory vector motion", () => {
+    // Epoch A (MJD 60850.0) -> Epoch B (MJD 61032.5 = +0.5 yr)
+    const mjdA = 60850.0;
+    const mjdB = 61032.5;
+    const dtYears = (mjdB - mjdA) / 365.25;
+
+    // Moving object (e.g. WISE 0855 with high proper motion ~8 arcsec/yr)
+    const raA = 133.7951;
+    const decA = -7.2451;
+    // Displaced in Epoch B by ~4 arcsec in 0.5 years (~0.0011 deg)
+    const raB = 133.7962;
+    const decB = -7.2458;
+
+    const cosDec = Math.cos((decB * Math.PI) / 180);
+    const dRa = (raB - raA) * cosDec;
+    const dDec = decB - decA;
+    const deltaArcsec = Math.hypot(dRa, dDec) * 3600;
+    const pmTotalMasYr = (deltaArcsec / dtYears) * 1000;
+    const paDeg = ((Math.atan2(dRa, dDec) * 180) / Math.PI + 360) % 360;
+
+    expect(deltaArcsec).toBeGreaterThan(1.0);
+    expect(pmTotalMasYr).toBeGreaterThan(1000); // High proper motion
+    expect(paDeg).toBeGreaterThan(0);
+    expect(paDeg).toBeLessThan(360);
+
+    // Track state persists label "A" across epochs without needing to re-box
+    useViewStore.getState().addTrack("A", raA, decA);
+    expect(useViewStore.getState().track).toHaveLength(1);
+    expect(useViewStore.getState().track[0]).toBe(`A:${raA.toFixed(5)},${decA.toFixed(5)}`);
+
+    // Clean up
+    useViewStore.getState().removeTrack("A");
+  });
 });

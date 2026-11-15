@@ -16,6 +16,43 @@ import { useViewStore, MAX_TRACKED_OBJECTS } from "./viewStore";
 export const isUuid = (val?: string | null): boolean =>
   Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
 
+export interface EpochWaypoint {
+  epoch: string;
+  mjd: number;
+  ra: number;
+  dec: number;
+  x?: number;
+  y?: number;
+  isDetected: boolean;
+  detectionId?: number | null;
+  snr?: number | null;
+  flux?: number | null;
+  flags?: number | null;
+  sigRaMas?: number | null;
+  sigDecMas?: number | null;
+}
+
+export interface TrackedTrajectory {
+  label: string;
+  color: string;
+  waypoints: EpochWaypoint[];
+  currentWaypoint?: EpochWaypoint;
+  previousWaypoint?: EpochWaypoint;
+  motionVector?: {
+    from: EpochWaypoint;
+    to: EpochWaypoint;
+    deltaArcsec: number;
+    deltaTimeYears: number;
+    pmTotalMasYr: number;
+    paDeg: number;
+    isMoving: boolean;
+  } | null;
+  pmVector?: {
+    pmTotalMasYr: number;
+    paDeg: number;
+  } | null;
+}
+
 export function nextTrackLabel(existing: string[]): string {
   const set = new Set(existing.map((t) => t.split(":")[0]));
   for (const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
@@ -361,6 +398,13 @@ export function useViewerData(search: string, skipSecondary = false) {
     queryKey: ["object", activeObjId],
     queryFn: () => api.getObjectDetail(activeObjId!),
     enabled: canQueryObj,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data || (data.measurements && data.measurements.length < 2)) {
+        return 1500;
+      }
+      return false;
+    },
   });
 
   const associationsQ = useQuery({
@@ -475,7 +519,183 @@ export function useViewerData(search: string, skipSecondary = false) {
       },
       false,
     );
+
+    if (track.length < MAX_TRACKED_OBJECTS) {
+      const inRa = (r: number) =>
+        box.raMin <= box.raMax ? r >= box.raMin && r <= box.raMax : r >= box.raMin || r <= box.raMax;
+      const inDec = (d: number) =>
+        box.decMin <= box.decMax ? d >= box.decMin && d <= box.decMax : d >= box.decMax && d <= box.decMin;
+      const inBoxDets = (detections || []).filter((d) => inRa(d.ra) && inDec(d.dec));
+      if (inBoxDets.length > 0 && inBoxDets[0]) {
+        await onTrackDetection(inBoxDets[0]);
+        return;
+      }
+      if (analysisQ.data?.analysisId) {
+        try {
+          const res = await api.selectAnalysisObject(analysisQ.data.analysisId, {
+            mode: "box",
+            box: {
+              ra_min: box.raMin,
+              ra_max: box.raMax,
+              dec_min: box.decMin,
+              dec_max: box.decMax,
+            },
+            epoch: frameA?.epoch,
+          });
+          const created = res.objects?.[0];
+          if (created) {
+            setTrackedUuid(created.id);
+            addTrack(created.label, created.ra, created.dec);
+            setView({ obj: created.id, inspectorTab: "object", isTimelineOpen: true });
+            return;
+          }
+        } catch {
+          // fallback
+        }
+      }
+      const midRa =
+        box.raMin <= box.raMax ? 0.5 * (box.raMin + box.raMax) : (0.5 * (box.raMin + box.raMax + 360.0)) % 360.0;
+      const midDec = 0.5 * (box.decMin + box.decMax);
+      const lbl = nextTrackLabel(track);
+      addTrack(lbl, midRa, midDec);
+      setView({ obj: lbl, inspectorTab: "object", isTimelineOpen: true });
+    }
   };
+
+  const trackedTrajectories: TrackedTrajectory[] = useMemo(() => {
+    if (!track.length || !frames.length) return [];
+    const allDets = analysisQ.data?.detections ?? [];
+    const objDetail = objectQ.data;
+
+    return track.map((t, tIdx) => {
+      const [lbl, coords] = t.split(":");
+      const [rStr, dStr] = (coords ?? "").split(",");
+      const initRa = Number(rStr);
+      const initDec = Number(dStr);
+      const label = lbl || (tIdx === 0 ? "A" : "B");
+      const color = label === "B" ? "#f97316" : label === "A" ? "#38bdf8" : "#22c55e";
+
+      const matchesObj =
+        objDetail &&
+        (objDetail.label === label ||
+          String(objDetail.id) === obj ||
+          (tIdx === 0 && !objDetail.label));
+      const backendMeasurements = matchesObj ? objDetail.measurements ?? [] : [];
+
+      const waypoints: EpochWaypoint[] = frames.map((f, fIdx) => {
+        const ep = f.epoch || `E${fIdx + 1}`;
+        const fMjd = f.mjd_tdb_mid;
+
+        // 1. Check if backend measurement exists for this epoch
+        const bMeas = backendMeasurements.find(
+          (m: any) =>
+            (m.epoch && m.epoch.toLowerCase() === ep.toLowerCase()) ||
+            Math.abs(m.mjd_tdb - fMjd) < 0.5,
+        );
+        if (bMeas && bMeas.ra != null && bMeas.dec != null) {
+          return {
+            epoch: ep,
+            mjd: fMjd,
+            ra: bMeas.ra,
+            dec: bMeas.dec,
+            isDetected: !bMeas.is_upper_limit,
+            detectionId: undefined,
+            snr: undefined,
+            flux: bMeas.flux_ujy,
+            flags: bMeas.flags,
+            sigRaMas: bMeas.sig_ra_mas,
+            sigDecMas: bMeas.sig_dec_mas,
+          };
+        }
+
+        // 2. Search frame detections around initial / projected position
+        const frameDets = allDets.filter(
+          (d) => String(d.fits_file_id) === String(f.frame_id) || (d as any).epoch === ep,
+        );
+        let bestDet: DetectionRead | null = null;
+        let bestSep = 1e9;
+        for (const fd of frameDets) {
+          const sep = Math.hypot(
+            (fd.ra - initRa) * Math.cos((initDec * Math.PI) / 180),
+            fd.dec - initDec,
+          );
+          if (sep < 0.005 && sep < bestSep) {
+            bestSep = sep;
+            bestDet = fd;
+          }
+        }
+
+        if (bestDet) {
+          return {
+            epoch: ep,
+            mjd: fMjd,
+            ra: bestDet.ra,
+            dec: bestDet.dec,
+            isDetected: true,
+            detectionId: bestDet.id,
+            snr: bestDet.snr ?? undefined,
+            flux: bestDet.flux_ujy ?? undefined,
+            flags: bestDet.flags ?? 0,
+            sigRaMas: bestDet.sig_ra_mas ?? undefined,
+            sigDecMas: bestDet.sig_dec_mas ?? undefined,
+          };
+        }
+
+        // 3. Fallback position across epochs
+        return {
+          epoch: ep,
+          mjd: fMjd,
+          ra: initRa,
+          dec: initDec,
+          isDetected: false,
+        };
+      });
+
+      const curEp = frameA?.epoch;
+      const curIdx = waypoints.findIndex((w) => w.epoch === curEp);
+      const activeIdx = curIdx >= 0 ? curIdx : Math.min(frame, waypoints.length - 1);
+      const currentWaypoint = waypoints[activeIdx];
+      const prevIdx =
+        activeIdx > 0 ? activeIdx - 1 : waypoints.length > 1 ? waypoints.length - 1 : -1;
+      const previousWaypoint = prevIdx >= 0 ? waypoints[prevIdx] : undefined;
+
+      let motionVector = null;
+      if (previousWaypoint && currentWaypoint && previousWaypoint !== currentWaypoint) {
+        const cosDec = Math.cos((currentWaypoint.dec * Math.PI) / 180);
+        const dRa = (currentWaypoint.ra - previousWaypoint.ra) * cosDec;
+        const dDec = currentWaypoint.dec - previousWaypoint.dec;
+        const deltaArcsec = Math.hypot(dRa, dDec) * 3600;
+        const dtYr = Math.abs(currentWaypoint.mjd - previousWaypoint.mjd) / 365.25;
+        const pmTotalMasYr = dtYr > 0.0001 ? (deltaArcsec / dtYr) * 1000 : 0;
+        const paDeg = ((Math.atan2(dRa, dDec) * 180) / Math.PI + 360) % 360;
+        motionVector = {
+          from: previousWaypoint,
+          to: currentWaypoint,
+          deltaArcsec,
+          deltaTimeYears: dtYr,
+          pmTotalMasYr,
+          paDeg,
+          isMoving: deltaArcsec > 0.05,
+        };
+      }
+
+      return {
+        label,
+        color,
+        waypoints,
+        currentWaypoint,
+        previousWaypoint,
+        motionVector,
+        pmVector:
+          matchesObj && objDetail?.motion_fit?.pm_total_masyr != null
+            ? {
+                pmTotalMasYr: objDetail.motion_fit.pm_total_masyr,
+                paDeg: objDetail.motion_fit.pa_deg ?? 0,
+              }
+            : null,
+      };
+    });
+  }, [track, frames, frameA?.epoch, frame, analysisQ.data?.detections, objectQ.data, obj]);
 
   const rawDetections = analysisQ.data?.detections ?? [];
   const detections: DetectionRead[] = useMemo(() => {
@@ -577,6 +797,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     selectBoxMode,
     toggleSelectBox,
     spectrum: spectrumQ.data,
+    trackedTrajectories,
     resolveTargetDirect,
     resolving: resolveQ.isFetching,
     loadingCutouts:

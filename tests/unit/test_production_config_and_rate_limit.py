@@ -1,5 +1,8 @@
 """Unit tests for production configuration, structured logging, and rate limiting."""
 
+import time
+from uuid import uuid4
+
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from starlette.testclient import TestClient
@@ -28,20 +31,21 @@ def test_rate_limit_middleware_and_etag():
     def get_data():
         return PlainTextResponse("astronomical_payload_42")
 
+    auth_headers = {"authorization": f"test-client-{uuid4()}"}
     client = TestClient(test_app)
 
     # First request: 200 OK + ETag header
-    r1 = client.get("/test-data")
+    r1 = client.get("/test-data", headers=auth_headers)
     assert r1.status_code == 200
     assert "etag" in r1.headers
     etag = r1.headers["etag"]
 
     # Second request with If-None-Match: 304 Not Modified
-    r2 = client.get("/test-data", headers={"if-none-match": etag})
+    r2 = client.get("/test-data", headers={**auth_headers, "if-none-match": etag})
     assert r2.status_code == 304
 
     # Third request: exceeds limit (2 req/min) -> 429 ProblemDetail
-    r3 = client.get("/test-data")
+    r3 = client.get("/test-data", headers=auth_headers)
     assert r3.status_code == 429
     assert r3.headers.get("retry-after") == "60"
     data = r3.json()

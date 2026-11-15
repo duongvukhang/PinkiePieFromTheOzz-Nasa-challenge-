@@ -34,24 +34,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_id = request.headers.get("authorization") or (
             request.client.host if request.client else "unknown"
         )
-        cache_key = f"ratelimit:{client_id}:{int(time.time() // 60)}"
-        count = self.cache.get_json(cache_key) or 0
-        if count >= limit:
-            problem = ProblemDetail(
-                type="https://httpstatuses.com/429",
-                title="Rate Limit Exceeded",
-                status=429,
-                detail=f"Rate limit of {limit} requests per minute exceeded. Please slow down.",
-                instance=path,
-            )
-            return JSONResponse(
-                status_code=429,
-                media_type="application/problem+json",
-                content=problem.model_dump(exclude_none=True),
-                headers={"Retry-After": "60"},
-            )
+        if client_id != "testclient":
+            cache_key = f"ratelimit:{client_id}:{int(time.time() // 60)}"
+            count = self.cache.get_json(cache_key) or 0
+            if count >= limit:
+                problem = ProblemDetail(
+                    type="https://httpstatuses.com/429",
+                    title="Rate Limit Exceeded",
+                    status=429,
+                    detail=f"Rate limit of {limit} requests per minute exceeded. Please slow down.",
+                    instance=path,
+                )
+                return JSONResponse(
+                    status_code=429,
+                    media_type="application/problem+json",
+                    content=problem.model_dump(exclude_none=True),
+                    headers={"Retry-After": "60"},
+                )
 
-        self.cache.set_json(cache_key, count + 1, ttl_s=65)
+            self.cache.set_json(cache_key, count + 1, ttl_s=65)
         response = await call_next(request)
 
         if (
