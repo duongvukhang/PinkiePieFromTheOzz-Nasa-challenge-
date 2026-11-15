@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools \
         "fastapi>=0.111" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
         "pydantic-settings>=2.2" "sqlalchemy>=2.0" "alembic>=1.13" \
         "psycopg[binary]>=3.1" "redis>=5.0" "celery[redis]>=5.4" \
-        "boto3>=1.34" "pyyaml>=6.0" "argon2-cffi>=23.1" "python-multipart>=0.0.9" \
+        "boto3>=1.34" "httpx>=0.27" "pyyaml>=6.0" "argon2-cffi>=23.1" "python-multipart>=0.0.9" \
         "matplotlib>=3.8"
 
 COPY science/sphx_core ./science/sphx_core
@@ -24,7 +24,7 @@ COPY backend/alembic.ini ./backend/alembic.ini
 COPY backend/app ./backend/app
 COPY tests ./tests
 
-RUN pip install --no-cache-dir --no-deps -e ./science -e ./backend
+RUN pip install --no-cache-dir -e ./science -e ./backend
 
 RUN useradd --create-home --shell /bin/sh appuser
 USER appuser
