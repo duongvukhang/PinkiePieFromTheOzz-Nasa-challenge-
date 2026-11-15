@@ -189,7 +189,7 @@ export function ViewerToolbar({
         </div>
       </div>
 
-      <div className="viewer-presets" aria-label="Mandatory calibration targets">
+      <div className="viewer-presets" role="group" aria-label="Mandatory calibration targets">
         {examples.map((ex) => (
           <button
             key={ex.id}

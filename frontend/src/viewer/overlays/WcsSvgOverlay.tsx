@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
 import type {
   CatalogOverlaySource,
   DetectionRead,
@@ -154,6 +154,35 @@ export function WcsSvgOverlay({
     if (!dragStart && e.shiftKey) setDragStart({ x, y });
     setDragCurr({ x, y });
   };
+
+  // Memoized lookups for large FOV rendering performance (O(1) checks during 60 FPS playback)
+  const parsedTracks = useMemo(
+    () =>
+      tracks.map((t) => {
+        const [lbl, coords] = t.split(":");
+        const [r, d] = (coords ?? "").split(",").map(Number);
+        return {
+          lbl: lbl ?? "",
+          ra: r,
+          dec: d,
+          isConflict: t.includes("CONFLICT"),
+        };
+      }),
+    [tracks],
+  );
+
+  const measCoords = useMemo(
+    () =>
+      (objectDetail?.measurements ?? [])
+        .filter((m) => m.ra != null && m.dec != null)
+        .map((m) => ({ ra: m.ra!, dec: m.dec! })),
+    [objectDetail?.measurements],
+  );
+
+  // Large FOV / dense catalog capping to maintain smooth 60 FPS SVG rendering
+  const visibleGaia = useMemo(() => gaiaSources.slice(0, 500), [gaiaSources]);
+  const visibleCatwise = useMemo(() => catwiseSources.slice(0, 500), [catwiseSources]);
+  const visibleDetections = useMemo(() => detections.slice(0, 600), [detections]);
 
   // Trajectory points & motion vectors for active object
   const measurements = (objectDetail?.measurements ?? [])
@@ -348,7 +377,7 @@ export function WcsSvgOverlay({
             })}
           </g>
         )}
-        {gaiaSources.map((s) => {
+        {visibleGaia.map((s) => {
           const p = skyToPixel(s.ra, s.dec, wcs);
           const r = 2.6 * pxScale;
           return (
@@ -363,7 +392,7 @@ export function WcsSvgOverlay({
           );
         })}
 
-        {catwiseSources.map((s) => {
+        {visibleCatwise.map((s) => {
           const p = skyToPixel(s.ra, s.dec, wcs);
           return (
             <circle
@@ -380,7 +409,7 @@ export function WcsSvgOverlay({
 
         {/* 4. Detected Sources Overlay — aligned green bounding squares with persistent track labels */}
         {showSources &&
-          detections.map((d) => {
+          visibleDetections.map((d) => {
             const hasPix = d.x_pix != null && d.y_pix != null;
             const p = hasPix
               ? { x: d.x_pix!, y: wcs.naxis2 - d.y_pix! }
@@ -406,33 +435,24 @@ export function WcsSvgOverlay({
             const size = isSelected ? Math.max(baseFitPx * 1.3, 14) : baseFitPx;
             const half = size / 2;
 
-            const matchedTrack = tracks.find((t) => {
-              const [, coords] = t.split(":");
-              const coordsArr = (coords ?? "").split(",").map(Number);
-              const r = coordsArr[0];
-              const dec = coordsArr[1];
-              return (
-                r != null &&
-                dec != null &&
-                Math.abs(r - d.ra) < 0.003 &&
-                Math.abs(dec - d.dec) < 0.003
-              );
-            });
-            const isObjectMeasurement = objectDetail?.measurements?.some(
-              (m) =>
-                m.ra != null &&
-                m.dec != null &&
-                Math.abs(m.ra - d.ra) < 0.003 &&
-                Math.abs(m.dec - d.dec) < 0.003,
+            const matchedTrack = parsedTracks.find(
+              (t) =>
+                t.ra != null &&
+                t.dec != null &&
+                Math.abs(t.ra - d.ra) < 0.003 &&
+                Math.abs(t.dec - d.dec) < 0.003,
+            );
+            const isObjectMeasurement = measCoords.some(
+              (m) => Math.abs(m.ra - d.ra) < 0.003 && Math.abs(m.dec - d.dec) < 0.003,
             );
             const trackLabel = matchedTrack
-              ? matchedTrack.split(":")[0]
+              ? matchedTrack.lbl
               : isObjectMeasurement
                 ? objectDetail?.label
                 : null;
             const isConfirmed = Boolean(trackLabel);
             const inBox = isInActiveBox(d.ra, d.dec);
-            const isConflict = Boolean(trackLabel && matchedTrack?.includes("CONFLICT"));
+            const isConflict = Boolean(trackLabel && matchedTrack?.isConflict);
             const conf = (d as { confidence?: number }).confidence;
             const isAmbiguous = Boolean((d.flags && d.flags & 4) || (conf != null && conf < 0.90));
             const targetColor = trackLabel === "B" ? "#f97316" : trackLabel === "A" ? "#38bdf8" : "#22c55e";

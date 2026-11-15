@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { api, type UploadCompatibilityReport } from "../../api/client";
 import { useViewStore } from "../state/viewStore";
 
@@ -15,6 +15,15 @@ export function UploadFitsModal({ isOpen, onClose, onLoadedField }: UploadFitsMo
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<UploadCompatibilityReport | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 

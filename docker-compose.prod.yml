@@ -1,0 +1,80 @@
+x-backend-prod: &backend-prod
+  build:
+    context: .
+    dockerfile: infra/backend.Dockerfile
+  restart: unless-stopped
+  environment:
+    APP_ENV: production
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    LOG_FORMAT: json
+    SECRET_KEY: ${SECRET_KEY}
+    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://sphx:${POSTGRES_PASSWORD}@db:5432/sphx}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+    CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+    CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1}
+    RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+    SENTRY_DSN: ${SENTRY_DSN:-}
+    SPHX_STORAGE_BACKEND: ${SPHX_STORAGE_BACKEND:-local}
+    SPHX_STORAGE_DIR: /app/data/storage
+  volumes:
+    - app_storage:/app/data/storage
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sphx}
+      POSTGRES_USER: ${POSTGRES_USER:-sphx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sphx} -d ${POSTGRES_DB:-sphx}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    <<: *backend-prod
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=* --workers 2
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    <<: *backend-prod
+    command: celery -A app.workers.celery_app worker --loglevel=info -c 2 -Q fast,heavy,ingest
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  pg_data:
+  redis_data:
+  app_storage:

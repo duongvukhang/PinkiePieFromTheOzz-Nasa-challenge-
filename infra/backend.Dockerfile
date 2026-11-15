@@ -13,10 +13,13 @@ COPY backend/app ./backend/app
 COPY tests ./tests
 
 RUN pip install --no-cache-dir --upgrade pip setuptools \
-    && pip install --no-cache-dir -e ./science -e ./backend
+    && pip install --no-cache-dir ./science ./backend
 
 RUN useradd --create-home --shell /bin/sh appuser
 USER appuser
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
