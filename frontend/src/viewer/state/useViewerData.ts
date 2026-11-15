@@ -52,6 +52,8 @@ export function useViewerData(search: string, skipSecondary = false) {
     removeTrack,
     syncFromSearch,
     setView,
+    mode,
+    op,
   } = view;
   const fitsId = view.fitsId;
   const fitsIds = view.fitsIds;
@@ -173,18 +175,26 @@ export function useViewerData(search: string, skipSecondary = false) {
       flagged_fraction: 0,
     }));
 
+    const cachedMeta = view.loadedFramesMeta || {};
     for (const fid of allFitsIds) {
       if (!matchedIds.has(fid) && !excluded.has(fid)) {
+        const meta = cachedMeta[fid] || {};
         userFrames.push({
           frame_id: fid,
-          epoch: "FITS Frame",
-          mjd_tdb_mid: 60000.0,
-          utc_mid: "2025-01-01T00:00:00Z",
-          display_url: `/api/v1/uploads/${fid}/display.webp`,
-          science_url: `/api/v1/uploads/${fid}/science.bin`,
-          fits_url: `/api/v1/uploads/${fid}/frame.fits`,
-          wcs_header: "",
-          stretch: { vmin: 0, vmax: 1000, shape: [128, 128] },
+          epoch: meta.epoch || meta.band_label || "Uploaded FITS",
+          mjd_tdb_mid: meta.mjd_tdb_mid ?? 60000.0,
+          utc_mid:
+            meta.utc_mid ||
+            (meta.mjd_tdb_mid
+              ? new Date((meta.mjd_tdb_mid - 40587) * 86400000).toISOString()
+              : "2025-01-01T00:00:00Z"),
+          array_id: undefined,
+          band_label: meta.band_label,
+          display_url: meta.display_url || `/api/v1/uploads/${fid}/display.webp`,
+          science_url: meta.science_url || `/api/v1/uploads/${fid}/science.bin`,
+          fits_url: meta.fits_url || `/api/v1/uploads/${fid}/frame.fits`,
+          wcs_header: meta.wcs_header || "",
+          stretch: meta.stretch || { vmin: 0, vmax: 1000, shape: [128, 128] },
           flagged_fraction: 0,
         });
       }
@@ -245,7 +255,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     }
 
     return combined.sort((a, b) => a.mjd_tdb_mid - b.mjd_tdb_mid);
-  }, [cutoutQ.data, uploadsQ.data, allFitsIds, excludedFrameIds]);
+  }, [cutoutQ.data, uploadsQ.data, allFitsIds, excludedFrameIds, bands, view.loadedFramesMeta]);
   const safeIdx = frames.length ? ((frame % frames.length) + frames.length) % frames.length : 0;
   const frameA = frames.find((f) => f.frame_id === a) ?? frames[safeIdx];
   const frameB =
@@ -254,13 +264,15 @@ export function useViewerData(search: string, skipSecondary = false) {
   const bufAQ = useQuery({
     queryKey: ["science", frameA?.science_url],
     queryFn: () => fetchScienceFrame(frameA!.science_url),
-    enabled: Boolean(frameA?.science_url),
+    enabled: Boolean(frameA?.science_url && (op !== "none" || mode === "compare")),
   });
 
   const bufBQ = useQuery({
     queryKey: ["science", frameB?.science_url],
     queryFn: () => fetchScienceFrame(frameB!.science_url),
-    enabled: Boolean(frameB?.science_url) && frameB?.frame_id !== frameA?.frame_id,
+    enabled:
+      Boolean(frameB?.science_url && (op !== "none" || mode === "compare")) &&
+      frameB?.frame_id !== frameA?.frame_id,
   });
 
   const useCatOverlay = (cat: "gaia" | "catwise") =>
@@ -527,7 +539,7 @@ export function useViewerData(search: string, skipSecondary = false) {
         dec: s.dec,
         x_pix: null,
         y_pix: null,
-        flux_ujy: s.flux_ujy ?? 1000,
+        flux_ujy: 1000,
         mag_ab: undefined,
         fwhm_arcsec: 6.2,
         flags: 0,
@@ -567,7 +579,8 @@ export function useViewerData(search: string, skipSecondary = false) {
     spectrum: spectrumQ.data,
     resolveTargetDirect,
     resolving: resolveQ.isFetching,
-    loadingCutouts: allFitsIds.length > 0 ? uploadsQ.isFetching : cutoutQ.isFetching,
+    loadingCutouts:
+      (allFitsIds.length > 0 ? uploadsQ.isFetching : cutoutQ.isFetching) && frames.length === 0,
     loadingText: analysisQ.isFetching
       ? "Extracting sources & candidates…"
       : allFitsIds.length > 0

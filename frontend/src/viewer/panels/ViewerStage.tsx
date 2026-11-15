@@ -95,6 +95,17 @@ export function ViewerStage({
     return `${frameA.display_url}${sep}stretch=${stretch}&colormap=${colormap}`;
   }, [frameA?.display_url, stretch, colormap]);
 
+  useEffect(() => {
+    if (!frames || frames.length === 0) return;
+    frames.forEach((f) => {
+      if (f.display_url) {
+        const sep = f.display_url.includes("?") ? "&" : "?";
+        const pre = new Image();
+        pre.src = `${f.display_url}${sep}stretch=${stretch}&colormap=${colormap}`;
+      }
+    });
+  }, [frames, stretch, colormap]);
+
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);

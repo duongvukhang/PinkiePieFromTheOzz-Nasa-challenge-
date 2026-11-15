@@ -15,7 +15,7 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import (
@@ -419,7 +419,7 @@ class InMemoryJobStore(InMemoryWorkspaceMixin, InMemoryObjectMixin, JobStore):
         with self._lock:
             items = list(self._fits_files.values())
         if user_id is not None:
-            items = [f for f in items if f.get("uploader_id") == user_id]
+            items = [f for f in items if f.get("uploader_id") == user_id or f.get("uploader_id") is None]
         if project_id is not None:
             items = [
                 f
@@ -780,7 +780,7 @@ class SqlAlchemyJobStore(SqlAlchemyWorkspaceMixin, SqlAlchemyObjectMixin, JobSto
                     ProjectFile.project_id == project_id
                 )
             if user_id is not None:
-                stmt = stmt.where(FitsFile.uploader_id == user_id)
+                stmt = stmt.where(or_(FitsFile.uploader_id == user_id, FitsFile.uploader_id.is_(None)))
             stmt = stmt.order_by(FitsFile.mjd_tdb_mid.asc().nulls_last())
             rows = session.scalars(stmt).all()
             return [

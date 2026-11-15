@@ -45,6 +45,17 @@ const ARCHIVE_SOURCES: { id: ArchiveSourceId; label: string; desc: string }[] = 
   },
 ];
 
+const toFrameMeta = (res: any, fallbackLabel: string, fallbackBand?: string | null, fallbackMjd?: number | null) => ({
+  fits_file_id: res.fits_file_id,
+  epoch: res.band_label || fallbackLabel,
+  mjd_tdb_mid: res.mjd_tdb_mid ?? fallbackMjd ?? 60000.0,
+  utc_mid: res.utc_mid,
+  display_url: res.display_url,
+  science_url: res.science_url,
+  fits_url: res.fits_url,
+  band_label: res.band_label || fallbackBand,
+});
+
 export function ArchiveSearchModal({
   isOpen,
   onClose,
@@ -170,6 +181,9 @@ export function ArchiveSearchModal({
           fov_arcmin: fovArcmin,
         });
         if (loaded?.fits_file_id) {
+          useViewStore.getState().cacheFramesMeta([
+            toFrameMeta(loaded, `Archive ${activeProd.obs_id}`, activeProd.band, ep.mjd_obs),
+          ]);
           useViewStore.getState().addFitsId(loaded.fits_file_id);
         }
       } catch (err) {
@@ -223,8 +237,9 @@ export function ArchiveSearchModal({
         })
         .filter((item): item is { prod: EpochProduct; mjd_obs: number | null | undefined } => Boolean(item.prod));
 
-      // Load products with bounded concurrency (up to 3 concurrent downloads)
-      const chunkSize = 3;
+      // Load products with bounded concurrency
+      const loadedMetaList: Array<{ fits_file_id: string } & Record<string, any>> = [];
+      const chunkSize = 6;
       for (let i = 0; i < prodsToLoad.length; i += chunkSize) {
         const batch = prodsToLoad.slice(i, i + chunkSize);
         await Promise.all(
@@ -241,13 +256,17 @@ export function ArchiveSearchModal({
                 fov_arcmin: fovArcmin,
               });
               if (res?.fits_file_id) {
-                useViewStore.getState().addFitsId(res.fits_file_id);
+                loadedMetaList.push(toFrameMeta(res, `Archive ${prod.obs_id}`, prod.band, mjd_obs));
               }
             } catch {
               // Continue loading remaining products
             }
           }),
         );
+      }
+      if (loadedMetaList.length > 0) {
+        useViewStore.getState().cacheFramesMeta(loadedMetaList);
+        useViewStore.getState().addFitsIds(loadedMetaList.map((m) => m.fits_file_id));
       }
     } finally {
       setLoadingAll(false);

@@ -548,9 +548,9 @@ export function InspectorTabs({
                           Gaia DR3 Stars in Box ({inBoxGaia.length}):
                         </div>
                         {inBoxGaia.slice(0, 3).map((g) => (
-                          <div key={g.source_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: "4px" }}>
+                          <div key={g.catalog_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: "4px" }}>
                             <span style={{ fontSize: "0.75rem" }}>
-                              Gaia #{g.source_id.slice(-6)} · G={g.mag != null ? g.mag.toFixed(1) : "—"}
+                              Gaia #{g.catalog_id.slice(-6)} · G={g.mag != null ? g.mag.toFixed(1) : "—"}
                             </span>
                             <button
                               type="button"

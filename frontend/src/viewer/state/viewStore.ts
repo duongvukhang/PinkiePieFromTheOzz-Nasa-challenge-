@@ -22,6 +22,7 @@ export interface ViewState {
   projectId?: string;
   fitsId?: string;
   fitsIds: string[];
+  loadedFramesMeta: Record<string, any>;
   excludedFrameIds: string[];
   isUploadModalOpen: boolean;
   mode: ViewerMode;
@@ -204,6 +205,7 @@ const DEFAULT_STATE: ViewState = {
   bands: "all",
   source: "spherex_irsa",
   fitsIds: [],
+  loadedFramesMeta: {},
   excludedFrameIds: [],
   isUploadModalOpen: false,
   mode: "blink",
@@ -238,6 +240,8 @@ interface ViewStore extends ViewState {
   addTrack: (label: string, ra: number, dec: number) => void;
   removeTrack: (label: string) => void;
   addFitsId: (id: string) => void;
+  addFitsIds: (ids: string[]) => void;
+  cacheFramesMeta: (frames: Array<{ fits_file_id?: string; frame_id?: string; [key: string]: any }>) => void;
   removeFitsId: (id: string) => void;
   removeFrame: (frameId: string) => void;
   setUploadModalOpen: (open: boolean) => void;
@@ -354,6 +358,27 @@ export const useViewStore = create<ViewStore>((set) => ({
       };
       syncReplaceUrl(next);
       return next;
+    }),
+  addFitsIds: (ids) =>
+    set((prev) => {
+      const nextFitsIds = Array.from(new Set([...prev.fitsIds, ...ids]));
+      const next = {
+        ...prev,
+        fitsIds: nextFitsIds,
+        fitsId: prev.fitsId || ids[0],
+        excludedFrameIds: prev.excludedFrameIds.filter((f) => !ids.includes(f)),
+      };
+      syncReplaceUrl(next);
+      return next;
+    }),
+  cacheFramesMeta: (frames) =>
+    set((prev) => {
+      const updated = { ...prev.loadedFramesMeta };
+      for (const f of frames) {
+        const id = f.fits_file_id || f.frame_id;
+        if (id) updated[id] = { ...updated[id], ...f };
+      }
+      return { loadedFramesMeta: updated };
     }),
   removeFitsId: (id) =>
     set((prev) => {

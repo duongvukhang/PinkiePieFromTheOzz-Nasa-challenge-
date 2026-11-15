@@ -73,6 +73,23 @@ export function UploadFitsModal({ isOpen, onClose, onLoadedField }: UploadFitsMo
 
       const rep = await api.getUploadReport(res.upload_id);
       setReport(rep);
+      if (rep && rep.valid && res.fits_file_id) {
+        const utcMid = rep.mjd_tdb_mid
+          ? new Date((rep.mjd_tdb_mid - 40587) * 86400000).toISOString()
+          : "2025-01-01T00:00:00Z";
+        useViewStore.getState().cacheFramesMeta([
+          {
+            fits_file_id: String(res.fits_file_id),
+            epoch: file.name.replace(/\.[^/.]+$/, "") || "Uploaded FITS",
+            mjd_tdb_mid: rep.mjd_tdb_mid ?? 60000.0,
+            utc_mid: utcMid,
+            display_url: `/api/v1/uploads/${res.fits_file_id}/display.webp`,
+            science_url: `/api/v1/uploads/${res.fits_file_id}/science.bin`,
+            fits_url: `/api/v1/uploads/${res.fits_file_id}/frame.fits`,
+            band_label: rep.band_label || file.name,
+          },
+        ]);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "FITS upload failed");
     } finally {

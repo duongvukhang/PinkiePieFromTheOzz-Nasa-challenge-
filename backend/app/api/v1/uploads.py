@@ -291,6 +291,7 @@ async def get_upload_display(
     buf = io.BytesIO()
     Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", lossless=True)
     webp_bytes = buf.getvalue()
+    cache_key = f"products/uploads/{upload_or_fits_id}/display_{stretch}_{colormap}.webp"
     with contextlib.suppress(Exception):
         storage.put_bytes(cache_key, webp_bytes, content_type="image/webp")
     return Response(

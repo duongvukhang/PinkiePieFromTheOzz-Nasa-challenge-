@@ -402,8 +402,8 @@ export function WcsSvgOverlay({
             const degPerPx = Math.abs(wcs.cd11) || 0.0026;
             const fwhmArcsec = d.fwhm_arcsec != null && d.fwhm_arcsec > 0 ? d.fwhm_arcsec : degPerPx * 3600 * 2.2;
             const fwhmPx = fwhmArcsec / (3600 * degPerPx);
-            const baseFitPx = Math.max(7, Math.min(26, fwhmPx * 1.4));
-            const size = (isSelected ? Math.max(baseFitPx * 1.25, 12) : baseFitPx) * pxScale;
+            const baseFitPx = Math.max(8, Math.min(24, fwhmPx * 1.6));
+            const size = isSelected ? Math.max(baseFitPx * 1.3, 14) : baseFitPx;
             const half = size / 2;
 
             const matchedTrack = tracks.find((t) => {
@@ -414,16 +414,24 @@ export function WcsSvgOverlay({
               return (
                 r != null &&
                 dec != null &&
-                Math.abs(r - d.ra) < 0.001 &&
-                Math.abs(dec - d.dec) < 0.001
+                Math.abs(r - d.ra) < 0.003 &&
+                Math.abs(dec - d.dec) < 0.003
               );
             });
-            const trackLabel = matchedTrack ? matchedTrack.split(":")[0] : null;
+            const isObjectMeasurement = objectDetail?.measurements?.some(
+              (m) =>
+                m.ra != null &&
+                m.dec != null &&
+                Math.abs(m.ra - d.ra) < 0.003 &&
+                Math.abs(m.dec - d.dec) < 0.003,
+            );
+            const trackLabel = matchedTrack
+              ? matchedTrack.split(":")[0]
+              : isObjectMeasurement
+                ? objectDetail?.label
+                : null;
             const isConfirmed = Boolean(trackLabel);
             const inBox = isInActiveBox(d.ra, d.dec);
-            if (!isSelected && !isConfirmed && !inBox) {
-              return null;
-            }
             const isConflict = Boolean(trackLabel && matchedTrack?.includes("CONFLICT"));
             const conf = (d as { confidence?: number }).confidence;
             const isAmbiguous = Boolean((d.flags && d.flags & 4) || (conf != null && conf < 0.90));
@@ -452,7 +460,7 @@ export function WcsSvgOverlay({
                   e.stopPropagation();
                   if (isConfirmed) {
                     onSelectTrack?.(trackLabel!);
-                  } else if (inBox && onTrackDetection) {
+                  } else if (onTrackDetection) {
                     if (tracks.length >= 2) {
                       setCapNotice("Tracking cap reached: Max 2 targets (Target A, Target B). Untrack one first.");
                       setTimeout(() => setCapNotice(null), 3500);
@@ -469,7 +477,7 @@ export function WcsSvgOverlay({
                     e.stopPropagation();
                     if (isConfirmed) {
                       onSelectTrack?.(trackLabel!);
-                    } else if (inBox && onTrackDetection && tracks.length < 2) {
+                    } else if (onTrackDetection && tracks.length < 2) {
                       onTrackDetection(d);
                     } else {
                       onSelectDetection?.(d);
@@ -489,20 +497,20 @@ export function WcsSvgOverlay({
                   vectorEffect="non-scaling-stroke"
                 />
                 {trackLabel && (
-                  <g transform={`translate(${screenX - half}, ${screenY - half - 12 * pxScale})`}>
+                  <g transform={`translate(${screenX - half}, ${screenY - half - Math.max(10, size * 0.8)})`}>
                     <rect
                       x={0}
                       y={0}
-                      width={18 * pxScale}
-                      height={10 * pxScale}
+                      width={Math.max(14, size)}
+                      height={Math.max(9, size * 0.7)}
                       rx={2}
                       fill={trackLabel === "B" ? "#ea580c" : "#0284c7"}
                     />
                     <text
-                      x={9 * pxScale}
-                      y={7.5 * pxScale}
+                      x={Math.max(14, size) / 2}
+                      y={Math.max(9, size * 0.7) * 0.78}
                       fill="#ffffff"
-                      fontSize={7.5 * pxScale}
+                      fontSize={Math.max(7, size * 0.55)}
                       fontWeight="bold"
                       textAnchor="middle"
                       fontFamily="monospace"
