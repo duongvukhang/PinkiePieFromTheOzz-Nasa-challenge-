@@ -18,7 +18,7 @@ endpoints:
 rate_limit:
   max_concurrent: 4
   requests_per_sec: 2.0
-  max_retries: 3
+  max_retries: 1
   base_backoff_s: 0.5
   max_backoff_s: 30.0
 cutout:

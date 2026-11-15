@@ -264,9 +264,19 @@ export const useViewStore = create<ViewStore>((set) => ({
           parsed.dec !== undefined &&
           prev.dec !== undefined &&
           Math.abs(parsed.dec - prev.dec) < 1e-6);
+      const mergedFitsIds =
+        parsed.fitsIds && parsed.fitsIds.length > 0
+          ? parsed.fitsIds
+          : sameCoords
+            ? prev.fitsIds
+            : [];
+      const mergedFitsId =
+        parsed.fitsId || (sameCoords ? prev.fitsId : undefined);
       return {
         ...DEFAULT_STATE,
         ...parsed,
+        fitsId: mergedFitsId,
+        fitsIds: mergedFitsIds,
         target: parsed.target || "",
         activeBox: sameCoords ? prev.activeBox : null,
       };

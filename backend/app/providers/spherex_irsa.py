@@ -421,22 +421,13 @@ class SpherexIrsaProvider(Provider):
             if arr_filter
             else None
         )
-        time_param = (
-            (
-                t0 or Time("1990-01-01T00:00:00", scale="utc"),
-                t1 or Time("2099-12-31T00:00:00", scale="utc"),
-            )
-            if (t0 is not None or t1 is not None)
-            else None
-        )
-
         icrs = c.icrs
         table = None
         try:
             raw_table = self._run(
                 lambda: self._irsa.query_sia(
                     pos=(icrs, radius),
-                    time=time_param,
+                    time=None,
                     band=band_param,
                     collection=collection,
                 )

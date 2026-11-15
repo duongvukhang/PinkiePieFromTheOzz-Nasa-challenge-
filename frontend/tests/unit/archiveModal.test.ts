@@ -81,4 +81,19 @@ describe("Archive API client & search parameter serialization", () => {
     expect(computeFovArcmin("30", "arcsec")).toBe(1.0);
     expect(computeFovArcmin("", "arcmin")).toBe(10.0);
   });
+
+  it("preserves fitsIds in syncFromSearch when coordinates match", async () => {
+    const { useViewStore } = await import("../../src/viewer/state/viewStore");
+    useViewStore.setState({
+      ra: 133.79513,
+      dec: -7.24515,
+      fitsId: "fits-arch-1",
+      fitsIds: ["fits-arch-1", "fits-arch-2"],
+    });
+    // syncFromSearch with same coords but no fitsIds in query
+    useViewStore.getState().syncFromSearch("?ra=133.79513&dec=-7.24515", false);
+    const state = useViewStore.getState();
+    expect(state.fitsId).toBe("fits-arch-1");
+    expect(state.fitsIds).toEqual(["fits-arch-1", "fits-arch-2"]);
+  });
 });

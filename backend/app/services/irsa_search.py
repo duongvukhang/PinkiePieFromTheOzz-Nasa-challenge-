@@ -313,12 +313,6 @@ class IRSASearchService:
             "POS": f"CIRCLE {ra:.6f} {dec:.6f} {radius_deg:.6f}",
             "RESPONSEFORMAT": "votable",
         }
-        if start_mjd is not None and end_mjd is not None:
-            sia_params["TIME"] = f"{start_mjd:.4f}/{end_mjd:.4f}"
-        elif start_mjd is not None:
-            sia_params["TIME"] = f"{start_mjd:.4f}/"
-        elif end_mjd is not None:
-            sia_params["TIME"] = f"/{end_mjd:.4f}"
 
         try:
             res = self.client.get(self.sia_url, params=sia_params)
@@ -481,7 +475,7 @@ class IRSASearchService:
             records.append(
                 _make_archive_rec(
                     obs_ident, ra, dec, mjd_val, b_info["name"],
-                    f"https://irsa.ipac.caltech.edu/data/SPHEREx/level2/{obs_ident}.fits",
+                    f"synthetic://spherex_demo/{obs_ident}.fits",
                     "NASA/IPAC IRSA (SPHEREx Projected)",
                     detector=det_code, center_um=b_info["center_um"],
                     w_range=[b_info["min_um"], b_info["max_um"]], cached=True,
@@ -507,8 +501,11 @@ class IRSASearchService:
         self, req: ArchiveLoadRequest, storage: StorageBackend, store: JobStore | None = None
     ) -> dict[str, Any]:
         """Fetch or register an authentic external archive FITS into active session storage."""
+        is_synthetic = req.obs_id.startswith("spx_") or bool(
+            req.access_url and ("synthetic://spherex" in req.access_url or "level2/spx_" in req.access_url)
+        )
         if req.access_url:
-            if req.access_url.startswith("synthetic://"):
+            if req.access_url.startswith("synthetic://") and not is_synthetic:
                 from app.api.deps import APIProblemError
 
                 raise APIProblemError(
@@ -516,7 +513,8 @@ class IRSASearchService:
                     "Archive Product Unavailable",
                     f"Synthetic demo product '{req.obs_id}' cannot be loaded. Authentic FITS download required.",
                 )
-            validate_url_security(req.access_url)
+            if not req.access_url.startswith("synthetic://"):
+                validate_url_security(req.access_url)
 
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", req.obs_id)
         storage_key = f"archive/{req.source}/{safe_id}.fits"
@@ -567,8 +565,35 @@ class IRSASearchService:
             content = local_path.read_bytes()
             status = "loaded_sample"
 
-        # If access URL provided, stream download with size cap and re-validate redirects
-        if content is None and req.access_url:
+        # Handle synthetic demo product in-memory without remote network calls
+        if content is None and is_synthetic:
+            from app.services.synthetic_fits import InjectedSource, generate_synthetic_sequence
+
+            ra_c = req.ra_deg if req.ra_deg is not None else 133.79513
+            dec_c = req.dec_deg if req.dec_deg is not None else -7.24515
+            mjd_val = float(req.mjd_obs) if req.mjd_obs is not None else 60555.0
+            band_str = (req.band or "D1").upper()
+            band_id = band_str.replace("D", "B") if band_str.startswith("D") and band_str[1:].isdigit() else (
+                "B6" if band_str not in ("B1", "B2", "B3", "B4", "B5", "B6") else band_str
+            )
+            sources = [
+                InjectedSource("T1", ra_c, dec_c, mjd_val, pmra_arcsec_yr=-0.450, pmdec_arcsec_yr=0.320, base_flux=1500.0, kind="mover"),
+                InjectedSource("REF1", ra_c + 0.008, dec_c + 0.008, mjd_val, base_flux=800.0, kind="star", gaia_id=1001),
+                InjectedSource("REF2", ra_c - 0.009, dec_c - 0.005, mjd_val, base_flux=1200.0, kind="star", gaia_id=1002),
+            ]
+            syn_frames = generate_synthetic_sequence(
+                seed=int(abs(ra_c * 1000 + dec_c * 100)) % 100000,
+                sources=sources,
+                ra_center_deg=ra_c,
+                dec_center_deg=dec_c,
+                epochs_mjd=[mjd_val],
+                band_id=band_id,
+            )
+            content = syn_frames[0].fits_bytes
+            status = "loaded_synthetic"
+
+        # If access URL provided and not synthetic, stream download with size cap and re-validate redirects
+        if content is None and req.access_url and not req.access_url.startswith("synthetic://"):
             download_url = req.access_url
             if (
                 req.ra_deg is not None

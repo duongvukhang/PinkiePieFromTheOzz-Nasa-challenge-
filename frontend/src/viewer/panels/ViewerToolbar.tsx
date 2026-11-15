@@ -271,6 +271,7 @@ export function ViewerToolbar({
           bands: newBands,
           source: newSource,
         }) => {
+          const currentStore = useViewStore.getState();
           const nextView = {
             ra: newRa,
             dec: newDec,
@@ -281,9 +282,11 @@ export function ViewerToolbar({
             source: newSource || "spherex_irsa",
             target: "",
             frame: 0,
+            fitsId: currentStore.fitsId,
+            fitsIds: currentStore.fitsIds,
           };
           setView(nextView);
-          const qs = toViewQuery({ ...useViewStore.getState(), ...nextView });
+          const qs = toViewQuery({ ...currentStore, ...nextView });
           navigate(`/v${qs}`);
         }}
       />

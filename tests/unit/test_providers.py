@@ -470,8 +470,8 @@ def test_rate_limit_retries_and_circuit_breaker() -> None:
     with pytest.raises(ProviderRateLimitError) as exc_info:
         p2.fetch(ref)
     assert exc_info.value.retry_after_s == 1.0
-    assert fits_calls[0] == 4  # 1 initial + 3 retries
-    assert http_sleeps == [1.0, 1.0, 2.0]
+    assert fits_calls[0] == 2  # 1 initial + 1 retry
+    assert http_sleeps == [1.0]
 
     with pytest.raises(ProviderUnavailableError, match="circuit breaker"):
         p2.fetch(ref)

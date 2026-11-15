@@ -117,21 +117,6 @@ export function useViewerData(search: string, skipSecondary = false) {
   const activeDec = dec ?? resolveQ.data?.dec_deg;
   const hasCoords = activeRa !== undefined && activeDec !== undefined;
 
-  const fieldsQ = useQuery({
-    queryKey: ["fields", activeRa, activeDec, fov, bands, release, from, to, source],
-    queryFn: () =>
-      api.getFieldFrames({
-        ra: activeRa!,
-        dec: activeDec!,
-        fov,
-        bands,
-        release,
-        from: from || undefined,
-        to: to || undefined,
-      }),
-    enabled: hasCoords && allFitsIds.length === 0,
-  });
-
   const cutoutQ = useQuery({
     queryKey: ["cutout", activeRa, activeDec, fov, bands, release, from, to, source],
     queryFn: async () => {
@@ -530,7 +515,7 @@ export function useViewerData(search: string, skipSecondary = false) {
     bufB: bufBQ.data,
     examples: examplesQ.data?.targets ?? [],
     releases: releasesQ.data ?? [],
-    warnings: [...(fieldsQ.data?.warnings ?? []), ...(cutoutQ.data?.warnings ?? [])],
+    warnings: cutoutQ.data?.warnings ?? [],
     gaiaSources: gaiaQ.data?.sources ?? [],
     catwiseSources: catwiseQ.data?.sources ?? [],
     detections,
@@ -551,11 +536,11 @@ export function useViewerData(search: string, skipSecondary = false) {
     loadingCutouts: allFitsIds.length > 0 ? uploadsQ.isFetching : cutoutQ.isFetching,
     loadingText: allFitsIds.length > 0 ? "Loading FITS frames…" : "Loading FITS cutouts…",
     errorMsg: (() => {
-      const err = resolveQ.error ?? cutoutQ.error ?? fieldsQ.error ?? bufAQ.error ?? null;
+      const err = resolveQ.error ?? cutoutQ.error ?? bufAQ.error ?? null;
       return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
     })(),
     resolveError: (() => {
-      const err = resolveQ.error ?? cutoutQ.error ?? fieldsQ.error ?? bufAQ.error ?? null;
+      const err = resolveQ.error ?? cutoutQ.error ?? bufAQ.error ?? null;
       return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
     })(),
     setPausedByVis,

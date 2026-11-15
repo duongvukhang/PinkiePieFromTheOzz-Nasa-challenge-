@@ -274,6 +274,29 @@ def test_load_archive_product_failure_raises_502(tmp_path: Path):
     assert "Archive Product Unavailable" in exc_info.value.title
 
 
+def test_load_archive_product_synthetic_demo_succeeds(tmp_path: Path):
+    from app.schemas.archive import ArchiveLoadRequest
+    from app.services.jobs import InMemoryJobStore
+    from app.services.storage import LocalStorageBackend
+
+    storage = LocalStorageBackend(tmp_path / "storage")
+    store = InMemoryJobStore()
+    req = ArchiveLoadRequest(
+        obs_id="spx_2025W20_1B_0437_D1",
+        access_url="synthetic://spherex_demo/spx_2025W20_1B_0437_D1.fits",
+        source="spherex_irsa",
+        ra_deg=133.795,
+        dec_deg=-7.245,
+        mjd_obs=60800.0,
+        band="D1",
+    )
+    result = irsa_search_service.load_archive_product(req, storage, store)
+    assert result["status"] == "loaded_synthetic"
+    assert result["obs_id"] == "spx_2025W20_1B_0437_D1"
+    assert "fits_file_id" in result
+    assert storage.exists(result["storage_key"])
+
+
 def test_search_spherex_cone_radius_gt_5_and_caching():
     """Verify cone radius > 5 arcmin finds sample fits and caches result."""
     # North Ecliptic Pole region (near sample FITS at RA 276.26, Dec 64.83)
