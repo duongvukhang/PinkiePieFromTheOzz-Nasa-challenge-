@@ -226,7 +226,7 @@ export function WcsSvgOverlay({
     const degPerPx = Math.abs(wcs.cd11) || 0.0026;
     const rx = Math.max(1.8 * pxScale, ((m.sig_ra_mas ?? 50) / 3.6e6 / degPerPx) * pxScale);
     const ry = Math.max(1.8 * pxScale, ((m.sig_dec_mas ?? 50) / 3.6e6 / degPerPx) * pxScale);
-    return { ...p, epoch: m.epoch ?? `E${mIdx + 1}`, flags: m.flags, rx, ry, mjd: m.mjd_tdb, idx: mIdx };
+    return { ...p, ra: m.ra!, dec: m.dec!, epoch: m.epoch ?? `E${mIdx + 1}`, flags: m.flags, rx, ry, mjd: m.mjd_tdb, idx: mIdx };
   });
 
   const activeEpochIndex = (() => {
@@ -623,7 +623,7 @@ export function WcsSvgOverlay({
                     ⚠
                   </text>
                 )}
-                {showUncertainty && (
+                {showUncertainty && !isConfirmed && (
                   <circle
                     cx={screenX}
                     cy={screenY}
@@ -827,6 +827,17 @@ export function WcsSvgOverlay({
                 {/* C. Clickable Waypoint Badges along Trajectory */}
                 {wptsPx.map((pt, idx) => {
                   const isCurrent = pt.epoch === currentEpoch;
+                  const dynSize = getDynamicObjectSize(
+                    pt.ra,
+                    pt.dec,
+                    wcs,
+                    pxScale,
+                    detections,
+                    pt.fwhmArcsec,
+                    pt.snr,
+                  );
+                  const dynHalf = dynSize / 2;
+
                   return (
                     <g
                       key={`tr-wpt-${tr.label}-${idx}`}
@@ -846,26 +857,29 @@ export function WcsSvgOverlay({
                       }}
                       aria-label={`Jump to ${tr.label} in ${pt.epoch}`}
                     >
-                      {isCurrent && (
-                        <circle
-                          r={7 * pxScale}
-                          fill="none"
-                          stroke={tr.color}
+                      {isCurrent ? (
+                        <rect
+                          x={-dynHalf}
+                          y={-dynHalf}
+                          width={dynSize}
+                          height={dynSize}
+                          fill="rgba(34, 197, 94, 0.04)"
+                          stroke="#22c55e"
                           strokeWidth={1.5 * pxScale}
-                          strokeDasharray={`${2 * pxScale},${2 * pxScale}`}
-                          opacity={0.85}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      ) : (
+                        <circle
+                          r={3 * pxScale}
+                          fill="rgba(15, 23, 42, 0.85)"
+                          stroke={tr.color}
+                          strokeWidth={1 * pxScale}
                         />
                       )}
-                      <circle
-                        r={(isCurrent ? 4.5 : 3) * pxScale}
-                        fill={isCurrent ? tr.color : "rgba(15, 23, 42, 0.85)"}
-                        stroke={tr.color}
-                        strokeWidth={1 * pxScale}
-                      />
                       <text
-                        x={5 * pxScale}
-                        y={-3 * pxScale}
-                        fill={isCurrent ? "#ffffff" : tr.color}
+                        x={isCurrent ? dynHalf + 2 * pxScale : 5 * pxScale}
+                        y={isCurrent ? -dynHalf + 4 * pxScale : -3 * pxScale}
+                        fill={isCurrent ? "#22c55e" : tr.color}
                         fontSize={5 * pxScale}
                         fontFamily="monospace"
                         fontWeight="bold"
@@ -941,6 +955,9 @@ export function WcsSvgOverlay({
         {trajPoints.map((pt, idx) => {
           const isReached = !playing || idx <= activeEpochIndex;
           const isCurrent = idx === activeEpochIndex;
+          const dynSize = getDynamicObjectSize(pt.ra, pt.dec, wcs, pxScale, detections);
+          const dynHalf = dynSize / 2;
+
           return (
             <g
               key={`traj-wpt-${idx}`}
@@ -961,23 +978,29 @@ export function WcsSvgOverlay({
               }}
               aria-label={`Jump to Epoch ${pt.epoch ?? idx + 1}`}
             >
-              <circle
-                r={(isCurrent ? 6.5 : 4) * pxScale}
-                fill={isCurrent ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.15)"}
-                stroke={isCurrent ? "#ffffff" : "var(--oi-orange)"}
-                strokeWidth={(isCurrent ? 1.4 : 0.9) * pxScale}
-                strokeDasharray={isCurrent ? undefined : `${2 * pxScale},${2 * pxScale}`}
-              />
-              <circle
-                r={(isCurrent ? 3.5 : 2) * pxScale}
-                fill={isCurrent ? "#ffffff" : "var(--oi-orange)"}
-                stroke="var(--oi-orange)"
-                strokeWidth={0.8 * pxScale}
-              />
+              {isCurrent ? (
+                <rect
+                  x={-dynHalf}
+                  y={-dynHalf}
+                  width={dynSize}
+                  height={dynSize}
+                  fill="rgba(34, 197, 94, 0.04)"
+                  stroke="#22c55e"
+                  strokeWidth={1.5 * pxScale}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : (
+                <circle
+                  r={3 * pxScale}
+                  fill="rgba(15, 23, 42, 0.85)"
+                  stroke="var(--oi-orange)"
+                  strokeWidth={0.9 * pxScale}
+                />
+              )}
               <text
-                x={6 * pxScale}
-                y={-4 * pxScale}
-                fill={isCurrent ? "#ffffff" : "var(--oi-orange)"}
+                x={isCurrent ? dynHalf + 2 * pxScale : 6 * pxScale}
+                y={isCurrent ? -dynHalf + 4 * pxScale : -4 * pxScale}
+                fill={isCurrent ? "#22c55e" : "var(--oi-orange)"}
                 fontSize={5 * pxScale}
                 fontFamily="IBM Plex Mono, monospace"
                 fontWeight="bold"
@@ -1100,7 +1123,7 @@ export function WcsSvgOverlay({
         )}
 
         {/* 4. Precision Telescope Reticle & Corner Brackets on Selected Object */}
-        {selectedPos && (
+        {selectedPos && !selectedTarget?.isTrack && (
           <g className="selected-target-reticle" style={{ pointerEvents: "none" }}>
             {/* Pulsing outer dashed ring */}
             <circle
@@ -1222,6 +1245,10 @@ export function WcsSvgOverlay({
           if (!Number.isFinite(ra) || !Number.isFinite(dec)) return null;
           const p = skyToPixel(ra, dec, wcs);
           const col = OKABE_ITO[idx % OKABE_ITO.length] || "#faf9f5";
+          const hasTrajOverlay = trackedTrajectories && trackedTrajectories.some((tr) => tr.label === label);
+          const dynSize = getDynamicObjectSize(ra, dec, wcs, pxScale, detections);
+          const dynHalf = dynSize / 2;
+
           return (
             <g
               key={t}
@@ -1241,18 +1268,29 @@ export function WcsSvgOverlay({
                 }
               }}
             >
-              <circle r={5 * pxScale} fill="none" stroke={col} strokeWidth={1.2 * pxScale} />
+              {!hasTrajOverlay && (
+                <rect
+                  x={-dynHalf}
+                  y={-dynHalf}
+                  width={dynSize}
+                  height={dynSize}
+                  fill="rgba(34, 197, 94, 0.04)"
+                  stroke="#22c55e"
+                  strokeWidth={1.5 * pxScale}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
               <rect
-                x={5.5 * pxScale}
-                y={-9.5 * pxScale}
+                x={dynHalf + 2 * pxScale}
+                y={-dynHalf}
                 width={8 * pxScale}
                 height={7 * pxScale}
                 fill="rgba(10, 10, 9, 0.85)"
                 rx={1 * pxScale}
               />
               <text
-                x={7 * pxScale}
-                y={-4 * pxScale}
+                x={dynHalf + 3.5 * pxScale}
+                y={-dynHalf + 5 * pxScale}
                 fill={col}
                 fontSize={5.5 * pxScale}
                 fontFamily="IBM Plex Mono, monospace"

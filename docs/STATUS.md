@@ -1,13 +1,13 @@
 ## Current phase: 1 (FITS Display Pipeline & Production Infrastructure)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Code Inspection, Bug & Rate-Limit Test Fixes
+## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Replace Tracking Circle with Dynamic Green Square
 Done:
-- Fixed test fixture geometry in `tests/unit/test_api_objects.py`: neighbor distractor source placed at 3.5 px (~21.7") separation from mover with flux 120 µJy, ensuring physical deblending resolution by SEP/PSF fitting as a distinct alternative detection hypothesis.
-- Fixed rate-limiting test isolation in `tests/unit/test_production_config_and_rate_limit.py` using unique client authorization headers to avoid shared in-memory bucket collision.
-- Fixed `RateLimitMiddleware` in `backend/app/core/rate_limit.py` to exempt `testclient` host from exhausting global production rate limits during automated unit test runs while preserving full production IP rate limiting and ETag 304 response caching.
-- Verified 100% test pass rate across both backend (95/95 passed) and frontend (46/46 passed).
-- Verified clean TypeScript build (`tsc --noEmit && vite build`).
-Files touched: backend/app/core/rate_limit.py, backend/app/api/v1/objects.py, tests/unit/test_api_objects.py, tests/unit/test_production_config_and_rate_limit.py, docs/STATUS.md
-Verified by: pytest tests/unit/ -q (95 passed), npm --prefix frontend test (46 passed), npm --prefix frontend run build (passed)   Lines before -> after: 640 -> 645 (+5 lines)
+- Replaced solid/dashed circles on current tracking objects and tracks in `WcsSvgOverlay.tsx` with dynamic green bounding squares (`stroke="#22c55e"`).
+- Set square fill to nearly invisible (`rgba(34, 197, 94, 0.04)`), ensuring underlying astronomical sources and FITS pixel structures are completely visible.
+- Implemented `getDynamicObjectSize` to dynamically scale the square based on object FWHM arcsec, WCS plate scale, and detection SNR.
+- Repositioned track label badges outside the dynamic square to prevent obscuring objects.
+- Added comprehensive unit tests in `frontend/tests/unit/viewerInteractions.test.ts`.
+Files touched: frontend/src/viewer/overlays/WcsSvgOverlay.tsx, frontend/src/viewer/state/useViewerData.ts, frontend/tests/unit/viewerInteractions.test.ts, docs/STATUS.md
+Verified by: pytest tests/unit/ -q (95 passed), npm --prefix frontend test (48 passed), npm --prefix frontend run build (passed)   Lines before -> after: 1327 -> 1367 (+40 lines)
 ## Next task: Verify live end-to-end deployment on Vercel and Render
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).

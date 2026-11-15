@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseFitsWcs } from "../../src/viewer/aladin/wcs";
-import { computeShortestArcRaBounds } from "../../src/viewer/overlays/WcsSvgOverlay";
+import { computeShortestArcRaBounds, getDynamicObjectSize } from "../../src/viewer/overlays/WcsSvgOverlay";
 import { formatTimeDelta } from "../../src/viewer/panels/FrameStrip";
 import {
   clampZoom,
@@ -130,6 +130,68 @@ describe("Viewer interactions & navigation", () => {
 
       // Outside viewport returns null
       expect(clientToSkyCoords(300, 300, rect, { x: 0, y: 0 }, 1.0, wcs)).toBeNull();
+    });
+  });
+
+  describe("getDynamicObjectSize for tracking object bounding square", () => {
+    const mockWcs = {
+      naxis1: 128,
+      naxis2: 128,
+      crval1: 133.795,
+      crval2: -7.245,
+      crpix1: 64.5,
+      crpix2: 64.5,
+      cd11: -0.001302, // ~4.68 arcsec/pixel
+      cd12: 0,
+      cd21: 0,
+      cd22: 0.001302,
+    };
+
+    it("dynamically sizes bounding square according to object FWHM and SNR", () => {
+      const pxScale = 1;
+      // Faint compact object (SNR 5, 5" FWHM) -> clamped to clean minimum visible size
+      const sizeFaint = getDynamicObjectSize(133.795, -7.245, mockWcs, pxScale, undefined, 5.0, 5);
+      // Bright extended object (SNR 25, 30" FWHM) -> dynamically scales up to fit broad PSF extent
+      const sizeBright = getDynamicObjectSize(133.795, -7.245, mockWcs, pxScale, undefined, 30.0, 25);
+
+      expect(sizeBright).toBeGreaterThan(sizeFaint);
+      expect(sizeFaint).toBe(10);
+      expect(sizeBright).toBeGreaterThan(14);
+      expect(sizeBright).toBeLessThanOrEqual(44);
+    });
+
+    it("matches nearby detection when fwhm not directly supplied", () => {
+      const pxScale = 1;
+      const detections = [
+        {
+          id: 42,
+          fits_file_id: "fits-1",
+          ra: 133.7951,
+          dec: -7.2452,
+          fwhm_arcsec: 8.5,
+          snr: 18,
+          flags: 0,
+        },
+      ];
+
+      const size = getDynamicObjectSize(133.795, -7.245, mockWcs, pxScale, detections);
+      // 8.5 arcsec / 4.68 arcsec/px = ~1.81 px * 2.0 scale = ~3.6 px, clamped to min 10
+      expect(size).toBe(10);
+
+      // With higher FWHM:
+      const detectionsWide = [
+        {
+          id: 43,
+          fits_file_id: "fits-1",
+          ra: 133.7951,
+          dec: -7.2452,
+          fwhm_arcsec: 35.0,
+          snr: 25,
+          flags: 0,
+        },
+      ];
+      const sizeWide = getDynamicObjectSize(133.795, -7.245, mockWcs, pxScale, detectionsWide);
+      expect(sizeWide).toBeGreaterThan(15);
     });
   });
 });
