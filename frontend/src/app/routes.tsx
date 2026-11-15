@@ -4,6 +4,7 @@ import { AboutPage } from "../pages/AboutPage";
 import { AuthPage } from "../pages/AuthPage";
 import { Home } from "../pages/Home";
 import { LogoutPage } from "../pages/LogoutPage";
+import { MethodologyPage } from "../pages/MethodologyPage";
 import { ViewerPage } from "../pages/ViewerPage";
 import { AppShell } from "./layout/AppShell";
 
@@ -68,12 +69,6 @@ function DocumentTitleSync() {
 
 const STUB_ROUTES = [
   {
-    path: "/methodology",
-    kicker: "Methodology",
-    title: "Astrometric Calibration & Uncertainty",
-    body: "Detailed chaptered documentation covering native-frame astrometry, Hungarian identity matching, proper motion vs. parallax fitting, and noise rejection.",
-  },
-  {
     path: "/credits",
     kicker: "Provenance",
     title: "Archive Credits & Acknowledgements",
@@ -94,6 +89,7 @@ function ShellRoutes() {
         <Route path="/" element={<Home />} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="/company" element={<AboutPage />} />
+        <Route path="/methodology" element={<MethodologyPage />} />
         <Route path="/login" element={<AuthPage defaultMode="login" />} />
         <Route path="/signin" element={<AuthPage defaultMode="signin" />} />
         <Route path="/signup" element={<AuthPage defaultMode="signin" />} />

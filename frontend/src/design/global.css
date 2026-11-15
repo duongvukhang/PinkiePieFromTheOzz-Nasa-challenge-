@@ -1173,6 +1173,233 @@
     color: var(--ink-1);
   }
 
+  /* Methodology & Mathematical Formulations */
+  .method-layout {
+    display: grid;
+    gap: var(--space-8);
+    padding-block: var(--space-6) var(--space-12);
+  }
+
+  @media (min-width: 1024px) {
+    .method-layout {
+      grid-template-columns: 240px 1fr;
+      gap: var(--space-12);
+      align-items: start;
+    }
+  }
+
+  .method-toc {
+    display: none;
+  }
+
+  @media (min-width: 1024px) {
+    .method-toc {
+      display: flex;
+      flex-direction: column;
+      position: sticky;
+      top: calc(var(--header-h) + var(--space-6));
+      gap: var(--space-1);
+      padding: var(--space-4);
+      background: var(--paper-card);
+      border-radius: var(--radius-card);
+      border: 1px solid var(--border);
+    }
+  }
+
+  .method-toc-title {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin-bottom: var(--space-2);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .method-toc-link {
+    font-size: 0.8125rem;
+    color: var(--ink-1);
+    text-decoration: none;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-btn);
+    transition: background 150ms var(--ease), color 150ms var(--ease);
+  }
+
+  .method-toc-link:hover {
+    background: var(--paper-pill);
+    color: var(--ink-0);
+  }
+
+  .method-section {
+    margin-bottom: var(--space-12);
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--border);
+    scroll-margin-top: calc(var(--header-h) + var(--space-6));
+  }
+
+  .method-section:first-of-type {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .formula-card {
+    background: var(--paper-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: var(--space-5);
+    margin-block: var(--space-4);
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .formula-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .formula-num {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--ink-2);
+    background: var(--paper-pill);
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+  }
+
+  .formula-display {
+    font-family: var(--font-serif);
+    font-size: clamp(1.025rem, 1.25vw, 1.2rem);
+    text-align: center;
+    padding: var(--space-3) var(--space-4);
+    background: var(--paper-0);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-btn);
+    overflow-x: auto;
+    color: var(--ink-0);
+    line-height: 1.8;
+  }
+
+  .math-frac {
+    display: inline-flex;
+    flex-direction: column;
+    vertical-align: middle;
+    text-align: center;
+    padding: 0 4px;
+    font-size: 0.9em;
+  }
+
+  .frac-num {
+    border-bottom: 1px solid currentColor;
+    padding-bottom: 2px;
+  }
+
+  .frac-den {
+    padding-top: 2px;
+  }
+
+  .formula-vars {
+    font-size: var(--text-xs);
+    color: var(--ink-1);
+    border-top: 1px dashed var(--rule);
+    padding-top: var(--space-3);
+    display: grid;
+    gap: var(--space-1);
+    line-height: 1.5;
+  }
+
+  .formula-why-grid {
+    display: grid;
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+  }
+
+  @media (min-width: 768px) {
+    .formula-why-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .why-box {
+    padding: var(--space-4);
+    border-radius: var(--radius-btn);
+    background: var(--paper-card);
+    border: 1px solid var(--border);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+  }
+
+  .why-box-good {
+    border-left: 3px solid var(--valid-light);
+  }
+
+  .why-box-bad {
+    border-left: 3px solid var(--accent-clay);
+  }
+
+  .why-box-title {
+    font-weight: 600;
+    margin-bottom: var(--space-2);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .why-box-good .why-box-title {
+    color: var(--valid-light);
+  }
+
+  .why-box-bad .why-box-title {
+    color: var(--accent-clay);
+  }
+
+  /* Guide Step Cards for About Page */
+  .step-grid {
+    display: grid;
+    gap: var(--space-6);
+    margin-block: var(--space-8);
+  }
+
+  @media (min-width: 768px) {
+    .step-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (min-width: 1100px) {
+    .step-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .step-card {
+    background: var(--paper-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: var(--space-4);
+    transition: transform 180ms var(--ease), box-shadow 180ms var(--ease);
+  }
+
+  .step-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(20, 20, 19, 0.05);
+  }
+
+  .step-num {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xl);
+    font-weight: 600;
+    color: var(--accent-clay);
+    line-height: 1;
+  }
+
   /* Anthropic Charcoal Footer */
   .site-footer {
     background: var(--sky-0);
