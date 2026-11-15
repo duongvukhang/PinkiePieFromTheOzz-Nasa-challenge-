@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import re
 import time
@@ -308,9 +309,10 @@ class IRSASearchService:
         records: list[ArchiveRecord] = []
         failure_reason: str | None = None
 
+        query_radius_deg = min(radius_deg, 0.080)
         sia_params: dict[str, Any] = {
             "COLLECTION": "spherex_dr1",
-            "POS": f"CIRCLE {ra:.6f} {dec:.6f} {radius_deg:.6f}",
+            "POS": f"CIRCLE {ra:.6f} {dec:.6f} {query_radius_deg:.6f}",
             "RESPONSEFORMAT": "votable",
         }
 
@@ -669,6 +671,10 @@ class IRSASearchService:
                 sha256_hex=res.sha256 or compute_sha256(content),
                 storage_path=storage_key,
             )
+
+        with contextlib.suppress(Exception):
+            from app.workers.tasks_fast import render_cutout_products
+            render_cutout_products(content, storage, f"products/uploads/{fid}")
 
         return _out_dict(fid, meta, status)
 

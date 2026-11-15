@@ -88,6 +88,23 @@ def test_api_archive_search_endpoint():
     assert "epochs" in data
     assert data["total_epochs"] > 0
     assert data["epochs"][0]["time_delta_days"] == 0.0
+    assert not any("timed out (>12s latency)" in n for n in data.get("notes", []))
+
+
+def test_archive_search_large_radius_does_not_timeout():
+    """Verify that cone radius > 5 arcmin safely executes without triggering IRSA 12s timeout."""
+    params = ArchiveSearchParams(
+        ra_deg=133.79513,
+        dec_deg=-7.24515,
+        radius=15.0,
+        radius_unit="arcmin",
+        source="spherex_irsa",
+        start_date="2025-01-01",
+        end_date="2025-12-31",
+    )
+    res = irsa_search_service.search_archive(params)
+    assert res.total_found > 0
+    assert not any("timed out (>12s latency)" in n for n in res.notes)
 
 
 def test_api_archive_load_endpoint():

@@ -223,25 +223,31 @@ export function ArchiveSearchModal({
         })
         .filter((item): item is { prod: EpochProduct; mjd_obs: number | null | undefined } => Boolean(item.prod));
 
-      // Limit concurrency: sequential load and immediate store update before navigation
-      for (const { prod, mjd_obs } of prodsToLoad) {
-        try {
-          const res = await api.loadArchiveProduct({
-            obs_id: prod.obs_id,
-            access_url: prod.access_url || undefined,
-            source,
-            band: prod.band || undefined,
-            ra_deg: raNum,
-            dec_deg: decNum,
-            mjd_obs: mjd_obs ?? undefined,
-            fov_arcmin: fovArcmin,
-          });
-          if (res?.fits_file_id) {
-            useViewStore.getState().addFitsId(res.fits_file_id);
-          }
-        } catch {
-          // Continue loading remaining products
-        }
+      // Load products with bounded concurrency (up to 3 concurrent downloads)
+      const chunkSize = 3;
+      for (let i = 0; i < prodsToLoad.length; i += chunkSize) {
+        const batch = prodsToLoad.slice(i, i + chunkSize);
+        await Promise.all(
+          batch.map(async ({ prod, mjd_obs }) => {
+            try {
+              const res = await api.loadArchiveProduct({
+                obs_id: prod.obs_id,
+                access_url: prod.access_url || undefined,
+                source,
+                band: prod.band || undefined,
+                ra_deg: raNum,
+                dec_deg: decNum,
+                mjd_obs: mjd_obs ?? undefined,
+                fov_arcmin: fovArcmin,
+              });
+              if (res?.fits_file_id) {
+                useViewStore.getState().addFitsId(res.fits_file_id);
+              }
+            } catch {
+              // Continue loading remaining products
+            }
+          }),
+        );
       }
     } finally {
       setLoadingAll(false);
@@ -398,6 +404,11 @@ export function ArchiveSearchModal({
                   <option value="deg">deg</option>
                 </select>
               </div>
+              {Number.parseFloat(radius) > 5 && radiusUnit === "arcmin" && (
+                <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "2px", display: "block" }}>
+                  SPHEREx exposures cover 210′ FOV; fast indexed search applied.
+                </span>
+              )}
             </div>
           </div>
 

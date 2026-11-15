@@ -423,10 +423,12 @@ class SpherexIrsaProvider(Provider):
         )
         icrs = c.icrs
         table = None
+        # Clamp discovery cone radius to <= 4.8 arcmin to prevent IRSA spatial partition timeouts
+        query_radius = min(radius, 4.8 * u.arcmin)
         try:
             raw_table = self._run(
                 lambda: self._irsa.query_sia(
-                    pos=(icrs, radius),
+                    pos=(icrs, query_radius),
                     time=None,
                     band=band_param,
                     collection=collection,

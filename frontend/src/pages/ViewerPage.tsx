@@ -202,6 +202,10 @@ export function ViewerPage() {
                 suggestions={v.suggestions}
                 detections={v.detections}
                 tracks={v.track}
+                gaiaSources={v.gaiaSources}
+                catwiseSources={v.catwiseSources}
+                bufA={v.bufA}
+                wcs={v.wcs}
                 onPickSuggestion={v.onTrackSuggestion}
                 onTrackDetection={v.onTrackDetection}
                 onOverrideAssociation={v.overrideAssociation}

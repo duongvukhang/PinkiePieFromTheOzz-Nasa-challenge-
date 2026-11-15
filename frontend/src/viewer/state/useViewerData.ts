@@ -132,7 +132,7 @@ export function useViewerData(search: string, skipSecondary = false) {
       });
       let status = accepted.status;
       let delay = 150;
-      for (let i = 0; i < 30 && status !== "succeeded" && status !== "failed"; i++) {
+      for (let i = 0; i < 45 && status !== "succeeded" && status !== "failed"; i++) {
         await new Promise((r) => setTimeout(r, delay));
         delay = Math.min(1000, Math.round(delay * 1.25));
         status = (await api.getJob(accepted.job_id)).status;
@@ -287,7 +287,7 @@ export function useViewerData(search: string, skipSecondary = false) {
           });
       let status = acc.status;
       let delay = 150;
-      for (let i = 0; i < 30 && status !== "succeeded" && status !== "failed"; i++) {
+      for (let i = 0; i < 45 && status !== "succeeded" && status !== "failed"; i++) {
         await new Promise((r) => setTimeout(r, delay));
         delay = Math.min(1000, Math.round(delay * 1.25));
         status = (await api.getJob(acc.job_id)).status;
@@ -501,8 +501,42 @@ export function useViewerData(search: string, skipSecondary = false) {
         is_difference: false,
       }));
     }
+    const catwiseList = catwiseQ.data?.sources ?? [];
+    if (catwiseList.length > 0) {
+      return catwiseList.map((c, idx) => ({
+        id: idx + 1,
+        fits_file_id: frameA?.frame_id || "",
+        ra: c.ra,
+        dec: c.dec,
+        x_pix: null,
+        y_pix: null,
+        flux_ujy: c.mag ? Math.pow(10, (23.9 - c.mag) / 2.5) : 800,
+        mag_ab: c.mag,
+        fwhm_arcsec: 6.2,
+        flags: 0,
+        real_bogus: 0.99,
+        is_difference: false,
+      }));
+    }
+    const sugs = analysisQ.data?.suggestions ?? [];
+    if (sugs.length > 0) {
+      return sugs.map((s, idx) => ({
+        id: s.detection_id || idx + 1,
+        fits_file_id: frameA?.frame_id || "",
+        ra: s.ra,
+        dec: s.dec,
+        x_pix: null,
+        y_pix: null,
+        flux_ujy: s.flux_ujy ?? 1000,
+        mag_ab: undefined,
+        fwhm_arcsec: 6.2,
+        flags: 0,
+        real_bogus: 0.95,
+        is_difference: false,
+      }));
+    }
     return [];
-  }, [rawDetections, frameA?.frame_id, gaiaQ.data?.sources]);
+  }, [rawDetections, frameA?.frame_id, gaiaQ.data?.sources, catwiseQ.data?.sources, analysisQ.data?.suggestions]);
 
   return {
     activeRa: activeRa ?? 133.79513,
@@ -534,7 +568,11 @@ export function useViewerData(search: string, skipSecondary = false) {
     resolveTargetDirect,
     resolving: resolveQ.isFetching,
     loadingCutouts: allFitsIds.length > 0 ? uploadsQ.isFetching : cutoutQ.isFetching,
-    loadingText: allFitsIds.length > 0 ? "Loading FITS frames…" : "Loading FITS cutouts…",
+    loadingText: analysisQ.isFetching
+      ? "Extracting sources & candidates…"
+      : allFitsIds.length > 0
+        ? (uploadsQ.isFetching ? "Loading FITS frames…" : "Processing frames…")
+        : (cutoutQ.isFetching ? "Loading FITS cutouts…" : "Processing field…"),
     errorMsg: (() => {
       const err = resolveQ.error ?? cutoutQ.error ?? bufAQ.error ?? null;
       return err instanceof Error ? err.message : typeof err === "string" ? err : undefined;

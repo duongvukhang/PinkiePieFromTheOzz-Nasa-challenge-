@@ -114,4 +114,33 @@ describe("Box-Scoped Selection & 2-Object Tracking Cap", () => {
     expect(screenX).toBe(64.5);
     expect(screenY).toBe(95.8);
   });
+
+  it("computes box center and allows direct object tracking when detections are empty", () => {
+    const box = { raMin: 133.7, raMax: 133.8, decMin: -7.3, decMax: -7.2 };
+    const centerRa = (box.raMin + box.raMax) / 2;
+    const centerDec = (box.decMin + box.decMax) / 2;
+    expect(centerRa).toBeCloseTo(133.75, 4);
+    expect(centerDec).toBeCloseTo(-7.25, 4);
+
+    const detections: any[] = [];
+    const boxedDetections = detections.filter(
+      (d) =>
+        d.ra >= Math.min(box.raMin, box.raMax) &&
+        d.ra <= Math.max(box.raMin, box.raMax) &&
+        d.dec >= Math.min(box.decMin, box.decMax) &&
+        d.dec <= Math.max(box.decMin, box.decMax)
+    );
+    expect(boxedDetections.length).toBe(0);
+
+    // ViewStore can still track target at box center / peak centroid
+    const store = useViewStore.getState();
+    const assignedLabel = "A";
+    store.addTrack(assignedLabel, centerRa, centerDec);
+    const activeTrack = useViewStore.getState().track.find((t) => t.startsWith(`${assignedLabel}:`));
+    expect(activeTrack).toBeDefined();
+    expect(activeTrack).toContain("133.75000");
+    expect(activeTrack).toContain("-7.25000");
+
+    store.removeTrack(assignedLabel);
+  });
 });

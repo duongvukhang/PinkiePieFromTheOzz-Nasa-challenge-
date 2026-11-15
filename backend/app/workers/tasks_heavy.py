@@ -378,7 +378,13 @@ def execute_run_analysis(
         for idx, item in enumerate(loaded):
             reg = register_exposure(item.frame, reference_catalog=gaia_refs or None)
             reg_sigmas.append(reg.sigma_reg_arcsec)
-            ext = extract_sources(item.frame, wcs=reg.wcs, sigma_reg_arcsec=reg.sigma_reg_arcsec)
+            max_src = 120 if max(item.frame.shape) > 256 else 300
+            ext = extract_sources(
+                item.frame,
+                wcs=reg.wcs,
+                sigma_reg_arcsec=reg.sigma_reg_arcsec,
+                max_sources=max_src,
+            )
             extractions.append(ext)
             warnings_out.extend(reg.warnings)
             warnings_out.extend(ext.warnings)

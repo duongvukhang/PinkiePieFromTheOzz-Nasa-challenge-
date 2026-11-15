@@ -278,6 +278,11 @@ async def get_upload_display(
     colormap: str = "inferno",
 ) -> Response:
     """Render and serve display WebP image for an uploaded or registered FITS file."""
+    for key in (f"products/uploads/{upload_or_fits_id}/display_{stretch}_{colormap}.webp",
+                f"products/uploads/{upload_or_fits_id}/display.webp" if (stretch, colormap) == ("asinh", "inferno") else None):
+        if key and storage.exists(key):
+            return Response(content=storage.get_bytes(key, verify_checksum=False), media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
+
     raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
     arr = extract_2d_image(raw)
     from app.services.image_renderer import image_renderer
@@ -285,8 +290,11 @@ async def get_upload_display(
     from PIL import Image
     buf = io.BytesIO()
     Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", lossless=True)
+    webp_bytes = buf.getvalue()
+    with contextlib.suppress(Exception):
+        storage.put_bytes(cache_key, webp_bytes, content_type="image/webp")
     return Response(
-        content=buf.getvalue(),
+        content=webp_bytes,
         media_type="image/webp",
         headers={"Cache-Control": "public, max-age=86400"},
     )
@@ -299,10 +307,20 @@ async def get_upload_science(
     storage: Annotated[StorageBackend, Depends(get_storage)],
 ) -> Response:
     """Serve raw little-endian float32 science array for an uploaded FITS file."""
+    cache_key = f"products/uploads/{upload_or_fits_id}/science.bin"
+    if storage.exists(cache_key):
+        return Response(
+            content=storage.get_bytes(cache_key, verify_checksum=False),
+            media_type="application/octet-stream",
+            headers={"X-Dtype": "float32", "Cache-Control": "public, max-age=86400"},
+        )
     raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
     arr = extract_2d_image(raw)
+    bin_bytes = np.asarray(arr, dtype="<f4").tobytes()
+    with contextlib.suppress(Exception):
+        storage.put_bytes(cache_key, bin_bytes, content_type="application/octet-stream")
     return Response(
-        content=np.asarray(arr, dtype="<f4").tobytes(),
+        content=bin_bytes,
         media_type="application/octet-stream",
         headers={
             "X-Dtype": "float32",

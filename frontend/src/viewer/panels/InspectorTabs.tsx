@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import {
   api,
   type AssociationHypothesis,
+  type CatalogOverlaySource,
   type CutoutFrame,
   type DetectionRead,
   type EphemerisPredictionResult,
+  type ScienceBuffer,
   type SpectrumResponse,
   type SuggestionItem,
   type TrackedObjectDetailResponse,
 } from "../../api/client";
+import { type WcsParams, pixelToSky, skyToPixel } from "../aladin/wcs";
 import { useViewStore, MAX_TRACKED_OBJECTS, type InspectorTab } from "../state/viewStore";
 import { nextTrackLabel } from "../state/useViewerData";
 import { FlagsMetaPanel } from "./FlagsMetaPanel";
@@ -26,6 +29,10 @@ interface InspectorTabsProps {
   suggestions: SuggestionItem[];
   detections: DetectionRead[];
   tracks?: string[];
+  gaiaSources?: CatalogOverlaySource[];
+  catwiseSources?: CatalogOverlaySource[];
+  bufA?: ScienceBuffer;
+  wcs?: WcsParams;
   onPickSuggestion: (s: SuggestionItem) => void;
   onTrackDetection?: (d: DetectionRead) => void;
   onOverrideAssociation?: (
@@ -54,6 +61,10 @@ export function InspectorTabs({
   suggestions,
   detections,
   tracks = [],
+  gaiaSources = [],
+  catwiseSources = [],
+  bufA,
+  wcs,
   onPickSuggestion,
   onTrackDetection,
   onOverrideAssociation,
@@ -293,6 +304,39 @@ export function InspectorTabs({
             const boxCenterDec = 0.5 * (activeBox.decMin + activeBox.decMax);
 
             const inBoxDets = (detections || []).filter((d) => inRa(d.ra) && inDec(d.dec));
+            const inBoxGaia = (gaiaSources || []).filter((s) => inRa(s.ra) && inDec(s.dec));
+            const inBoxCatwise = (catwiseSources || []).filter((s) => inRa(s.ra) && inDec(s.dec));
+
+            // Peak pixel centroid in active box from science buffer (if available)
+            const boxPeakCoord = (() => {
+              if (!bufA || !wcs) return null;
+              const p1 = skyToPixel(activeBox.raMin, activeBox.decMin, wcs);
+              const p2 = skyToPixel(activeBox.raMax, activeBox.decMax, wcs);
+              const xMin = Math.max(0, Math.floor(Math.min(p1.x, p2.x)));
+              const xMax = Math.min(bufA.width - 1, Math.ceil(Math.max(p1.x, p2.x)));
+              const yMin = Math.max(0, Math.floor(Math.min(p1.y, p2.y)));
+              const yMax = Math.min(bufA.height - 1, Math.ceil(Math.max(p1.y, p2.y)));
+              let maxVal = -Infinity;
+              let bestPx = -1;
+              let bestPy = -1;
+              for (let y = yMin; y <= yMax; y++) {
+                for (let x = xMin; x <= xMax; x++) {
+                  const val = bufA.data[y * bufA.width + x];
+                  if (val !== undefined && Number.isFinite(val) && val > maxVal) {
+                    maxVal = val;
+                    bestPx = x;
+                    bestPy = y;
+                  }
+                }
+              }
+              return bestPx >= 0 && bestPy >= 0 && Number.isFinite(maxVal)
+                ? pixelToSky(bestPx, bestPy, wcs)
+                : null;
+            })();
+
+            const primaryCoord = boxPeakCoord ?? { ra: boxCenterRa, dec: boxCenterDec };
+            const capReached = tracks.length >= MAX_TRACKED_OBJECTS;
+
             const sortedBoxDets = [...inBoxDets].sort((a, b) => {
               if (boxSortKey === "flux") return (b.flux_ujy ?? 0) - (a.flux_ujy ?? 0);
               if (boxSortKey === "snr") return (b.snr ?? 0) - (a.snr ?? 0);
@@ -325,7 +369,7 @@ export function InspectorTabs({
                   }}
                 >
                   <h3 className="viewer-sec-title" style={{ margin: 0 }}>
-                    Objects in Box ({inBoxDets.length})
+                    Objects in Box ({inBoxDets.length + inBoxGaia.length + inBoxCatwise.length})
                   </h3>
                   <button
                     type="button"
@@ -334,6 +378,47 @@ export function InspectorTabs({
                     onClick={() => setActiveBox(null)}
                   >
                     Clear Box
+                  </button>
+                </div>
+
+                {/* Direct Box Tracking Action */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    background: "rgba(56, 189, 248, 0.08)",
+                    border: "1px solid rgba(56, 189, 248, 0.25)",
+                    borderRadius: "6px",
+                    padding: "8px 10px",
+                    marginBottom: "10px",
+                  }}
+                >
+                  <div>
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", display: "block" }}>
+                      {boxPeakCoord ? "Box Peak Centroid" : "Box Center Coordinates"}
+                    </span>
+                    <strong style={{ fontSize: "0.8rem", fontFamily: "var(--font-mono, monospace)" }}>
+                      {primaryCoord.ra.toFixed(4)}°, {primaryCoord.dec.toFixed(4)}°
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="viewer-btn viewer-btn-primary"
+                    style={{ fontSize: "0.75rem", padding: "4px 10px" }}
+                    disabled={capReached}
+                    title={capReached ? "Maximum 2 objects can be tracked. Untrack one first." : undefined}
+                    onClick={() => {
+                      const lbl = nextTrackLabel(tracks);
+                      useViewStore.getState().addTrack(lbl, primaryCoord.ra, primaryCoord.dec);
+                      useViewStore.getState().setView({
+                        obj: lbl,
+                        inspectorTab: "object",
+                        isTimelineOpen: true,
+                      });
+                    }}
+                  >
+                    {capReached ? "Cap Reached (Max 2)" : `Track ${nextTrackLabel(tracks)}`}
                   </button>
                 </div>
 
@@ -371,16 +456,12 @@ export function InspectorTabs({
                 {sortedBoxDets.length > 0 ? (
                   <ul className="suggestion-list" style={{ margin: 0, padding: 0, listStyle: "none" }}>
                     {sortedBoxDets.map((d) => {
-                      const isTracked = tracks.some((t) => {
+                      const matchedTrack = tracks.find((t) => {
                         const [, coords] = t.split(":");
                         const [r, dec] = (coords ?? "").split(",").map(Number);
-                        return (
-                          r != null &&
-                          dec != null &&
-                          Math.abs(r - d.ra) < 0.001 &&
-                          Math.abs(dec - d.dec) < 0.001
-                        );
+                        return r != null && dec != null && Math.abs(r - d.ra) < 0.001 && Math.abs(dec - d.dec) < 0.001;
                       });
+                      const isTracked = Boolean(matchedTrack);
                       const capReached = tracks.length >= MAX_TRACKED_OBJECTS;
 
                       return (
@@ -419,20 +500,8 @@ export function InspectorTabs({
                                     style={{ fontSize: "0.72rem", padding: "2px 6px" }}
                                     title="Untrack this object"
                                     onClick={() => {
-                                      const match = tracks.find((t) => {
-                                        const [, coords] = t.split(":");
-                                        const [r, dec] = (coords ?? "").split(",").map(Number);
-                                        return (
-                                          r != null &&
-                                          dec != null &&
-                                          Math.abs(r - d.ra) < 0.001 &&
-                                          Math.abs(dec - d.dec) < 0.001
-                                        );
-                                      });
-                                      if (match) {
-                                        const label = match.split(":")[0];
-                                        if (label) onRemoveTrack(label);
-                                      }
+                                      const label = matchedTrack?.split(":")[0];
+                                      if (label) onRemoveTrack(label);
                                     }}
                                   >
                                     Untrack
@@ -472,9 +541,38 @@ export function InspectorTabs({
                     })}
                   </ul>
                 ) : (
-                  <p className="viewer-muted" style={{ fontSize: "0.8rem" }}>
-                    No detections inside selected box area.
-                  </p>
+                  <div>
+                    {inBoxGaia.length > 0 && (
+                      <div style={{ marginBottom: "8px" }}>
+                        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "4px" }}>
+                          Gaia DR3 Stars in Box ({inBoxGaia.length}):
+                        </div>
+                        {inBoxGaia.slice(0, 3).map((g) => (
+                          <div key={g.source_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: "4px" }}>
+                            <span style={{ fontSize: "0.75rem" }}>
+                              Gaia #{g.source_id.slice(-6)} · G={g.mag != null ? g.mag.toFixed(1) : "—"}
+                            </span>
+                            <button
+                              type="button"
+                              className="viewer-btn"
+                              style={{ fontSize: "0.72rem", padding: "2px 6px" }}
+                              disabled={capReached}
+                              onClick={() => {
+                                const lbl = nextTrackLabel(tracks);
+                                useViewStore.getState().addTrack(lbl, g.ra, g.dec);
+                                useViewStore.getState().setView({ obj: lbl, inspectorTab: "object", isTimelineOpen: true });
+                              }}
+                            >
+                              Track {nextTrackLabel(tracks)}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="viewer-muted" style={{ fontSize: "0.8rem", margin: "4px 0 0" }}>
+                      No automated detections in selected box. Use "Track {nextTrackLabel(tracks)}" above to track this target directly.
+                    </p>
+                  </div>
                 )}
               </div>
             );

@@ -1,13 +1,14 @@
 ## Current phase: 1 (FITS Display Pipeline & Observatory Features)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Fix IRSA SIAv2 Timeouts, Synthetic Demo Loading & State Preservation
+## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Fix FITS Loading Performance, IRSA SIA Radius (>5') & Box Selection Direct Tracking
 Done:
-- Removed unindexed `TIME` parameter from IRSA SIAv2 query in `irsa_search.py` and `spherex_irsa.py`, relying on local MJD filtering to prevent >12s latency.
-- Reduced `max_retries` from 3 to 1 in `spherex_qr_v1.yaml` to ensure cutout fallback occurs within <10s.
-- Updated `load_archive_product` in `irsa_search.py` to synthesize SPHEREx demo products in-memory via `generate_synthetic_sequence` instead of failing HTTP downloads with 502.
-- Preserved `fitsIds` and `fitsId` across `onApplyInterval` in `ViewerToolbar.tsx` and `syncFromSearch` in `viewStore.ts`.
-- Removed redundant `fieldsQ` call in `useViewerData.ts` to prevent duplicate concurrent uncached SIA queries on coordinate updates.
-Files touched: backend/app/services/irsa_search.py, backend/app/providers/spherex_irsa.py, backend/app/providers/release_profiles/spherex_qr_v1.yaml, frontend/src/viewer/panels/ViewerToolbar.tsx, frontend/src/viewer/state/viewStore.ts, frontend/src/viewer/state/useViewerData.ts, frontend/tests/unit/archiveModal.test.ts, tests/unit/test_api_archive_search.py, tests/unit/test_providers.py, docs/STATUS.md
-Verified by: pytest test_api_archive_search.py test_providers.py test_motion_and_mandatory_targets.py (29 passed), npm test (8 test files, 42 passed), npm run build (passed)   Lines before -> after: 565 -> 546 in useViewerData.ts (-19 lines)
+- Clamped IRSA SIA discovery query radius to <= 4.8' (0.080 deg) in `irsa_search.py` and `spherex_irsa.py`, avoiding Caltech unindexed partition joins while covering full SPHEREx frame footprints.
+- Added server-side caching and pre-rendering for WebP display and float32 science binary files in `uploads.py` and `irsa_search.py`.
+- Limited source extraction on unbinned large frames (>256x256) to 120 sources in `tasks_heavy.py` to keep PSF photometry fits under 4s.
+- Converted archive multi-epoch product loading to bounded concurrency (batches of 3) in `ArchiveSearchModal.tsx`.
+- Extended analysis polling timeout in `useViewerData.ts` and added fallback integration for Gaia, CatWISE, and candidate suggestions.
+- Implemented direct peak flux centroid and box center object tracking in `InspectorTabs.tsx` along with Gaia star fallbacks, eliminating the "No detections inside selected box area" dead-end.
+Files touched: backend/app/api/v1/uploads.py, backend/app/providers/spherex_irsa.py, backend/app/services/irsa_search.py, backend/app/workers/tasks_heavy.py, frontend/src/pages/ViewerPage.tsx, frontend/src/viewer/panels/ArchiveSearchModal.tsx, frontend/src/viewer/panels/InspectorTabs.tsx, frontend/src/viewer/state/useViewerData.ts, frontend/tests/unit/boxSelectAndRegimes.test.ts, tests/unit/test_api_archive_search.py, docs/STATUS.md
+Verified by: pytest test_api_archive_search.py test_providers.py (25 passed), pytest test_identity_regimes_and_box.py test_motion_and_mandatory_targets.py (10 passed), npm test (8 test files, 43 passed)   Lines before -> after: 288 insertions / 32 deletions -> 282 insertions / 53 deletions (-27 lines shrunk)
 ## Next task: Prepare for science-core review and audit (Phase 1 completion checklist)
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).
