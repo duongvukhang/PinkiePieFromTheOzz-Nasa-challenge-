@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 
 import astropy.units as u
 import httpx
+import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from sphx_core.timeutil import parse_user_epoch
@@ -103,6 +105,7 @@ def _make_archive_rec(
     w_range: list[float] | None = None,
     cached: bool = False,
     source_origin: str | None = None,
+    observation_group_id: str | None = None,
 ) -> ArchiveRecord:
     """Helper constructing validated ArchiveRecord with standard units."""
     dt_iso = Time(mjd, format="mjd", scale="tdb").isot if mjd else None
@@ -123,6 +126,7 @@ def _make_archive_rec(
         service_source=source,
         is_cached_fallback=is_fallback,
         source_origin=origin,
+        observation_group_id=observation_group_id,
     )
 
 
@@ -212,7 +216,7 @@ def group_records_into_epochs(records: list[ArchiveRecord], source_name: str) ->
         t0 = epochs[0].mjd_obs
         for ep in epochs:
             if ep.mjd_obs is not None:
-                ep.time_delta_days = round(ep.mjd_obs - t0, 2)
+                ep.time_delta_days = round(ep.mjd_obs - t0, 4)
 
     return epochs
 
@@ -285,73 +289,57 @@ class IRSASearchService:
     ) -> tuple[list[ArchiveRecord], str, list[str]]:
         """Query official NASA IRSA TAP ivoa.obscore service with cache and authentic sample fallback."""
         hpx = healpix9_nested(ra, dec)
-        cache_key = f"irsa_search:{hpx}:{round(radius_deg, 4)}:{start_mjd}:{end_mjd}:{band or 'ALL'}"
+        cache_key = f"irsa_search_v2:{hpx}:{round(radius_deg, 4)}:{start_mjd}:{end_mjd}:{band or 'ALL'}"
         cache = get_cache_backend()
         cached = cache.get_json(cache_key)
-        if cached and isinstance(cached, dict) and "records" in cached:
+        if (
+            cached
+            and isinstance(cached, dict)
+            and "records" in cached
+            and cached.get("status") == "LIVE_ARCHIVE"
+        ):
             cached_notes = list(cached.get("notes", [])) or ["Retrieved NASA IRSA search results."]
             return (
                 [ArchiveRecord.model_validate(r) for r in cached["records"]],
-                cached.get("status", "LIVE_ARCHIVE"),
+                "LIVE_ARCHIVE",
                 [f"{n} (cached)" for n in cached_notes],
             )
 
         records: list[ArchiveRecord] = []
         failure_reason: str | None = None
 
-        # Build ADQL WHERE clause
-        where_clauses = [
-            "obs_collection LIKE 'spherex%'",
-            f"CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', {ra:.6f}, {dec:.6f}, {radius_deg:.6f})) = 1",
-        ]
-        if start_mjd is not None:
-            where_clauses.append(f"t_max >= {start_mjd:.4f}")
-        if end_mjd is not None:
-            where_clauses.append(f"t_min <= {end_mjd:.4f}")
-        if band and band.strip().upper() != "ALL":
-            b_req = band.strip().upper()
-            b_dig = b_req[-1] if b_req[-1].isdigit() else b_req
-            det_key = f"D{b_dig}" if b_dig.isdigit() else b_req
-            if det_key in SPHEREX_BANDS:
-                b_info = SPHEREX_BANDS[det_key]
-                min_m = b_info["min_um"] * 1e-6
-                max_m = b_info["max_um"] * 1e-6
-                where_clauses.append(
-                    f"(energy_bandpassname LIKE '%{det_key}%' OR (em_min <= {max_m:.8e} AND em_max >= {min_m:.8e}))"
-                )
-            else:
-                where_clauses.append(f"energy_bandpassname LIKE '%{b_req}%'")
-
-        adql = (
-            f"SELECT TOP {max_records} obs_id, obs_publisher_did, s_ra, s_dec, t_min, t_max, "
-            f"em_min, em_max, energy_bandpassname, access_url FROM ivoa.obscore WHERE "
-            + " AND ".join(where_clauses)
-        )
+        sia_params: dict[str, Any] = {
+            "COLLECTION": "spherex_dr1",
+            "POS": f"CIRCLE {ra:.6f} {dec:.6f} {radius_deg:.6f}",
+            "RESPONSEFORMAT": "votable",
+        }
+        if start_mjd is not None and end_mjd is not None:
+            sia_params["TIME"] = f"{start_mjd:.4f}/{end_mjd:.4f}"
+        elif start_mjd is not None:
+            sia_params["TIME"] = f"{start_mjd:.4f}/"
+        elif end_mjd is not None:
+            sia_params["TIME"] = f"/{end_mjd:.4f}"
 
         try:
-            res = self.client.post(
-                f"{self.tap_url}/sync",
-                data={"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "votable", "QUERY": adql},
-            )
+            res = self.client.get(self.sia_url, params=sia_params)
             if res.status_code == 200:
                 from astropy.io.votable import parse_single_table
 
-                vtable = parse_single_table(io.BytesIO(res.content))
-                field_map = {
-                    str(f.name or getattr(f, "ID", "")).lower(): idx
-                    for idx, f in enumerate(vtable.fields)
-                }
+                table = parse_single_table(io.BytesIO(res.content)).to_table(use_names_over_ids=True)
+                field_map = {str(c).lower(): c for c in table.colnames}
 
                 def _val(row: Any, *cols: str) -> Any:
                     for c in cols:
-                        idx = field_map.get(c.lower())
-                        if idx is not None:
-                            v = row[idx]
-                            if v is not None and v != "" and not (isinstance(v, float) and (v != v)):
+                        col_name = field_map.get(c.lower())
+                        if col_name is not None:
+                            v = row[col_name]
+                            if hasattr(v, "mask") and v.mask:
+                                continue
+                            if v is not None and v != "" and not (isinstance(v, float) and np.isnan(v)):
                                 return v
                     return None
 
-                for r in vtable.array:
+                for r in table:
                     bp = str(_val(r, "energy_bandpassname", "instrument_name", "band") or "")
                     m = re.search(r"(?:D|LVF|ARR|ARRAY)?([1-6])\b", bp, re.IGNORECASE)
                     det = f"D{m.group(1)}" if m else "D1"
@@ -374,13 +362,20 @@ class IRSASearchService:
                     raw_id = _val(r, "obs_id", "obs_publisher_did")
                     if not raw_id:
                         continue
-                    obs_id = str(raw_id.decode("utf-8") if isinstance(raw_id, bytes) else raw_id).strip()
+                    raw_obs_id = str(raw_id.decode("utf-8") if isinstance(raw_id, bytes) else raw_id).strip()
+                    product_obs_id = (
+                        raw_obs_id
+                        if re.search(rf"(?:_D|_arr|arr|D){det[-1]}(?:[^0-9]|$)", raw_obs_id, re.IGNORECASE)
+                        else f"{raw_obs_id}_{det}"
+                    )
                     s_ra = float(_val(r, "s_ra") or ra)
                     s_dec = float(_val(r, "s_dec") or dec)
                     raw_url = _val(r, "access_url")
-                    url_str = str(raw_url.decode("utf-8") if isinstance(raw_url, bytes) else raw_url).strip() if raw_url else None
-                    t_min_v = _val(r, "t_min")
-                    t_min = float(t_min_v) if t_min_v is not None else None
+                    url_str = (
+                        str(raw_url.decode("utf-8") if isinstance(raw_url, bytes) else raw_url).strip()
+                        if raw_url
+                        else None
+                    )
 
                     b_info = SPHEREX_BANDS.get(det, SPHEREX_BANDS["D1"])
                     em0, em1 = _val(r, "em_min"), _val(r, "em_max")
@@ -393,33 +388,48 @@ class IRSASearchService:
 
                     records.append(
                         _make_archive_rec(
-                            obs_id=obs_id,
+                            obs_id=product_obs_id,
                             ra=s_ra,
                             dec=s_dec,
                             mjd=t_min,
                             band=b_info["name"],
                             access_url=url_str,
-                            source="NASA/IPAC IRSA TAP (SPHEREx ObsCore)",
+                            source="NASA/IPAC IRSA SIA (spherex_dr1)",
                             detector=det,
                             center_um=c_um,
                             w_range=w_rng,
                             cached=False,
                             source_origin="live_archive",
+                            observation_group_id=raw_obs_id,
                         )
                     )
                     if len(records) >= max_records:
                         break
 
                 if records:
-                    notes = ["Retrieved live SPHEREx Level-2 products from NASA IRSA TAP ObsCore."]
-                    cache.set_json(cache_key, {"records": [rec.model_dump() for rec in records], "status": "LIVE_ARCHIVE", "notes": notes}, ttl_s=3600)
+                    notes = ["Retrieved live SPHEREx Level-2 products from NASA IRSA SIA."]
+                    cache.set_json(
+                        cache_key,
+                        {"records": [rec.model_dump() for rec in records], "status": "LIVE_ARCHIVE", "notes": notes},
+                        ttl_s=3600,
+                    )
                     return records, "LIVE_ARCHIVE", notes
+                else:
+                    notes = [
+                        "No SPHEREx observations found in NASA IRSA for the specified coordinates and date/band filter."
+                    ]
+                    cache.set_json(
+                        cache_key,
+                        {"records": [], "status": "LIVE_ARCHIVE", "notes": notes},
+                        ttl_s=3600,
+                    )
+                    return [], "LIVE_ARCHIVE", notes
             else:
-                failure_reason = f"NASA IRSA TAP responded with HTTP {res.status_code}."
+                failure_reason = f"NASA IRSA SIA responded with HTTP {res.status_code}."
         except httpx.TimeoutException:
             failure_reason = "NASA IRSA server timed out (>12s latency) under heavy public load."
         except Exception as exc:
-            failure_reason = f"NASA IRSA TAP connection note: {exc}"
+            failure_reason = f"NASA IRSA SIA connection note: {exc}"
 
         # Check bundled authentic SPHEREx products in samples directory
         samples_dir = Path(__file__).resolve().parent.parent.parent / "data" / "samples"
@@ -491,7 +501,6 @@ class IRSASearchService:
                 "No matching SPHEREx observations found for these coordinates in this date range. Generated standard survey interval epochs for spatial validation."
             )
 
-        cache.set_json(cache_key, {"records": [rec.model_dump() for rec in records], "status": "SYNTHETIC_DEMO", "notes": fallback_notes}, ttl_s=3600)
         return records, "SYNTHETIC_DEMO", fallback_notes
 
     def load_archive_product(
@@ -560,10 +569,28 @@ class IRSASearchService:
 
         # If access URL provided, stream download with size cap and re-validate redirects
         if content is None and req.access_url:
+            download_url = req.access_url
+            if (
+                req.ra_deg is not None
+                and req.dec_deg is not None
+                and "irsa.ipac.caltech.edu/ibe/" in download_url
+            ):
+                fov_deg = max(0.05, (req.fov_arcmin or 10.0) / 60.0)
+                sep = "&" if "?" in download_url else "?"
+                download_url = f"{download_url}{sep}center={req.ra_deg:.6f},{req.dec_deg:.6f}&size={fov_deg:.5f}deg"
+
             try:
-                with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                    with client.stream("GET", req.access_url) as resp:
-                        validate_url_security(str(resp.url))
+                for attempt in range(2):
+                    with self.client.stream("GET", download_url, timeout=30.0) as resp:
+                        if resp.status_code == 503 and attempt == 0:
+                            time.sleep(1.0)
+                            continue
+                        effective_url = (
+                            str(resp.url)
+                            if getattr(resp, "_request", None) is not None
+                            else download_url
+                        )
+                        validate_url_security(effective_url)
                         if resp.status_code == 200:
                             chunks = []
                             total_bytes = 0
@@ -578,6 +605,7 @@ class IRSASearchService:
                             if downloaded.startswith(b"SIMPLE"):
                                 content = downloaded
                                 status = "loaded_live"
+                            break
             except ValueError:
                 raise
             except Exception:

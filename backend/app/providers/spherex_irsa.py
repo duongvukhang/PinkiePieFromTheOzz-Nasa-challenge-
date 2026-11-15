@@ -497,7 +497,9 @@ class SpherexIrsaProvider(Provider):
         wavelength_um = (lam_min, lam_max) if lam_min is not None and lam_max is not None else None
 
         array_id = _parse_array_id(
-            _scalar(row, "array_id") or _scalar(row, "detector"),
+            _scalar(row, "array_id")
+            or _scalar(row, "detector")
+            or _scalar(row, "energy_bandpassname"),
             _scalar(row, "instrument_name"),
         )
         if array_id is None and wavelength_um is not None:
@@ -506,12 +508,22 @@ class SpherexIrsaProvider(Provider):
                 (a for a, (_, (lo, hi)) in self.profile.arrays.items() if lo <= lam_c <= hi),
                 None,
             )
-        band_raw = _scalar(row, "band_id") or _scalar(row, "band") or _scalar(row, "filter")
+        band_raw = (
+            _scalar(row, "band_id")
+            or _scalar(row, "band")
+            or _scalar(row, "filter")
+            or _scalar(row, "energy_bandpassname")
+        )
         band_id = (
             str(band_raw)
             if band_raw is not None
             else (self.profile.arrays[array_id][0] if array_id in self.profile.arrays else None)
         )
+        obs_id_str = str(obs_id)
+        if array_id is not None and not re.search(
+            rf"(?:_D|_arr|arr|D){array_id}(?:[^0-9]|$)", obs_id_str, re.IGNORECASE
+        ):
+            obs_id_str = f"{obs_id_str}_D{array_id}"
 
         ra_deg, dec_deg, fov_deg = (
             _scalar(row, "s_ra"),
@@ -550,7 +562,7 @@ class SpherexIrsaProvider(Provider):
         return FrameRef(
             provider=self.name,
             release=str(_scalar(row, "obs_collection") or default_collection),
-            obs_id=str(obs_id),
+            obs_id=obs_id_str,
             access_url=str(access_url),
             t_mid=t_mid,
             band_id=band_id,

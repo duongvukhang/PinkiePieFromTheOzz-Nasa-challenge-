@@ -21,7 +21,7 @@ export interface ArchiveSearchApplyParams {
 }
 
 export function computeFovArcmin(rStr: string, unit: "arcsec" | "arcmin" | "deg"): number {
-  const r = Number.parseFloat(rStr) || 5.0;
+  const r = Number.parseFloat(rStr.replace(",", ".")) || 5.0;
   const rArcmin = unit === "deg" ? r * 60.0 : unit === "arcsec" ? r / 60.0 : r;
   return Math.max(0.1, Math.min(180.0, rArcmin * 2.0));
 }
@@ -93,9 +93,9 @@ export function ArchiveSearchModal({
   const handleSearch = async (e?: FormEvent) => {
     if (e) e.preventDefault();
     setError(null);
-    const raNum = Number.parseFloat(ra);
-    const decNum = Number.parseFloat(dec);
-    const radNum = Number.parseFloat(radius);
+    const raNum = Number.parseFloat(ra.replace(",", "."));
+    const decNum = Number.parseFloat(dec.replace(",", "."));
+    const radNum = Number.parseFloat(radius.replace(",", "."));
 
     if (!Number.isFinite(raNum) || raNum < 0 || raNum > 360) {
       setError("RA must be between 0.0° and 360.0°");
@@ -137,8 +137,8 @@ export function ArchiveSearchModal({
   };
 
   const handleLoadEpoch = async (ep: ObservationEpoch) => {
-    const raNum = Number.parseFloat(ra);
-    const decNum = Number.parseFloat(dec);
+    const raNum = Number.parseFloat(ra.replace(",", "."));
+    const decNum = Number.parseFloat(dec.replace(",", "."));
     const fovArcmin = computeFovArcmin(radius, radiusUnit);
     useViewStore.getState().setView({ fov: fovArcmin });
     let fromVal = startDate || undefined;
@@ -192,8 +192,8 @@ export function ArchiveSearchModal({
   };
 
   const handleLoadAllInterval = async () => {
-    const raNum = Number.parseFloat(ra);
-    const decNum = Number.parseFloat(dec);
+    const raNum = Number.parseFloat(ra.replace(",", "."));
+    const decNum = Number.parseFloat(dec.replace(",", "."));
     const fovArcmin = computeFovArcmin(radius, radiusUnit);
     useViewStore.getState().setView({ fov: fovArcmin });
     const epochs = searchResult?.epochs ?? [];

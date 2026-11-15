@@ -1,13 +1,15 @@
 ## Current phase: 1 (FITS Display Pipeline & Observatory Features)
-## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Live Backend E2E Playwright Verification Across 5 Mandatory Benchmark Targets
+## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | IRSA SIAv2 Live Query, VOTable Column Masking, and Cutout Optimization
 Done:
-- Configured Vite preview proxy for `/api` and `/health` to live FastAPI backend on port 8000, and enabled dual webServer in Playwright configuration.
-- Resolved 17 TypeScript compile errors across `WcsSvgOverlay.tsx`, `ArchiveSearchModal.tsx`, `InspectorTabs.tsx`, `ViewerStage.tsx`, `useViewerData.ts`, and `boxSelectAndRegimes.test.ts`.
-- Fixed array_id numeric vs string type mismatch in `useViewerData.ts` infrared bandpass filtering that was discarding valid multi-epoch cutout frames.
-- Defaulted `isTimelineOpen: true` in `viewStore.ts` so the multi-epoch timeline dock and blink playback controls render by default.
-- Implemented and verified comprehensive live backend E2E Playwright test suite `benchmark_targets_live.spec.ts` covering `/health`, `/api/v1/examples`, `/api/v1/resolve`, coordinate sexagesimal rendering, live cutout loading, canvas WebP display, and blink/compare playback across all 5 benchmark targets (`WISE 0855`, `Barnard's Star`, `eps Ind B`, `RW Aurigae`, `R Draconis`).
-Files touched: frontend/playwright.config.ts, frontend/vite.config.ts, frontend/src/viewer/overlays/WcsSvgOverlay.tsx, frontend/src/viewer/panels/ArchiveSearchModal.tsx, frontend/src/viewer/panels/InspectorTabs.tsx, frontend/src/viewer/panels/ViewerStage.tsx, frontend/src/viewer/state/useViewerData.ts, frontend/src/viewer/state/viewStore.ts, frontend/tests/unit/boxSelectAndRegimes.test.ts, frontend/tests/e2e/benchmark_targets_live.spec.ts, docs/STATUS.md
-Verified by: playwright test tests/e2e/benchmark_targets_live.spec.ts (7/7 passed, 14.5s), npm test (8 test files, 40 passed), pytest test_api_fields_cutouts.py & test_motion_and_mandatory_targets.py (12 passed)   Lines before -> after: 564 -> 565 (+1 line in useViewerData.ts)
+- Resolved VOTable column ID masking (`col_0..col_50`) in `base._to_table()` by passing `use_names_over_ids=True`, preventing live IRSA SIAv2 fields from being dropped.
+- Replaced slow ADQL ivoa.obscore `/TAP/sync` query in `irsa_search.py` with fast native SIAv2 query targeting `spherex_dr1` collection with spatial circle and time parameters.
+- Disambiguated detector band products in exposure groups (`obs_id=f"{raw_obs_id}_{det}"`, `observation_group_id=raw_obs_id`) and included `energy_bandpassname` in `spherex_irsa.py`.
+- Bumped search cache key to `irsa_search_v2` and restricted caching strictly to `LIVE_ARCHIVE` responses, preventing transient synthetic fallbacks from poisoning cell caches.
+- Returning `LIVE_ARCHIVE` with empty records when live SIA queries find 0 matches instead of generating synthetic fallback epochs.
+- Implemented native fast IBE cutout query parameter appending (`?center={ra},{dec}&size={fov}deg`) with 503 retry and reuse of client streaming in `load_archive_product()`.
+- Normalized comma decimals (`.replace(",", ".")`) across coordinate and radius parsing in `ArchiveSearchModal.tsx`.
+Files touched: backend/app/providers/base.py, backend/app/providers/spherex_irsa.py, backend/app/services/irsa_search.py, frontend/src/viewer/panels/ArchiveSearchModal.tsx, frontend/tests/unit/archiveModal.test.ts, tests/unit/test_api_archive_search.py, docs/STATUS.md
+Verified by: pytest test_api_archive_search.py test_providers.py test_motion_and_mandatory_targets.py (28 passed), npm test (8 test files, 40 passed)   Lines before -> after: 623 -> 649 (+26 lines in irsa_search.py)
 ## Next task: Prepare for science-core review and audit (Phase 1 completion checklist)
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).

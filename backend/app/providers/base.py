@@ -525,8 +525,10 @@ def _to_table(result: Any) -> Table:
     if isinstance(result, Table):
         return result
     if hasattr(result, "to_table"):
-        table: Table = result.to_table()
-        return table
+        try:
+            return result.to_table(use_names_over_ids=True)
+        except TypeError:
+            return result.to_table()
     return Table(result)
 
 

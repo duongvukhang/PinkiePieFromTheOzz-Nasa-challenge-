@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
+
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -176,6 +180,15 @@ def test_api_archive_load_security_validation_400():
 
 
 def test_synthetic_demo_tagging():
+    import httpx
+    from app.services.irsa_search import IRSASearchService
+
+    def mock_handler_err(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Network offline")
+
+    service = IRSASearchService()
+    service._client = httpx.Client(transport=httpx.MockTransport(mock_handler_err))
+
     params = ArchiveSearchParams(
         ra_deg=10.0,
         dec_deg=10.0,
@@ -184,7 +197,7 @@ def test_synthetic_demo_tagging():
         end_date="2020-06-01",
         band="D1",
     )
-    res = irsa_search_service.search_archive(params)
+    res = service.search_archive(params)
     assert res.service_status == "SYNTHETIC_DEMO"
     assert res.is_offline_fallback is True
     assert all(r.is_cached_fallback is True for r in res.records)
@@ -192,7 +205,7 @@ def test_synthetic_demo_tagging():
 
 
 def test_search_spherex_tap_parsing_and_fallback(monkeypatch: pytest.MonkeyPatch):
-    """Test TAP ObsCore VOTable parsing, column extraction, band/time filtering, and fallback in _search_spherex."""
+    """Test SIAv2 VOTable parsing, column extraction, band/time filtering, and fallback in _search_spherex."""
     from pathlib import Path
     import httpx
     from app.services.irsa_search import IRSASearchService
@@ -204,8 +217,9 @@ def test_search_spherex_tap_parsing_and_fallback(monkeypatch: pytest.MonkeyPatch
     content = xml_path.read_bytes()
 
     def mock_handler_ok(request: httpx.Request) -> httpx.Response:
-        body = request.read().decode("utf-8")
-        assert "obs_collection" in body or "CONTAINS" in body
+        assert request.method == "GET"
+        assert "COLLECTION=spherex_dr1" in str(request.url)
+        assert "CIRCLE" in str(request.url)
         return httpx.Response(200, content=content)
 
     service = IRSASearchService()
@@ -221,10 +235,11 @@ def test_search_spherex_tap_parsing_and_fallback(monkeypatch: pytest.MonkeyPatch
     assert recs[0].wavelength_range_um == [3.82, 4.42]
     assert recs[0].is_cached_fallback is False
 
-    # 2. Band filter exclusion fallback
-    recs_d1, _, _ = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D1", 10)
-    assert len(recs_d1) > 0
-    assert recs_d1[0].is_cached_fallback is True
+    # 2. Band filter exclusion: SIA HTTP 200 succeeded but 0 matching records found
+    recs_d1, status_d1, notes_d1 = service._search_spherex(133.795, -7.245, 0.1, 60800.0, 61100.0, "D1", 10)
+    assert status_d1 == "LIVE_ARCHIVE"
+    assert len(recs_d1) == 0
+    assert any("No SPHEREx observations found" in n for n in notes_d1)
 
     # 3. HTTP error fallback to synthetic demo
     def mock_handler_err(request: httpx.Request) -> httpx.Response:
@@ -299,5 +314,70 @@ def test_group_records_dominant_band():
     # In epoch 1, even though D1 was first, D4 is dominant across epochs so selected_product_id is e1_d4
     assert epochs[0].selected_product_id == "e1_d4"
     assert epochs[1].selected_product_id == "e2_d4"
+
+
+def test_sia_votable_column_names_preserved():
+    """Verify VOTables with col_N IDs preserve semantic column names via use_names_over_ids=True."""
+    from astropy.io.votable import parse_single_table
+    from app.providers.base import _to_table
+
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+  <RESOURCE type="results">
+    <TABLE name="obscore">
+      <FIELD name="obs_id" ID="col_9" datatype="char" arraysize="*"/>
+      <FIELD name="s_ra" ID="col_10" datatype="double"/>
+      <FIELD name="access_url" ID="col_11" datatype="char" arraysize="*"/>
+      <DATA><TABLEDATA><TR><TD>sphx_test_01</TD><TD>133.79</TD><TD>https://irsa.ipac.caltech.edu/test.fits</TD></TR></TABLEDATA></DATA>
+    </TABLE>
+  </RESOURCE>
+</VOTABLE>"""
+    tbl = _to_table(parse_single_table(io.BytesIO(xml.encode())))
+    assert "obs_id" in tbl.colnames
+    assert "col_9" not in tbl.colnames
+    assert tbl["obs_id"][0] == "sphx_test_01"
+
+
+def test_load_archive_product_ibe_cutout_params(tmp_path: Path):
+    """Verify load_archive_product appends center and size query params for IRSA IBE URLs."""
+    import httpx
+    from astropy.io import fits
+    from app.schemas.archive import ArchiveLoadRequest
+    from app.services.jobs import InMemoryJobStore
+    from app.services.storage import LocalStorageBackend
+    from app.services.irsa_search import IRSASearchService
+
+    hdu = fits.PrimaryHDU(data=np.ones((10, 10), dtype=np.float32))
+    buf = io.BytesIO()
+    hdu.writeto(buf)
+    fits_bytes = buf.getvalue()
+
+    requested_urls: list[str] = []
+
+    def mock_stream(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(200, request=request, content=fits_bytes)
+
+    svc = IRSASearchService()
+    storage = LocalStorageBackend(tmp_path / "storage")
+    store = InMemoryJobStore()
+    req = ArchiveLoadRequest(
+        obs_id="2025W19_1B_0116_1_D1",
+        access_url="https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/image.fits",
+        source="spherex_irsa",
+        ra_deg=133.79513,
+        dec_deg=-7.24515,
+        fov_arcmin=6.0,
+        mjd_obs=60800.5,
+    )
+
+    svc._client = httpx.Client(transport=httpx.MockTransport(mock_stream))
+    res = svc.load_archive_product(req, storage, store)
+
+    assert res["status"] in ("loaded_live", "already_loaded")
+    assert len(requested_urls) == 1
+    assert "center=133.795130,-7.245150" in requested_urls[0]
+    assert "size=0.10000deg" in requested_urls[0]
+
 
 

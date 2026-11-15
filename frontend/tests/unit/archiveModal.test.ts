@@ -75,7 +75,9 @@ describe("Archive API client & search parameter serialization", () => {
   it("converts search cone radius and unit to FOV diameter in arcminutes", async () => {
     const { computeFovArcmin } = await import("../../src/viewer/panels/ArchiveSearchModal");
     expect(computeFovArcmin("5.0", "arcmin")).toBe(10.0);
+    expect(computeFovArcmin("5,0", "arcmin")).toBe(10.0);
     expect(computeFovArcmin("0.1", "deg")).toBe(12.0);
+    expect(computeFovArcmin("0,1", "deg")).toBe(12.0);
     expect(computeFovArcmin("30", "arcsec")).toBe(1.0);
     expect(computeFovArcmin("", "arcmin")).toBe(10.0);
   });
