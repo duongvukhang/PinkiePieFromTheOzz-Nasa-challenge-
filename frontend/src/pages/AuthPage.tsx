@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { toApiUrl } from "../api/client";
 import { useAuthStore, type AuthUser } from "../app/authStore";
 import { Field } from "../design/components/Field";
 import { Callout } from "../design/components/Primitives";
@@ -31,12 +32,11 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
     setSubmitting(true);
     setStatusMessage("");
     const displayName = name.trim() || email.split("@")[0] || "Researcher";
-    const apiBase = (import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? "") as string;
     let authUser: AuthUser = { name: displayName, email };
 
     try {
       if (isSignUp) {
-        const regRes = await fetch(`${apiBase}/api/v1/auth/register`, {
+        const regRes = await fetch(toApiUrl("/api/v1/auth/register"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -48,7 +48,7 @@ export function AuthPage({ defaultMode }: { defaultMode?: AuthMode }) {
         }
       }
 
-      const loginRes = await fetch(`${apiBase}/api/v1/auth/login`, {
+      const loginRes = await fetch(toApiUrl("/api/v1/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

@@ -121,10 +121,20 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE =
+const RAW_API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined) ??
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   "";
+
+export const API_BASE = RAW_API_BASE.trim().replace(/\/+$/, "");
+
+export function toApiUrl(path: string): string {
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return API_BASE ? `${API_BASE}${cleanPath}` : cleanPath;
+}
 
 function buildUrl(path: string, params?: Record<string, string | number | undefined>): string {
   const qs = new URLSearchParams();
@@ -132,7 +142,7 @@ function buildUrl(path: string, params?: Record<string, string | number | undefi
     if (v !== undefined && v !== "") qs.set(k, String(v));
   }
   const s = qs.toString();
-  return `${API_BASE}${path}${s ? `?${s}` : ""}`;
+  return `${path}${s ? `?${s}` : ""}`;
 }
 
 function getAuthHeaders(shareToken?: string): Record<string, string> {
@@ -149,7 +159,7 @@ function getAuthHeaders(shareToken?: string): Record<string, string> {
 
 export async function apiJson<T>(path: string, init?: RequestInit, shareToken?: string): Promise<T> {
   const authHeaders = getAuthHeaders(shareToken);
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(toApiUrl(path), {
     credentials: "include",
     ...init,
     headers: { "Content-Type": "application/json", ...authHeaders, ...init?.headers },
@@ -182,7 +192,7 @@ const postJson = <T>(path: string, body: unknown) =>
   apiJson<T>(path, { method: "POST", body: JSON.stringify(body) });
 
 export async function fetchScienceFrame(url: string): Promise<ScienceBuffer> {
-  const res = await fetch(url.startsWith("http") ? url : `${API_BASE}${url}`);
+  const res = await fetch(toApiUrl(url));
   if (!res.ok || (res.headers.get("content-type") ?? "").includes("text/html")) {
     throw new ApiError(res.ok ? 502 : res.status, `Science frame load failed (${res.status})`);
   }
@@ -312,7 +322,7 @@ export const api = {
     postJson<ArchiveLoadResponse>("/api/v1/archive/load", body),
   listUploads: () => apiJson<UploadedFitsSummary[]>("/api/v1/uploads"),
   deleteUpload: async (fitsId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/uploads/${fitsId}`, { method: "DELETE" });
+    const res = await fetch(toApiUrl(`/api/v1/uploads/${fitsId}`), { method: "DELETE" });
     if (!res.ok && res.status !== 404) {
       const err = await res.json().catch(() => ({}));
       throw new ApiError(res.status, err.detail || "Delete upload failed", err.title);
@@ -332,7 +342,7 @@ export const api = {
     if (refDec !== undefined) form.append("reference_dec_deg", String(refDec));
     if (projectId) form.append("project_id", projectId);
     const headers = getAuthHeaders();
-    const res = await fetch(`${API_BASE}/api/v1/uploads`, {
+    const res = await fetch(toApiUrl("/api/v1/uploads"), {
       method: "POST",
       credentials: "include",
       headers,
@@ -362,7 +372,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   deleteProject: async (projectId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}`, {
+    const res = await fetch(toApiUrl(`/api/v1/projects/${projectId}`), {
       method: "DELETE",
       credentials: "include",
       headers: getAuthHeaders(),
@@ -383,7 +393,7 @@ export const api = {
       fits_file_id: fitsFileId,
     }),
   unlinkProjectFile: async (projectId: string, fitsId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/files/${fitsId}`, {
+    const res = await fetch(toApiUrl(`/api/v1/projects/${projectId}/files/${fitsId}`), {
       method: "DELETE",
       credentials: "include",
       headers: getAuthHeaders(),
@@ -407,7 +417,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   deleteNote: async (projectId: string, noteId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/notes/${noteId}`, {
+    const res = await fetch(toApiUrl(`/api/v1/projects/${projectId}/notes/${noteId}`), {
       method: "DELETE",
       credentials: "include",
       headers: getAuthHeaders(),
@@ -431,7 +441,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   deleteFinding: async (projectId: string, findingId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/findings/${findingId}`, {
+    const res = await fetch(toApiUrl(`/api/v1/projects/${projectId}/findings/${findingId}`), {
       method: "DELETE",
       credentials: "include",
       headers: getAuthHeaders(),
@@ -450,7 +460,7 @@ export const api = {
   createSavedView: (projectId: string, body: SavedViewCreate) =>
     postJson<SavedViewRead>(`/api/v1/projects/${projectId}/views`, body),
   deleteSavedView: async (projectId: string, viewId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/views/${viewId}`, {
+    const res = await fetch(toApiUrl(`/api/v1/projects/${projectId}/views/${viewId}`), {
       method: "DELETE",
       credentials: "include",
       headers: getAuthHeaders(),
@@ -473,7 +483,7 @@ export const api = {
   createShareLink: (projectId: string) =>
     postJson<ProjectShareResponse>(`/api/v1/projects/${projectId}/share`, {}),
   revokeShareLink: async (projectId: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/share`, {
+    const res = await fetch(toApiUrl(`/api/v1/projects/${projectId}/share`), {
       method: "DELETE",
       credentials: "include",
       headers: getAuthHeaders(),
@@ -486,5 +496,5 @@ export const api = {
   exportProject: (projectId: string, body: ExportRequest) =>
     postJson<{ job_id: string; status: string }>(`/api/v1/projects/${projectId}/exports`, body),
   downloadProjectExportUrl: (projectId: string, exportId: string, shareToken?: string) =>
-    buildUrl(`/api/v1/projects/${projectId}/exports/${exportId}`, { share_token: shareToken }),
+    toApiUrl(buildUrl(`/api/v1/projects/${projectId}/exports/${exportId}`, { share_token: shareToken })),
 };
