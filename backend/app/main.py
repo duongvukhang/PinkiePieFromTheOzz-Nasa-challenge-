@@ -84,6 +84,24 @@ def create_app() -> FastAPI:
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(ProviderError, provider_error_handler)
 
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request, exc: Exception):
+        from starlette.responses import JSONResponse
+        origin = request.headers.get("origin") or "*"
+        return JSONResponse(
+            status_code=500,
+            content={
+                "type": "https://httpstatuses.com/500",
+                "title": "Internal Server Error",
+                "status": 500,
+                "detail": str(exc) or "An internal error occurred",
+            },
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+            },
+        )
+
     @app.get("/health", tags=["health"])
     async def health() -> HealthResponse:
         """Liveness probe."""

@@ -372,7 +372,7 @@ def list_releases_service(
 
     try:
         descriptors = provider.describe_releases()
-    except ProviderError:
+    except Exception:
         descriptors = []
 
     releases = [
