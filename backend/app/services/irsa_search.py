@@ -318,6 +318,9 @@ class IRSASearchService:
 
         try:
             res = self.client.get(self.sia_url, params=sia_params)
+            if res.status_code in (500, 502, 503, 504):
+                time.sleep(0.8)
+                res = self.client.get(self.sia_url, params=sia_params)
             if res.status_code == 200:
                 from astropy.io.votable import parse_single_table
 
