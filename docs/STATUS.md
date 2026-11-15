@@ -2,10 +2,11 @@
 ## Last session: Gemini 3.8 Flash (High) | 2026-11-15 | Render Deployment Fix (matplotlib & dynamic $PORT)
 Done:
 - Fixed Render backend deployment by adding `matplotlib>=3.8` to `backend/pyproject.toml`.
-- Updated `infra/backend.Dockerfile` CMD and HEALTHCHECK to bind dynamically to `${PORT:-8000}`, resolving Render's port scanning requirements.
-- Validated backend unit tests with `pytest` (2 passed, 0 failures) and pushed commit `6a4ddc3` directly to `main`.
+- Updated `infra/backend.Dockerfile` CMD and HEALTHCHECK to bind dynamically to `${PORT:-8000}` on IPv4 loopback (`127.0.0.1`), resolving Render's port scanning and healthcheck requirements.
+- Validated backend container build and live execution locally (`docker run` returned `{"status":"ok","version":"0.1.0"}`).
+- Pushed commits `6a4ddc3`, `956c4b1`, and `5c05d99` to `main`.
 Files touched: backend/pyproject.toml, infra/backend.Dockerfile, docs/STATUS.md
-Verified by: pytest tests/unit/test_production_config_and_rate_limit.py (passed), git push origin main   Lines before -> after: 3 lines added to backend config & Dockerfile
+Verified by: docker run test container healthcheck (passed 200 OK), pytest (passed), git push origin main   Lines before -> after: 3 lines added to backend config & Dockerfile
 ## Next task: Monitor Render build and configure Vercel frontend URL
 ## Open questions:
 - Confirm `[verify]` items against live IRSA SPHEREx docs when collection/MEF schemas are finalized (SPHEREx MEF extension names, Horizons SPHEREx ID).
