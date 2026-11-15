@@ -122,7 +122,7 @@ export function ViewerToolbar({
             {target ||
               (ra !== undefined && dec !== undefined
                 ? `${ra.toFixed(4)}°, ${dec.toFixed(4)}°`
-                : "WISE 0855")}
+                : "No target selected")}
           </strong>
           {from && to && (
             <span style={{ color: "var(--sky-muted)", fontSize: "0.7rem" }}>

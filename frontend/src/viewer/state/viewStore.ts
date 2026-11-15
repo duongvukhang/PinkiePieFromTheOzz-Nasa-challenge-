@@ -194,10 +194,10 @@ export function toViewQuery(s: Partial<ViewState>): string {
 }
 
 const DEFAULT_STATE: ViewState = {
-  target: "SPHEREx NEP Deep Field",
-  ra: 276.26139,
-  dec: 64.82577,
-  fov: 15,
+  target: "",
+  ra: undefined,
+  dec: undefined,
+  fov: 10,
   from: "",
   to: "",
   release: "latest",
@@ -267,7 +267,7 @@ export const useViewStore = create<ViewStore>((set) => ({
       return {
         ...DEFAULT_STATE,
         ...parsed,
-        target: parsed.target || (parsed.ra === undefined ? "WISE 0855" : ""),
+        target: parsed.target || "",
         activeBox: sameCoords ? prev.activeBox : null,
       };
     }),

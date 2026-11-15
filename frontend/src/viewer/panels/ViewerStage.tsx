@@ -528,8 +528,11 @@ export function ViewerStage({
             <div className="viewer-status-msg viewer-status-error">{errorMsg}</div>
           </div>
         )}
-        {/* If no FITS file is loaded, render blank per observatory specification */}
-        {!loading && !errorMsg && !frameA && null}
+        {!loading && !errorMsg && !frameA && (
+          <div className="viewer-status-overlay" role="status">
+            <div className="viewer-status-msg viewer-status-empty">no data available</div>
+          </div>
+        )}
       </div>
     </div>
   );

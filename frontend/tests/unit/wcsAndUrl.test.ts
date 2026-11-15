@@ -11,6 +11,7 @@ import {
   parseCoordsInput,
   parseViewParams,
   toViewQuery,
+  useViewStore,
 } from "../../src/viewer/state/viewStore";
 
 describe("viewer WCS & URL state", () => {
@@ -95,5 +96,20 @@ describe("viewer WCS & URL state", () => {
 
   it("decodes detector flag bitmasks", () => {
     expect(decodeFlagBits((1 << 1) | (1 << 7))).toEqual(["BLENDED", "LOW_SNR"]);
+  });
+
+  it("initializes empty observatory state without pre-set loading or target", () => {
+    const parsed = parseViewParams("", false);
+    expect(parsed.target).toBe("");
+    expect(parsed.ra).toBeUndefined();
+    expect(parsed.dec).toBeUndefined();
+
+    const store = useViewStore.getState();
+    store.syncFromSearch("", false);
+    const synced = useViewStore.getState();
+    expect(synced.target).toBe("");
+    expect(synced.ra).toBeUndefined();
+    expect(synced.dec).toBeUndefined();
+    expect(synced.fitsIds).toEqual([]);
   });
 });

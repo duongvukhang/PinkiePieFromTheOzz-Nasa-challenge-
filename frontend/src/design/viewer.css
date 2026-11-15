@@ -766,6 +766,16 @@
   color: var(--sky-accent, #ff7b72);
 }
 
+.viewer-status-empty {
+  color: var(--sky-muted, #8b949e);
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  padding: 8px 16px;
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid var(--sky-rule, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+}
+
 .viewer-status-spinner {
   inline-size: 22px;
   block-size: 22px;

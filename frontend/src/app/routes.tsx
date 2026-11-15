@@ -4,11 +4,9 @@ import { AboutPage } from "../pages/AboutPage";
 import { AuthPage } from "../pages/AuthPage";
 import { Home } from "../pages/Home";
 import { LogoutPage } from "../pages/LogoutPage";
+import { ViewerPage } from "../pages/ViewerPage";
 import { AppShell } from "./layout/AppShell";
 
-const ViewerPage = lazy(() =>
-  import("../pages/ViewerPage").then((m) => ({ default: m.ViewerPage })),
-);
 const EmbedPage = lazy(() => import("../pages/EmbedPage").then((m) => ({ default: m.EmbedPage })));
 const ProjectsPage = lazy(() =>
   import("../pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage })),
@@ -100,14 +98,7 @@ function ShellRoutes() {
         <Route path="/signin" element={<AuthPage defaultMode="signin" />} />
         <Route path="/signup" element={<AuthPage defaultMode="signin" />} />
         <Route path="/logout" element={<LogoutPage />} />
-        <Route
-          path="/v"
-          element={
-            <Suspense fallback={<div className="viewer-stage">Loading observatory…</div>}>
-              <ViewerPage />
-            </Suspense>
-          }
-        />
+        <Route path="/v" element={<ViewerPage />} />
         <Route
           path="/projects"
           element={
