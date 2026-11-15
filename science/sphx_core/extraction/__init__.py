@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import warnings
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from photutils.psf import CircularGaussianPRF, PSFPhotometry, SourceGrouper
 from photutils.utils.exceptions import NoDetectionsWarning
 from scipy.ndimage import label as nd_label
 from scipy.signal import fftconvolve
+from scipy.spatial import cKDTree
 from scipy.special import erf
 
 from sphx_core.calib import (
@@ -91,6 +93,10 @@ def estimate_psf_kernel(
     """Build normalized 2D pixel-integrated PSF kernel (`sum == 1.0`, size in px) (§C.1)."""
     if psf_hdu_data is not None and psf_hdu_data.ndim >= 2:
         k = np.asarray(psf_hdu_data[0] if psf_hdu_data.ndim > 2 else psf_hdu_data, dtype=np.float64)
+        if k.shape[0] > size or k.shape[1] > size:
+            cy, cx = k.shape[0] // 2, k.shape[1] // 2
+            half = size // 2
+            k = k[cy - half : cy + half + 1, cx - half : cx + half + 1]
         k = np.nan_to_num(k, nan=0.0)
         tot = float(np.sum(k))
         if tot > 0.0:
@@ -192,12 +198,21 @@ def _merge_seeds(
             }
         )
     if mf_peaks is not None and len(mf_peaks) > 0:
-        for row in mf_peaks:
-            px, py = float(row["x_peak"]), float(row["y_peak"])
-            if any(math.hypot(px - sx, py - sy) < min_sep_px for sx, sy in seeds):
-                continue
-            seeds.append((px, py))
-            morphs.append({"a": 1.0, "b": 1.0, "theta": 0.0, "sep_flag": 0.0})
+        if seeds:
+            from scipy.spatial import cKDTree
+
+            tree = cKDTree(seeds)
+            pts = np.column_stack([mf_peaks["x_peak"], mf_peaks["y_peak"]])
+            dists, _ = tree.query(pts, distance_upper_bound=min_sep_px)
+            for i, d in enumerate(dists):
+                if d >= min_sep_px or not math.isfinite(d):
+                    px, py = float(pts[i, 0]), float(pts[i, 1])
+                    seeds.append((px, py))
+                    morphs.append({"a": 1.0, "b": 1.0, "theta": 0.0, "sep_flag": 0.0})
+        else:
+            for row in mf_peaks:
+                seeds.append((float(row["x_peak"]), float(row["y_peak"])))
+                morphs.append({"a": 1.0, "b": 1.0, "theta": 0.0, "sep_flag": 0.0})
     return seeds, morphs
 
 
@@ -256,113 +271,125 @@ def extract_sources(
     sat_seeds: list[tuple[float, float]] = []
     if np.any(sat_mask):
         sat_lbl, n_sat = nd_label(sat_mask)
-        for comp in range(1, n_sat + 1):
-            ys_c, xs_c = np.nonzero(sat_lbl == comp)
-            sat_seeds.append((float(np.mean(xs_c)), float(np.mean(ys_c))))
-        phot_sat = PSFPhotometry(
-            CircularGaussianPRF(fwhm=fwhm_px),
-            fit_shape=(sat_side, sat_side),
-            grouper=SourceGrouper(min_separation=max(4.5, 2.2 * fwhm_px)),
-            aperture_radius=fwhm_ap,
-        )
-        res_sat = phot_sat(
-            work_sub, mask=fit_mask, error=err_c, init_params=_make_init_table(sat_seeds)
-        )
-        sat_infos = getattr(phot_sat, "fit_info", [])
-        default_morph = {"a": sigma_px, "b": sigma_px, "theta": 0.0, "sep_flag": 0.0}
-        for i, r in enumerate(res_sat):
-            pcov = sat_infos[i].get("param_cov") if i < len(sat_infos) else None
-            sat_rows.append(
-                (r, np.asarray(pcov, dtype=np.float64) if pcov is not None else None, default_morph)
+        if n_sat > 0:
+            from scipy.ndimage import center_of_mass, sum_labels
+
+            sizes = sum_labels(np.ones_like(sat_mask, dtype=int), sat_lbl, range(1, n_sat + 1))
+            valid_idx = np.where(sizes >= 4)[0] + 1
+            if len(valid_idx) > 20:
+                top_order = np.argsort(sizes[valid_idx - 1])[::-1][:20]
+                valid_idx = valid_idx[top_order]
+            if len(valid_idx) > 0:
+                coms = center_of_mass(sat_mask, sat_lbl, valid_idx)
+                if not isinstance(coms, list):
+                    coms = [coms]
+                sat_seeds = [(float(c[1]), float(c[0])) for c in coms if np.all(np.isfinite(c))]
+        if sat_seeds:
+            phot_sat = PSFPhotometry(
+                CircularGaussianPRF(fwhm=fwhm_px),
+                fit_shape=(sat_side, sat_side),
+                grouper=SourceGrouper(min_separation=max(3.0, 1.5 * fwhm_px)),
+                aperture_radius=fwhm_ap,
+                fitter_maxiters=20,
             )
-        work_sub = np.ascontiguousarray(phot_sat.make_residual_image(work_sub), dtype=np.float64)
-        snr_work = matched_filter_snr(work_sub, bg.variance, psf_kernel, quality_mask=~fit_mask)
+            res_sat = phot_sat(
+                work_sub, mask=fit_mask, error=err_c, init_params=_make_init_table(sat_seeds)
+            )
+            sat_infos = getattr(phot_sat, "fit_info", [])
+            default_morph = {"a": sigma_px, "b": sigma_px, "theta": 0.0, "sep_flag": 0.0}
+            for i, r in enumerate(res_sat):
+                pcov = sat_infos[i].get("param_cov") if i < len(sat_infos) else None
+                sat_rows.append(
+                    (r, np.asarray(pcov, dtype=np.float64) if pcov is not None else None, default_morph)
+                )
+            work_sub = np.ascontiguousarray(phot_sat.make_residual_image(work_sub), dtype=np.float64)
+            snr_work = matched_filter_snr(work_sub, bg.variance, psf_kernel, quality_mask=~fit_mask)
+        else:
+            snr_work = snr_map
     else:
         snr_work = snr_map
 
-    sep_objs = sep.extract(
-        work_sub,
-        thresh=detect_thresh_sigma,
-        err=err_c,
-        mask=fit_mask,
-        minarea=min_area,
-        filter_kernel=psf_kernel,
-        filter_type="matched",
-        deblend_nthresh=32,
-        deblend_cont=0.005,
-        clean=True,
-    )
+    with contextlib.suppress(Exception):
+        sep.set_extract_pixstack(2000000)
+
+    try:
+        sep_objs = sep.extract(
+            work_sub,
+            thresh=max(2.5, detect_thresh_sigma),
+            err=err_c,
+            mask=fit_mask,
+            minarea=min_area,
+            filter_kernel=psf_kernel,
+            filter_type="matched",
+            deblend_nthresh=32,
+            deblend_cont=0.005,
+            clean=True,
+        )
+    except Exception:
+        sep_objs = sep.extract(
+            work_sub,
+            thresh=max(4.0, detect_thresh_sigma),
+            err=err_c,
+            mask=fit_mask,
+            minarea=min_area,
+            filter_kernel=psf_kernel,
+            filter_type="matched",
+            deblend_nthresh=16,
+            deblend_cont=0.01,
+            clean=True,
+        )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", NoDetectionsWarning)
         mf_peaks = find_peaks(snr_work, threshold=max(4.0, min_snr), box_size=3, mask=fit_mask)
     seeds, morphs = _merge_seeds(sep_objs, mf_peaks, min_sep_px=max(1.2, 0.7 * fwhm_px))
 
     # Filter unflagged single-pixel cosmic rays and low-S/N noise fluctuations before PSF fitting.
-    unsat_seeds: list[tuple[float, float]] = []
-    unsat_morphs: list[dict[str, float]] = []
+    unsat_pairs: list[tuple[tuple[float, float], dict[str, float]]] = []
     pre_snr_min = max(2.5, 0.55 * min_snr)
+    sat_tree = cKDTree(sat_seeds) if sat_seeds else None
     for (sx, sy), m in zip(seeds, morphs, strict=True):
         ix, iy = int(np.clip(round(sx), 0, nx - 1)), int(np.clip(round(sy), 0, ny - 1))
-        if any(math.hypot(sx - stx, sy - sty) < 1.2 for stx, sty in sat_seeds):
+        if sat_tree is not None:
+            d_sat, _ = sat_tree.query([sx, sy], distance_upper_bound=1.2)
+            if d_sat < 1.2:
+                continue
+        elif any(math.hypot(sx - stx, sy - sty) < 1.2 for stx, sty in sat_seeds):
             continue
         if float(snr_work[iy, ix]) < pre_snr_min:
             continue
         if _detect_unflagged_cr(work_sub, ix, iy, sigma_px, float(bg.rms[iy, ix])):
             continue
-        unsat_seeds.append((sx, sy))
-        unsat_morphs.append(m)
+        unsat_pairs.append(((sx, sy), m))
 
     unsat_rows: list[tuple[Any, NDArray[np.float64] | None, dict[str, float]]] = []
     resid_all = work_sub
-    if unsat_seeds and len(unsat_seeds) > max_sources:
-        unsat_seeds.sort(
-            key=lambda s: float(
-                snr_work[int(np.clip(round(s[1]), 0, ny - 1)), int(np.clip(round(s[0]), 0, nx - 1))]
+    if unsat_pairs and len(unsat_pairs) > max_sources:
+        unsat_pairs.sort(
+            key=lambda p: float(
+                snr_work[int(np.clip(round(p[0][1]), 0, ny - 1)), int(np.clip(round(p[0][0]), 0, nx - 1))]
             ),
             reverse=True,
         )
-        unsat_seeds = unsat_seeds[:max_sources]
+        unsat_pairs = unsat_pairs[:max_sources]
+    unsat_seeds = [p[0] for p in unsat_pairs]
+    unsat_morphs = [p[1] for p in unsat_pairs]
     if unsat_seeds:
         phot = PSFPhotometry(
             CircularGaussianPRF(fwhm=fwhm_px),
             fit_shape=(fit_side, fit_side),
-            grouper=SourceGrouper(min_separation=max(5.0, 2.5 * fwhm_px)),
+            grouper=SourceGrouper(min_separation=max(3.0, 1.5 * fwhm_px)),
             aperture_radius=fwhm_ap,
+            fitter_maxiters=20,
         )
         res_u = phot(
             work_sub, mask=fit_mask, error=err_c, init_params=_make_init_table(unsat_seeds)
         )
         resid_all = phot.make_residual_image(work_sub)
-        snr_res = matched_filter_snr(resid_all, bg.variance, psf_kernel, quality_mask=~fit_mask)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", NoDetectionsWarning)
-            res_peaks = find_peaks(snr_res, threshold=max(4.0, min_snr), box_size=3, mask=fit_mask)
-        if res_peaks is not None and len(res_peaks) > 0:
-            cur_xy = list(zip(res_u["x_fit"], res_u["y_fit"], strict=True))
-            added = False
-            for row in res_peaks:
-                rx, ry = float(row["x_peak"]), float(row["y_peak"])
-                if any(math.hypot(rx - stx, ry - sty) < 1.5 for stx, sty in sat_seeds):
-                    continue
-                if any(math.hypot(rx - float(cx), ry - float(cy)) < 1.2 for cx, cy in cur_xy):
-                    continue
-                unsat_seeds.append((rx, ry))
-                unsat_morphs.append({"a": sigma_px, "b": sigma_px, "theta": 0.0, "sep_flag": 0.0})
-                added = True
-            if added:
-                res_u = phot(
-                    work_sub, mask=fit_mask, error=err_c, init_params=_make_init_table(unsat_seeds)
-                )
-                resid_all = phot.make_residual_image(work_sub)
         u_infos = getattr(phot, "fit_info", [])
+        default_morph = {"a": sigma_px, "b": sigma_px, "theta": 0.0, "sep_flag": 0.0}
         for i, r in enumerate(res_u):
             pcov = u_infos[i].get("param_cov") if i < len(u_infos) else None
-            m_best = min(
-                zip(unsat_seeds, unsat_morphs, strict=True),
-                key=lambda sm: math.hypot(
-                    sm[0][0] - float(r["x_init"]), sm[0][1] - float(r["y_init"])
-                ),
-            )[1]
+            m_best = unsat_morphs[i] if i < len(unsat_morphs) else default_morph
             unsat_rows.append(
                 (r, np.asarray(pcov, dtype=np.float64) if pcov is not None else None, m_best)
             )

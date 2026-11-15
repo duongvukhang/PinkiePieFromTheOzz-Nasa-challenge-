@@ -286,11 +286,9 @@ async def get_upload_display(
     raw = _resolve_fits_raw(upload_or_fits_id, store, storage)
     arr = extract_2d_image(raw)
     from app.services.image_renderer import image_renderer
-    png_bytes = await asyncio.to_thread(image_renderer.render_to_png_bytes, arr, stretch=stretch, colormap=colormap)
-    from PIL import Image
-    buf = io.BytesIO()
-    Image.open(io.BytesIO(png_bytes)).save(buf, format="WEBP", lossless=True)
-    webp_bytes = buf.getvalue()
+    webp_bytes = await asyncio.to_thread(
+        image_renderer.render_to_webp_bytes, arr, stretch=stretch, colormap=colormap
+    )
     cache_key = f"products/uploads/{upload_or_fits_id}/display_{stretch}_{colormap}.webp"
     with contextlib.suppress(Exception):
         storage.put_bytes(cache_key, webp_bytes, content_type="image/webp")

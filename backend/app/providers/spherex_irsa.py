@@ -9,6 +9,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -319,7 +320,43 @@ class SpherexIrsaProvider(Provider):
         )
 
     def describe_releases(self) -> list[ReleaseDescriptor]:
-        """Return SPHEREx mission release descriptors from active profile."""
+        """Return SPHEREx mission release descriptors from IRSA TAP ObsCore or active profile."""
+        adql = (
+            "SELECT obs_collection, MAX(obs_release_date) AS latest_release_date, "
+            f"COUNT(*) AS n_frames FROM {self.profile.obscore_table} "
+            "WHERE obs_collection LIKE 'spherex%' GROUP BY obs_collection"
+        )
+        try:
+            table = _to_table(self._run(lambda: self._irsa.query_tap(adql)))
+            releases: list[ReleaseDescriptor] = []
+            for row in table:
+                collection = str(_scalar(row, "obs_collection") or _scalar(row, "collection") or "")
+                if not collection:
+                    continue
+                n_frames_val = _scalar(row, "n_frames")
+                version_label = _scalar(row, "version_label")
+                releases.append(
+                    ReleaseDescriptor(
+                        release_id=collection,
+                        provider=self.name,
+                        mission=self.profile.mission,
+                        collection=collection,
+                        version_label=str(version_label) if version_label is not None else None,
+                        release_date=_parse_date(
+                            _scalar(row, "latest_release_date") or _scalar(row, "obs_release_date")
+                        ),
+                        n_frames=int(n_frames_val) if n_frames_val is not None else None,
+                        profile_name=(
+                            self.profile.profile_name
+                            if collection == self.profile.collection_id
+                            else None
+                        ),
+                    )
+                )
+            if releases:
+                return sorted(releases, key=lambda r: r.release_id)
+        except Exception:
+            pass
         return [
             ReleaseDescriptor(
                 release_id=self.profile.collection_id,

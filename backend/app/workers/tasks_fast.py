@@ -50,7 +50,7 @@ def render_array_products(
     rgba = cm.inferno(norm_flipped.astype(np.float32) / 255.0)
     rgb_bytes = (rgba[:, :, :3] * 255.0).astype(np.uint8)
     webp_buf = io.BytesIO()
-    Image.fromarray(rgb_bytes, mode="RGB").save(webp_buf, format="WEBP", lossless=True)
+    Image.fromarray(rgb_bytes, mode="RGB").save(webp_buf, format="WEBP", quality=85, method=2)
     disp_obj = storage.put_bytes(
         f"{prefix}/display.webp", webp_buf.getvalue(), content_type="image/webp"
     )
@@ -472,6 +472,9 @@ def execute_validate_upload(
                 uploader_id=user_id,
                 project_id=project_id,
             )
+            import contextlib
+            with contextlib.suppress(Exception):
+                render_cutout_products(raw_bytes, storage, f"products/uploads/{fits_file_id}")
 
         store.record_provenance(
             processing_job_id=job_id,

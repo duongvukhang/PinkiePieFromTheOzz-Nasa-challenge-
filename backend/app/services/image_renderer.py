@@ -40,7 +40,7 @@ class ImageRenderer:
     """
 
     @staticmethod
-    def render_to_png_bytes(
+    def _prepare_pil_image(
         data: NDArray[Any] | Sequence[Sequence[float]],
         stretch: str = "asinh",
         colormap: str = "inferno",
@@ -51,20 +51,16 @@ class ImageRenderer:
         brightness: float = 1.0,
         contrast: float = 1.0,
         max_dim: int | None = None,
-    ) -> bytes:
-        """Transforms raw scientific array to scaled 8-bit RGB PNG image bytes."""
+    ) -> Image.Image:
+        """Transforms raw scientific array to normalized PIL Image."""
         arr = np.asarray(data, dtype=np.float64)
         finite_mask = np.isfinite(arr)
 
         if not np.any(finite_mask):
-            img = Image.new("RGB", (max(1, arr.shape[1]), max(1, arr.shape[0])), color=(10, 14, 23))
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            return buf.getvalue()
+            return Image.new("RGB", (max(1, arr.shape[1]), max(1, arr.shape[0])), color=(10, 14, 23))
 
         finite_vals = arr[finite_mask]
 
-        # Determine cutoff values
         if custom_vmin is not None:
             vmin = float(custom_vmin)
         else:
@@ -87,15 +83,11 @@ class ImageRenderer:
         if vmax <= vmin:
             vmax = vmin + 1e-6
 
-        # Clip values to [vmin, vmax]
         arr_clipped = np.copy(arr)
         arr_clipped[~finite_mask] = vmin
         np.clip(arr_clipped, vmin, vmax, out=arr_clipped)
-
-        # Normalize to [0.0, 1.0]
         norm = (arr_clipped - vmin) / (vmax - vmin)
 
-        # Apply astronomical stretch function
         stretch_type = (stretch or "asinh").lower()
         if stretch_type == "asinh":
             Q = 8.0
@@ -105,28 +97,35 @@ class ImageRenderer:
         elif stretch_type == "sqrt":
             norm = np.sqrt(norm)
 
-        # Apply contrast & brightness adjustment
         if contrast != 1.0 or brightness != 1.0:
             norm = (norm - 0.5) * contrast + 0.5
             norm = norm * brightness
             np.clip(norm, 0.0, 1.0, out=norm)
 
-        # Invert vertical axis so astronomical Y (origin="lower") matches image display
         norm_flipped = np.flipud(norm)
-
-        # Apply colormap
         cmap_obj = SUPPORTED_COLORMAPS.get(colormap.lower(), cm.inferno)
         rgba = cmap_obj(norm_flipped)
         rgb_bytes = (rgba[:, :, :3] * 255.0).astype(np.uint8)
-
-        # Convert to PIL Image
         pil_img = Image.fromarray(rgb_bytes, mode="RGB")
 
         if max_dim is not None and (pil_img.width > max_dim or pil_img.height > max_dim):
             pil_img.thumbnail((max_dim, max_dim), Image.Resampling.BILINEAR)
+        return pil_img
 
+    @classmethod
+    def render_to_png_bytes(cls, *args: Any, **kwargs: Any) -> bytes:
+        """Transforms raw scientific array to scaled 8-bit RGB PNG image bytes."""
+        pil_img = cls._prepare_pil_image(*args, **kwargs)
         buf = io.BytesIO()
-        pil_img.save(buf, format="PNG", optimize=True)
+        pil_img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    @classmethod
+    def render_to_webp_bytes(cls, *args: Any, quality: int = 85, **kwargs: Any) -> bytes:
+        """Transforms raw scientific array directly to fast-loading WebP bytes."""
+        pil_img = cls._prepare_pil_image(*args, **kwargs)
+        buf = io.BytesIO()
+        pil_img.save(buf, format="WEBP", quality=quality, method=2)
         return buf.getvalue()
 
 
